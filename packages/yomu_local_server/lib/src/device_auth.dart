@@ -70,7 +70,7 @@ class DeviceAuthStore {
       if (raw is! Map) return;
       final list = raw['sessions'];
       if (list is List) {
-        for (final item in list.whereType<Map>()) {
+        for (final item in list.whereType<Map<dynamic, dynamic>>()) {
           final s = DeviceSession.fromJson(Map<String, dynamic>.from(item));
           _sessions[s.token] = s;
         }

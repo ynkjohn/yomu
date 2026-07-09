@@ -187,6 +187,8 @@ class YomuServer {
         final ch = await api.getChapter(id);
         final pages = await api.fetchChapterPages(id);
         final mangaId = ch?.mangaId;
+        // Suwayomi page URLs use mangaId + chapter *index* (not DB chapter id),
+        // e.g. /api/v1/manga/33/chapter/1/page/0. Always proxy that exact path.
         return _json({
           'chapterId': pages.chapterId,
           'chapterName': pages.chapterName,
@@ -199,9 +201,8 @@ class YomuServer {
               .map(
                 (e) => {
                   'index': e.key,
-                  'url': mangaId == null
-                      ? '/api/v1/chapters/$id/pages/${e.key}/image'
-                      : '/api/v1/chapters/$id/pages/${e.key}/image?mangaId=$mangaId',
+                  'url': _mediaProxyUrl(e.value),
+                  'upstream': e.value,
                 },
               )
               .toList(),
@@ -209,38 +210,29 @@ class YomuServer {
       }),
     );
 
-    // Authenticated image proxy — never expose Suwayomi port to the phone.
+    // Authenticated media proxy — never expose Suwayomi port to the phone.
+    // Query `u` = Suwayomi-relative path (/api/v1/...) or absolute http(s) URL.
+    router.get('/api/v1/media', _auth((req, session) async {
+      final raw = req.url.queryParameters['u'];
+      if (raw == null || raw.isEmpty) {
+        return _json({'error': 'missing_u'}, status: 400);
+      }
+      return _proxyMedia(raw);
+    }));
+
+    // Back-compat image route: resolve real Suwayomi path via page list
+    // (must NOT rebuild path with chapter DB id — REST uses chapter index).
     router.get(
       '/api/v1/chapters/<id|[0-9]+>/pages/<index|[0-9]+>/image',
       _auth((req, session) async {
         final id = int.parse(req.params['id']!);
         final index = int.parse(req.params['index']!);
         final api = _requireApi();
-        final mangaId = req.url.queryParameters['mangaId'];
-        if (mangaId != null && mangaId.isNotEmpty) {
-          return _proxyBytes(
-            api.client.baseUrl,
-            '/api/v1/manga/$mangaId/chapter/$id/page/$index',
-          );
-        }
         final pages = await api.fetchChapterPages(id);
         if (index < 0 || index >= pages.pages.length) {
           return _json({'error': 'page_out_of_range'}, status: 404);
         }
-        final rel = pages.pages[index];
-        if (rel.startsWith('http')) {
-          final res =
-              await _http.get(Uri.parse(rel)).timeout(const Duration(seconds: 60));
-          return Response(
-            res.statusCode,
-            body: res.bodyBytes,
-            headers: {
-              'content-type': res.headers['content-type'] ?? 'image/jpeg',
-              'cache-control': 'private, max-age=3600',
-            },
-          );
-        }
-        return _proxyBytes(api.client.baseUrl, rel);
+        return _proxyMedia(pages.pages[index]);
       }),
     );
 
@@ -363,8 +355,42 @@ class YomuServer {
     if (m != null) {
       return '/api/v1/manga/${m.group(1)}/thumbnail';
     }
+    if (path.startsWith('/api/v1/')) {
+      return _mediaProxyUrl(path);
+    }
     if (path.startsWith('/')) return path;
     return path;
+  }
+
+  /// Public (authenticated) URL that streams a Suwayomi path/URL through Core.
+  String _mediaProxyUrl(String suwayomiPathOrUrl) {
+    return '/api/v1/media?u=${Uri.encodeQueryComponent(suwayomiPathOrUrl)}';
+  }
+
+  Future<Response> _proxyMedia(String pathOrUrl) async {
+    final api = _api;
+    if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
+      final res = await _http
+          .get(Uri.parse(pathOrUrl))
+          .timeout(const Duration(seconds: 60));
+      return Response(
+        res.statusCode,
+        body: res.bodyBytes,
+        headers: {
+          'content-type': res.headers['content-type'] ?? 'image/jpeg',
+          'cache-control': 'private, max-age=3600',
+        },
+      );
+    }
+    // Only allow Suwayomi API-relative paths (no open proxy).
+    final cleaned = pathOrUrl.startsWith('/') ? pathOrUrl : '/$pathOrUrl';
+    if (!cleaned.startsWith('/api/v1/') || cleaned.contains('..')) {
+      return _json({'error': 'invalid_media_path'}, status: 400);
+    }
+    if (api == null) {
+      return _json({'error': 'upstream_unavailable'}, status: 502);
+    }
+    return _proxyBytes(api.client.baseUrl, cleaned);
   }
 
   Future<Response> _proxyBytes(String baseUrl, String path) async {

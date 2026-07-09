@@ -133,4 +133,41 @@ void main() {
     );
     expect(claim.statusCode, 401);
   });
+
+  test('media proxy rejects path traversal and requires auth', () async {
+    final auth = DeviceAuthStore();
+    final pairing = auth.startPairing();
+    final s = YomuServer(
+      host: '127.0.0.1',
+      port: 18792,
+      auth: auth,
+      suwayomiStatus: () => const SuwayomiStatus(
+        state: SuwayomiProcessState.stopped,
+      ),
+    );
+    await s.start();
+    addTearDown(s.stop);
+
+    final denied = await http.get(
+      Uri.parse(
+        'http://127.0.0.1:18792/api/v1/media?u=${Uri.encodeQueryComponent('/api/v1/manga/1/thumbnail')}',
+      ),
+    );
+    expect(denied.statusCode, 401);
+
+    final claim = await http.post(
+      Uri.parse('http://127.0.0.1:18792/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'code': pairing.code, 'deviceName': 'Phone'}),
+    );
+    final token = (jsonDecode(claim.body) as Map)['token'] as String;
+
+    final bad = await http.get(
+      Uri.parse(
+        'http://127.0.0.1:18792/api/v1/media?u=${Uri.encodeQueryComponent('../etc/passwd')}',
+      ),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    expect(bad.statusCode, 400);
+  });
 }

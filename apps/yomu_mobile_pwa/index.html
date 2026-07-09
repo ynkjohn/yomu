@@ -298,10 +298,14 @@
   async function authBlobUrl(path) {
     const res = await fetch(path, {
       headers: { Authorization: 'Bearer ' + state.token },
-      cache: 'force-cache',
+      cache: 'no-store',
     });
-    if (!res.ok) return '';
+    if (!res.ok) {
+      console.warn('media fail', res.status, path);
+      throw new Error('media ' + res.status);
+    }
     const blob = await res.blob();
+    if (!blob || blob.size === 0) throw new Error('empty media');
     return URL.createObjectURL(blob);
   }
 
@@ -431,12 +435,16 @@
         wrap.appendChild(img);
         readerPages.appendChild(wrap);
 
-        // Auth fetch → blob
+        // Auth fetch → blob (img tags cannot send Authorization)
         (async (index, imageEl) => {
           try {
             const url = await authBlobUrl(pages[index].url);
             if (url) imageEl.src = url;
-          } catch (_) {}
+          } catch (err) {
+            imageEl.alt = 'Falha pág. ' + (index + 1) + ': ' + (err.message || err);
+            imageEl.style.minHeight = '80px';
+            imageEl.style.background = '#331';
+          }
         })(i, img);
       }
 
