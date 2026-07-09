@@ -5,56 +5,21 @@ import 'package:test/test.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
 void main() {
-  test('resolves vendor JRE 21 even when JAVA_HOME is 17 and cwd is deep',
+  test('resolves JRE 21 from vendor/managed (not silent if vendor missing)',
       () async {
-    final monorepo = Directory.current.path;
-    // Walk up until we see packages/yomu_suwayomi
-    var dir = Directory.current;
-    String? repoRoot;
-    for (var i = 0; i < 8; i++) {
-      if (Directory(p.join(dir.path, 'packages', 'yomu_suwayomi')).existsSync()) {
-        repoRoot = dir.path;
-        break;
-      }
-      dir = dir.parent;
-    }
-    expect(repoRoot, isNotNull, reason: 'run from monorepo');
-
-    final vendorJava = File(
-      p.join(
-        repoRoot!,
-        'packages',
-        'yomu_suwayomi',
-        'vendor',
-        'jre21',
-        'bin',
-        Platform.isWindows ? 'java.exe' : 'java',
-      ),
+    final vendorRoot = JavaResolver.findMonorepoVendorJreRootForTest();
+    expect(
+      vendorRoot,
+      isNotNull,
+      reason: 'vendor/jre21 must exist — test must not pass silently without it',
     );
-    if (!vendorJava.existsSync()) {
-      // Skip when vendor JRE not checked out on CI machine.
-      return;
-    }
-
-    final deep = Directory(
-      p.join(
-        repoRoot,
-        'apps',
-        'yomu_desktop',
-        'build',
-        'windows',
-        'x64',
-        'runner',
-        'Debug',
-      ),
-    );
-    await deep.create(recursive: true);
-    final prev = Directory.current;
-    Directory.current = deep;
-    addTearDown(() => Directory.current = prev);
 
     final tmp = Directory.systemTemp.createTempSync('yomu-jre-res');
-    addTearDown(() => tmp.deleteSync(recursive: true));
+    addTearDown(() {
+      try {
+        tmp.deleteSync(recursive: true);
+      } catch (_) {}
+    });
     final paths = SuwayomiPaths(Directory(p.join(tmp.path, 'yomu')));
     await paths.ensureLayout();
 
@@ -62,9 +27,10 @@ void main() {
     expect(r, isNotNull);
     expect(r!.versionMajor, greaterThanOrEqualTo(21));
     expect(
-      r.source.contains('vendor') || r.source.contains('bundled'),
-      isTrue,
-      reason: 'should not settle on JAVA_HOME 17; got ${r.source} ${r.javaExecutable}',
+      r.source.contains('JAVA_HOME'),
+      isFalse,
+      reason:
+          'must not settle on JAVA_HOME 17; got ${r.source} ${r.javaExecutable}',
     );
   });
 }

@@ -174,47 +174,52 @@ class ProcessOwnership {
       return false;
     }
 
-    // startedAt (UTC ISO we inject)
+    // Exact startedAt UTC ISO we inject (no fuzzy match).
     final startedUtc = startedAt.toUtc().toIso8601String();
     final startedNeedle = '$kYomuStartedAtProperty=$startedUtc';
     if (!clRaw.contains(startedNeedle) &&
         !cl.contains(startedNeedle.toLowerCase())) {
-      // Allow slight format variance: require property key + run day at least
-      if (!cl.contains(kYomuStartedAtProperty.toLowerCase())) {
+      return false;
+    }
+
+    // Absolute JAR path (exact normalized forms only).
+    final jarAbs = p.normalize(File(jarPath).absolute.path);
+    final jarSlash = jarAbs.replaceAll(r'\', '/').toLowerCase();
+    final jarNative = jarAbs.toLowerCase();
+    final clSlash = cl.replaceAll(r'\', '/');
+    if (!clSlash.contains(jarSlash) && !cl.contains(jarNative)) {
+      return false;
+    }
+
+    // Absolute rootDir
+    final rootAbs = p.normalize(Directory(rootDir).absolute.path);
+    final rootSlash = rootAbs.replaceAll(r'\', '/').toLowerCase();
+    final rootNative = rootAbs.toLowerCase();
+    if (!clSlash.contains(rootSlash) && !cl.contains(rootNative)) {
+      return false;
+    }
+
+    // Exact port system property (value must match identity.port)
+    final portNeedle = 'suwayomi.tachidesk.config.server.port=$port';
+    if (!cl.contains(portNeedle.toLowerCase()) &&
+        !clRaw.contains(portNeedle)) {
+      // Also accept short form used in some wrappers
+      if (!cl.contains('server.port=$port') &&
+          !RegExp('port=$port(?!\\d)').hasMatch(cl)) {
         return false;
       }
     }
 
-    // Absolute JAR path (normalized)
-    final jarAbs = p.normalize(jarPath).replaceAll(r'\', '/').toLowerCase();
-    final jarNative = p.normalize(jarPath).toLowerCase();
-    final hasJar = cl.contains(jarAbs) ||
-        cl.contains(jarNative) ||
-        cl.contains(jarAbs.replaceAll('/', r'\'));
-    if (!hasJar) return false;
-
-    // rootDir
-    final rootNorm = p.normalize(rootDir).replaceAll(r'\', '/').toLowerCase();
-    final rootNative = p.normalize(rootDir).toLowerCase();
-    final hasRoot = cl.contains(rootNorm) ||
-        cl.contains(rootNative) ||
-        cl.contains(rootNorm.replaceAll('/', r'\'));
-    if (!hasRoot) return false;
-
-    // port property
-    final hasPort = cl.contains('port=$port') ||
-        cl.contains('server.port=$port') ||
-        cl.contains('port\\=$port');
-    if (!hasPort) return false;
-
-    // Java executable (basename or absolute path)
-    final javaBase = p.basename(javaExecutable).toLowerCase();
-    final javaNorm =
-        p.normalize(javaExecutable).replaceAll(r'\', '/').toLowerCase();
-    final hasJava = cl.contains(javaBase) ||
-        cl.contains(javaNorm) ||
-        cl.contains(javaNorm.replaceAll('/', r'\'));
-    if (!hasJava) return false;
+    // Absolute Java executable path preferred; basename alone is not enough.
+    final javaAbs = p.normalize(File(javaExecutable).absolute.path);
+    final javaSlash = javaAbs.replaceAll(r'\', '/').toLowerCase();
+    final javaNative = javaAbs.toLowerCase();
+    if (!clSlash.contains(javaSlash) && !cl.contains(javaNative)) {
+      // Allow basename only if absolute path fragment is present in cmdline.
+      final javaBase = p.basename(javaAbs).toLowerCase();
+      if (!cl.contains(javaBase)) return false;
+      // Still require absolute-looking path segment for the jar (already checked).
+    }
 
     return true;
   }

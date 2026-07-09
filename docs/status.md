@@ -10,7 +10,8 @@
 | PWA iPhone mínima | ✅ |
 | Maya mínima | ✅ |
 | 2D — hardening lifecycle / LAN / Maya | ✅ |
-| **2D.1 — reliability (races / ownership / SSRF)** | ✅ código |
+| 2D.1 — reliability | ✅ |
+| **2D.2 — JRE bundle + lifecycle/LAN/PWA edges** | ✅ código |
 
 ## Phases
 

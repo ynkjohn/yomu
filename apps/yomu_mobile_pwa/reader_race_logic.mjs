@@ -1,6 +1,5 @@
 /**
- * Pure race-control helpers for the PWA reader (Phase 2D.1).
- * Used by node tests; mirrors index.html generation / inflight rules.
+ * Pure race-control helpers for the PWA reader (Phase 2D.1 / 2D.2).
  */
 
 export function nextGen(current) {
@@ -11,11 +10,15 @@ export function shouldApply(activeGen, responseGen) {
   return activeGen === responseGen;
 }
 
+export function inflightKey(gen, pageIndex) {
+  return `${gen}:${pageIndex}`;
+}
+
 export function createInflightMap() {
   return new Map();
 }
 
-/** Deduplicate concurrent loads for the same page index. */
+/** Deduplicate concurrent loads for the same gen+page. */
 export async function loadOnce(inflight, key, loader) {
   if (inflight.has(key)) return inflight.get(key);
   const p = Promise.resolve()
@@ -25,13 +28,71 @@ export async function loadOnce(inflight, key, loader) {
   return p;
 }
 
+/**
+ * Ensure a late response for gen A never mutates gen B's map.
+ */
+export function applyBlobIfCurrent(activeGen, responseGen, map, index, url, revoke) {
+  if (activeGen !== responseGen) {
+    revoke(url);
+    return false;
+  }
+  map.set(index, url);
+  return true;
+}
+
 export function captureProgressPayload(chapterId, page, total, gen) {
   return { chapterId, page, total, gen, isRead: page >= total - 1 };
 }
 
 /**
- * Simulate rapid chapter switches: only last gen may apply pages.
+ * Rapid A→B switch with page 0 in flight for both gens.
  */
+export async function simulateSamePageInflightAcrossGens() {
+  let gen = 0;
+  const map = new Map(); // gen -> Map page->blob
+  const revoked = [];
+  const inflight = new Map();
+
+  async function open(chapterId) {
+    gen = nextGen(gen);
+    const my = gen;
+    map.set(my, new Map());
+    const key = inflightKey(my, 0);
+    const blob = `blob:${chapterId}:0:${my}`;
+    await loadOnce(inflight, key, async () => {
+      await new Promise((r) => setTimeout(r, chapterId === 1 ? 40 : 5));
+      applyBlobIfCurrent(
+        gen,
+        my,
+        map.get(my),
+        0,
+        blob,
+        (u) => revoked.push(u),
+      );
+      return blob;
+    });
+    return my;
+  }
+
+  const a = open(1);
+  const b = open(2);
+  await Promise.all([a, b]);
+
+  // Only latest gen should hold page 0
+  const latest = gen;
+  const latestHas = map.get(latest)?.has(0) === true;
+  let staleHas = false;
+  for (const [g, m] of map) {
+    if (g !== latest && m.has(0)) staleHas = true;
+  }
+  return {
+    latest,
+    latestHas,
+    staleHas,
+    revokedLate: revoked.some((u) => u.includes(':1:')),
+  };
+}
+
 export async function simulateChapterRace(fetchPages) {
   let gen = 0;
   const applied = [];
@@ -43,7 +104,6 @@ export async function simulateChapterRace(fetchPages) {
     applied.push({ chapterId, pages, gen: my });
     return { applied: true, gen: my };
   }
-  // open A (slow), open B (fast) — A must not apply
   const a = open(1, 50);
   const b = open(2, 5);
   const ra = await a;
@@ -60,7 +120,6 @@ export function simulateCloseDuringRequest() {
     for (const b of blobs) revoked.push(b);
     blobs = [];
   }
-  // late response
   const lateGen = 1;
   close();
   const acceptLate = shouldApply(gen, lateGen);

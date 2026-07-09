@@ -260,7 +260,7 @@
   const PRELOAD_BEHIND = 1;
   let readerGen = 0; // incremented on every open/close
   let blobByPage = new Map(); // index -> blob URL (for active gen only)
-  let inflightPages = new Map(); // index -> Promise
+  let inflightPages = new Map(); // `${gen}:${index}` -> Promise
   let progressTimer = null;
   let progressError = '';
   let activeScrollHandler = null;
@@ -310,10 +310,11 @@
     return data;
   }
 
-  async function authBlobUrl(path) {
+  async function authBlobUrl(path, signal) {
     const res = await fetch(path, {
       headers: { Authorization: 'Bearer ' + state.token },
       cache: 'no-store',
+      signal: signal,
     });
     if (!res.ok) {
       console.warn('media fail', res.status, path);
@@ -447,6 +448,9 @@
   function revokeAllBlobs() {
     for (const u of blobByPage.values()) URL.revokeObjectURL(u);
     blobByPage.clear();
+    for (const p of inflightPages.values()) {
+      if (p && typeof p._abort === 'function') p._abort();
+    }
     inflightPages.clear();
   }
 
@@ -459,24 +463,28 @@
       if (img && !img.src) img.src = blobByPage.get(index);
       return;
     }
-    if (inflightPages.has(index)) {
-      await inflightPages.get(index);
+    const key = gen + ':' + index;
+    if (inflightPages.has(key)) {
+      await inflightPages.get(key);
       return;
     }
     const wrap = readerPages.querySelector('[data-page="' + index + '"]');
     if (!wrap) return;
     const img = wrap.querySelector('img');
     const pageUrl = r.pages[index].url;
+    const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const work = (async () => {
       try {
-        const url = await authBlobUrl(pageUrl);
+        const url = await authBlobUrl(pageUrl, ac ? ac.signal : undefined);
         if (!state.reader || state.reader.gen !== gen) {
           URL.revokeObjectURL(url);
           return;
         }
+        // Never touch another generation's map keys.
         blobByPage.set(index, url);
-        if (img) img.src = url;
+        if (img && state.reader.gen === gen) img.src = url;
       } catch (err) {
+        if (err && err.name === 'AbortError') return;
         if (!state.reader || state.reader.gen !== gen) return;
         if (img) {
           img.alt = 'Falha pág. ' + (index + 1);
@@ -484,10 +492,13 @@
           img.style.background = '#331';
         }
       } finally {
-        inflightPages.delete(index);
+        inflightPages.delete(key);
       }
     })();
-    inflightPages.set(index, work);
+    work._abort = () => {
+      if (ac) ac.abort();
+    };
+    inflightPages.set(key, work);
     await work;
   }
 

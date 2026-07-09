@@ -106,3 +106,19 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# --- Yomu: ship JRE 21 next to the executable (Release/install layout) ---
+# Monorepo path: packages/yomu_suwayomi/vendor/jre21
+# Runtime layout: {exeDir}/jre/bin/java.exe  (see JavaResolver packaged-jre)
+# windows/ -> yomu_desktop/ -> apps/ -> monorepo root
+set(YOMU_VENDOR_JRE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../packages/yomu_suwayomi/vendor/jre21")
+if(EXISTS "${YOMU_VENDOR_JRE_DIR}/bin/java.exe")
+  install(DIRECTORY "${YOMU_VENDOR_JRE_DIR}/"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/jre"
+    COMPONENT Runtime
+    USE_SOURCE_PERMISSIONS)
+  message(STATUS "Yomu: bundling JRE from ${YOMU_VENDOR_JRE_DIR}")
+else()
+  message(WARNING "Yomu: vendor JRE not found at ${YOMU_VENDOR_JRE_DIR} — Release will require YOMU_JAVA_HOME or managed download")
+endif()
+

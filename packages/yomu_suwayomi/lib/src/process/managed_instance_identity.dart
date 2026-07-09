@@ -35,7 +35,7 @@ class ManagedInstanceIdentity {
     return ManagedInstanceIdentity(
       runId: '${json['runId']}',
       pid: json['pid'] is int ? json['pid'] as int : int.parse('${json['pid']}'),
-      startedAt: DateTime.tryParse('${json['startedAt']}') ?? DateTime.now(),
+      startedAt: DateTime.tryParse('${json['startedAt']}') ?? DateTime.now().toUtc(),
       javaExecutable: '${json['javaExecutable']}',
       jarPath: '${json['jarPath']}',
       rootDir: '${json['rootDir']}',
@@ -43,15 +43,37 @@ class ManagedInstanceIdentity {
     );
   }
 
-  /// Atomic write: temp file + rename (survives crash mid-write).
+  /// Atomic replace: write temp, then swap without deleting the live file first.
+  ///
+  /// Windows: rename live → .bak, rename .tmp → live, delete .bak.
+  /// On failure after moving live away, restore from .bak.
   Future<void> save(File file) async {
     await file.parent.create(recursive: true);
     final tmp = File('${file.path}.tmp');
+    final bak = File('${file.path}.bak');
     await tmp.writeAsString(jsonEncode(toJson()), flush: true);
-    if (file.existsSync()) {
-      await file.delete();
+
+    if (!file.existsSync()) {
+      await tmp.rename(file.path);
+      return;
     }
-    await tmp.rename(file.path);
+
+    if (bak.existsSync()) {
+      await bak.delete();
+    }
+    await file.rename(bak.path);
+    try {
+      await tmp.rename(file.path);
+    } catch (e) {
+      // Restore previous identity if swap failed.
+      if (bak.existsSync() && !file.existsSync()) {
+        await bak.rename(file.path);
+      }
+      rethrow;
+    }
+    if (bak.existsSync()) {
+      await bak.delete();
+    }
   }
 
   static Future<ManagedInstanceIdentity?> load(File file) async {
@@ -66,12 +88,12 @@ class ManagedInstanceIdentity {
   }
 
   static Future<void> clear(File file) async {
-    if (file.existsSync()) {
-      await file.delete();
-    }
-    final tmp = File('${file.path}.tmp');
-    if (tmp.existsSync()) {
-      await tmp.delete();
+    for (final f in [
+      file,
+      File('${file.path}.tmp'),
+      File('${file.path}.bak'),
+    ]) {
+      if (f.existsSync()) await f.delete();
     }
   }
 }

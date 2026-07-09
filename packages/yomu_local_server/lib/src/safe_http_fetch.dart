@@ -4,10 +4,8 @@ import 'dart:typed_data';
 
 /// Validates absolute URLs for outbound Core fetches (SSRF hardened).
 ///
-/// Defenses: scheme allowlist, host literal checks, DNS resolution (all A/AAAA),
-/// IPv4-mapped IPv6, unique-local / special IPv6, re-check on every redirect.
-/// Residual risk: TOCTOU DNS rebinding after connect is documented; we re-resolve
-/// on each hop and reject mixed public+private answers.
+/// Resolves DNS, rejects private/special addresses, then **connects only to a
+/// pinned validated IP** while keeping Host/SNI as the original hostname.
 class SafeHttpFetch {
   SafeHttpFetch({
     this.maxRedirects = 3,
@@ -21,7 +19,6 @@ class SafeHttpFetch {
   final int maxBytes;
   final Future<List<InternetAddress>> Function(String host) lookup;
 
-  /// Returns true if [ip] is loopback / link-local / private / special.
   static bool isBlockedIp(InternetAddress ip) {
     if (ip.isLoopback || ip.isLinkLocal) return true;
     final raw = ip.rawAddress;
@@ -31,35 +28,21 @@ class SafeHttpFetch {
     }
 
     if (ip.type == InternetAddressType.IPv6 && raw.length == 16) {
-      // IPv4-mapped ::ffff:a.b.c.d
       if (_isIpv4Mapped(raw)) {
         return _blockedIpv4(raw[12], raw[13], raw[14], raw[15]);
       }
-      // IPv4-compatible obsolete ::a.b.c.d (first 96 bits zero, not ::1)
       if (_isIpv4Compatible(raw)) {
         return _blockedIpv4(raw[12], raw[13], raw[14], raw[15]);
       }
-      // Unique local fc00::/7
       if ((raw[0] & 0xfe) == 0xfc) return true;
-      // Multicast ff00::/8
       if (raw[0] == 0xff) return true;
-      // Documentation 2001:db8::/32
       if (raw[0] == 0x20 &&
           raw[1] == 0x01 &&
           raw[2] == 0x0d &&
           raw[3] == 0xb8) {
         return true;
       }
-      // 6to4 2002::/16 often tunnels RFC1918 — treat as blocked for safety
       if (raw[0] == 0x20 && raw[1] == 0x02) return true;
-      // Discard-only 100::/64
-      if (raw[0] == 0x01 &&
-          raw[1] == 0x00 &&
-          raw[2] == 0x00 &&
-          raw[3] == 0x00) {
-        return true;
-      }
-      // Unspecified ::
       if (raw.every((b) => b == 0)) return true;
     }
     return false;
@@ -76,7 +59,6 @@ class SafeHttpFetch {
     for (var i = 0; i < 12; i++) {
       if (raw[i] != 0) return false;
     }
-    // Exclude :: and ::1
     if (raw[12] == 0 && raw[13] == 0 && raw[14] == 0 && raw[15] <= 1) {
       return false;
     }
@@ -90,19 +72,18 @@ class SafeHttpFetch {
     if (a == 169 && b == 254) return true;
     if (a == 172 && b >= 16 && b <= 31) return true;
     if (a == 192 && b == 168) return true;
-    if (a == 100 && b >= 64 && b <= 127) return true; // CGNAT
+    if (a == 100 && b >= 64 && b <= 127) return true;
     if (a == 192 && b == 0 && c == 0) return true;
-    if (a == 192 && b == 0 && c == 2) return true; // TEST-NET-1
-    if (a == 198 && (b == 18 || b == 19)) return true; // benchmark
-    if (a == 198 && b == 51 && c == 100) return true; // TEST-NET-2
-    if (a == 203 && b == 0 && c == 113) return true; // TEST-NET-3
-    if (a >= 224) return true; // multicast / reserved
+    if (a == 192 && b == 0 && c == 2) return true;
+    if (a == 198 && (b == 18 || b == 19)) return true;
+    if (a == 198 && b == 51 && c == 100) return true;
+    if (a == 203 && b == 0 && c == 113) return true;
+    if (a >= 224) return true;
     return false;
   }
 
   static bool isBlockedHostLiteral(String host) {
     var h = host.toLowerCase();
-    // Strip brackets from IPv6 literals
     if (h.startsWith('[') && h.endsWith(']')) {
       h = h.substring(1, h.length - 1);
     }
@@ -113,10 +94,8 @@ class SafeHttpFetch {
         h == '::1') {
       return true;
     }
-    // IPv4-mapped textual form
     if (h.startsWith('::ffff:')) {
-      final v4 = h.substring(7);
-      final parsed = InternetAddress.tryParse(v4);
+      final parsed = InternetAddress.tryParse(h.substring(7));
       if (parsed != null) return isBlockedIp(parsed);
     }
     final parsed = InternetAddress.tryParse(h);
@@ -124,38 +103,38 @@ class SafeHttpFetch {
     return false;
   }
 
-  Future<void> assertHostAllowed(String host) async {
+  Future<List<InternetAddress>> resolveSafeAddresses(String host) async {
     if (isBlockedHostLiteral(host)) {
       throw StateError('blocked_host: $host');
     }
-    // Literal IP already checked; skip DNS.
-    if (InternetAddress.tryParse(
-          host.startsWith('[') ? host.substring(1, host.length - 1) : host,
-        ) !=
-        null) {
-      return;
+    final literalHost =
+        host.startsWith('[') && host.endsWith(']')
+            ? host.substring(1, host.length - 1)
+            : host;
+    final literal = InternetAddress.tryParse(literalHost);
+    if (literal != null) {
+      if (isBlockedIp(literal)) {
+        throw StateError('blocked_ip: ${literal.address}');
+      }
+      return [literal];
     }
     final addrs = await lookup(host).timeout(const Duration(seconds: 5));
     if (addrs.isEmpty) throw StateError('dns_empty: $host');
-    var anyPublic = false;
-    var anyBlocked = false;
+    final safe = <InternetAddress>[];
     for (final a in addrs) {
       if (isBlockedIp(a)) {
-        anyBlocked = true;
-      } else {
-        anyPublic = true;
+        throw StateError('blocked_ip_in_dns: ${a.address}');
       }
+      safe.add(a);
     }
-    // DNS rebinding risk: reject if ANY answer is private/special.
-    if (anyBlocked) {
-      throw StateError('blocked_ip_in_dns: $host');
-    }
-    if (!anyPublic) {
-      throw StateError('no_public_ip: $host');
-    }
+    if (safe.isEmpty) throw StateError('no_public_ip: $host');
+    return safe;
   }
 
-  /// GET with manual redirects; re-validates host/IP on each hop.
+  Future<void> assertHostAllowed(String host) async {
+    await resolveSafeAddresses(host);
+  }
+
   Future<({int statusCode, String contentType, Uint8List body})> get(
     Uri start,
   ) async {
@@ -165,16 +144,37 @@ class SafeHttpFetch {
         throw StateError('invalid_scheme: ${uri.scheme}');
       }
       if (uri.host.isEmpty) throw StateError('empty_host');
-      // Re-resolve every hop (mitigates DNS rebinding between hops).
-      await assertHostAllowed(uri.host);
+
+      final safeAddrs = await resolveSafeAddresses(uri.host);
+      final pinned = safeAddrs.first;
+      final originalHost = uri.host;
+      final port = uri.hasPort
+          ? uri.port
+          : (uri.scheme == 'https' ? 443 : 80);
 
       final client = HttpClient()
         ..connectionTimeout = timeout
-        ..maxConnectionsPerHost = 2
         ..autoUncompress = true;
+
+      client.connectionFactory = (url, proxyHost, proxyPort) {
+        return _pinnedConnect(
+          pinned: pinned,
+          port: port,
+          hostForSni: originalHost,
+          https: url.scheme == 'https',
+        );
+      };
+
       try {
+        // Detect rebinding between pin and connect.
+        final recheck = await resolveSafeAddresses(originalHost);
+        if (!recheck.any((a) => a.address == pinned.address)) {
+          throw StateError('dns_rebinding_detected: $originalHost');
+        }
+
         final req = await client.getUrl(uri).timeout(timeout);
         req.followRedirects = false;
+        req.headers.set(HttpHeaders.hostHeader, originalHost);
         req.headers.set(HttpHeaders.userAgentHeader, 'YomuCore/2D');
         final res = await req.close().timeout(timeout);
 
@@ -189,9 +189,7 @@ class SafeHttpFetch {
           if (loc == null || loc.isEmpty) {
             throw StateError('redirect_without_location');
           }
-          if (hop == maxRedirects) {
-            throw StateError('too_many_redirects');
-          }
+          if (hop == maxRedirects) throw StateError('too_many_redirects');
           uri = uri.resolve(loc);
           continue;
         }
@@ -200,9 +198,7 @@ class SafeHttpFetch {
         var total = 0;
         await for (final chunk in res.timeout(timeout)) {
           total += chunk.length;
-          if (total > maxBytes) {
-            throw StateError('body_too_large');
-          }
+          if (total > maxBytes) throw StateError('body_too_large');
           chunks.add(chunk);
         }
         final body = Uint8List(total);
@@ -219,5 +215,23 @@ class SafeHttpFetch {
       }
     }
     throw StateError('fetch_failed');
+  }
+
+  Future<ConnectionTask<Socket>> _pinnedConnect({
+    required InternetAddress pinned,
+    required int port,
+    required String hostForSni,
+    required bool https,
+  }) async {
+    final task = await Socket.startConnect(pinned, port);
+    final raw = await task.socket.timeout(timeout);
+    if (!https) {
+      return ConnectionTask.fromSocket(Future.value(raw), raw.destroy);
+    }
+    final secure = await SecureSocket.secure(
+      raw,
+      host: hostForSni,
+    ).timeout(timeout);
+    return ConnectionTask.fromSocket(Future.value(secure), secure.destroy);
   }
 }

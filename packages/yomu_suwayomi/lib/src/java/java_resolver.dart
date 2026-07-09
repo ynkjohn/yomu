@@ -18,8 +18,12 @@ class JavaResolution {
 
 /// Locates a JRE/JDK suitable for Suwayomi (default min 21).
 ///
-/// Order: managed app-support JRE → monorepo/vendor JRE 21 → YOMU_JAVA_HOME
-/// → JAVA_HOME → PATH. Never picks a too-old runtime if a newer candidate exists.
+/// Priority:
+/// 1. [YOMU_JAVA_HOME] — **explicit override** (optional; only if version ≥ min)
+/// 2. Packaged JRE next to the executable (`{exeDir}/jre`) — Release distribution
+/// 3. Managed app-support JRE (`runtime/jre`)
+/// 4. Monorepo `vendor/jre21` (dev)
+/// 5. JAVA_HOME / PATH (system; never preferred over packaged 21)
 class JavaResolver {
   const JavaResolver();
 
@@ -27,7 +31,6 @@ class JavaResolver {
     required SuwayomiPaths paths,
     int minMajor = 21,
   }) async {
-    // Best-effort: seed app-support JRE from monorepo vendor once.
     await ensureManagedJre(paths);
 
     final candidates = <({String exe, String source})>[];
@@ -35,49 +38,47 @@ class JavaResolver {
 
     void add(String? exe, String source) {
       if (exe == null || exe.isEmpty) return;
-      final norm = p.normalize(exe);
+      final norm = p.normalize(File(exe).absolute.path);
       if (!File(norm).existsSync()) return;
       final key = norm.toLowerCase();
-      if (seen.contains(key)) return;
-      seen.add(key);
+      if (!seen.add(key)) return;
       candidates.add((exe: norm, source: source));
     }
 
-    add(_bundledJava(paths), 'bundled');
-    for (final v in _findVendorJreExecutables()) {
-      add(v, 'vendor-jre21');
-    }
-
+    // 1) Explicit override first (documented as override, not "force").
     final yomuJava = Platform.environment['YOMU_JAVA_HOME'];
     if (yomuJava != null && yomuJava.isNotEmpty) {
       add(
-        p.join(
-          yomuJava,
-          'bin',
-          Platform.isWindows ? 'java.exe' : 'java',
-        ),
+        p.join(yomuJava, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
         'YOMU_JAVA_HOME',
       );
     }
 
+    // 2) Packaged beside executable (installer / Release layout).
+    add(_packagedBesideExecutable(), 'packaged-jre');
+
+    // 3) Managed runtime under app support.
+    add(_bundledJava(paths), 'managed-jre');
+
+    // 4) Dev monorepo vendor.
+    for (final v in _findVendorJreExecutables()) {
+      add(v, 'vendor-jre21');
+    }
+
+    // 5) System fallbacks.
     final fromEnv = Platform.environment['JAVA_HOME'];
     if (fromEnv != null && fromEnv.isNotEmpty) {
       add(
-        p.join(
-          fromEnv,
-          'bin',
-          Platform.isWindows ? 'java.exe' : 'java',
-        ),
+        p.join(fromEnv, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
         'JAVA_HOME',
       );
     }
-
-    final onPath = await _whichJava();
-    add(onPath, 'PATH');
+    add(await _whichJava(), 'PATH');
 
     JavaResolution? bestTooOld;
     final tried = <String>[];
 
+    // Prefer first candidate that meets minMajor (order = priority).
     for (final c in candidates) {
       final v = await _probeMajor(c.exe);
       if (v == null) {
@@ -92,7 +93,6 @@ class JavaResolver {
           source: c.source,
         );
       }
-      // Keep the newest too-old for a clearer error (prefer reporting 17 over 11).
       if (bestTooOld == null || v > bestTooOld.versionMajor) {
         bestTooOld = JavaResolution(
           javaExecutable: c.exe,
@@ -102,7 +102,6 @@ class JavaResolver {
       }
     }
 
-    // Attach search hint to too-old result message at call site via source.
     if (bestTooOld != null) {
       return JavaResolution(
         javaExecutable: bestTooOld.javaExecutable,
@@ -113,22 +112,41 @@ class JavaResolver {
     return null;
   }
 
-  /// Copies monorepo `vendor/jre21` into managed `runtime/jre` if missing.
+  /// Seeds managed JRE from packaged-next-to-exe or monorepo vendor.
   Future<void> ensureManagedJre(SuwayomiPaths paths) async {
     final destJava = File(
       p.join(paths.jreDir.path, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
     );
     if (destJava.existsSync()) return;
 
-    final vendorRoot = _findVendorJreRoot();
-    if (vendorRoot == null) return;
+    String? seedRoot;
+    final packaged = _packagedBesideExecutable();
+    if (packaged != null) {
+      seedRoot = p.dirname(p.dirname(packaged)); // .../jre/bin/java → jre
+    } else {
+      seedRoot = _findVendorJreRoot();
+    }
+    if (seedRoot == null) return;
 
     try {
       await paths.jreDir.create(recursive: true);
-      await _copyDir(Directory(vendorRoot), paths.jreDir);
-    } catch (_) {
-      // Non-fatal; resolve() still searches vendor path directly.
-    }
+      await _copyDir(Directory(seedRoot), paths.jreDir);
+    } catch (_) {}
+  }
+
+  /// `{exeDir}/jre/bin/java(.exe)` for Release bundles.
+  String? _packagedBesideExecutable() {
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final java = p.join(
+        exeDir,
+        'jre',
+        'bin',
+        Platform.isWindows ? 'java.exe' : 'java',
+      );
+      if (File(java).existsSync()) return java;
+    } catch (_) {}
+    return null;
   }
 
   Future<void> _copyDir(Directory from, Directory to) async {
@@ -144,12 +162,10 @@ class JavaResolver {
     }
   }
 
-  /// Absolute paths to java.exe under any discovered vendor/jre21.
   List<String> _findVendorJreExecutables() {
-    final roots = _searchRoots();
     final out = <String>[];
     final javaName = Platform.isWindows ? 'java.exe' : 'java';
-    for (final root in roots) {
+    for (final root in _searchRoots()) {
       final exe = p.join(
         root,
         'packages',
@@ -160,12 +176,6 @@ class JavaResolver {
         javaName,
       );
       if (File(exe).existsSync()) out.add(exe);
-      // Also: root itself is vendor/jre21
-      final direct = p.join(root, 'bin', javaName);
-      if (File(direct).existsSync() &&
-          p.basename(p.dirname(root)).toLowerCase().contains('jre')) {
-        out.add(direct);
-      }
     }
     return out;
   }
@@ -180,14 +190,11 @@ class JavaResolver {
         'vendor',
         'jre21',
       );
-      if (File(p.join(jreRoot, 'bin', javaName)).existsSync()) {
-        return jreRoot;
-      }
+      if (File(p.join(jreRoot, 'bin', javaName)).existsSync()) return jreRoot;
     }
     return null;
   }
 
-  /// Walk cwd, executable dir, and parents far enough for Flutter Debug builds.
   List<String> _searchRoots() {
     final roots = <String>[];
     void walk(String start, int maxUp) {
@@ -205,7 +212,6 @@ class JavaResolver {
       walk(File(Platform.resolvedExecutable).parent.path, 14);
     } catch (_) {}
 
-    // Dedup preserve order
     final seen = <String>{};
     return roots.where((r) => seen.add(r.toLowerCase())).toList();
   }
@@ -213,13 +219,7 @@ class JavaResolver {
   String? _bundledJava(SuwayomiPaths paths) {
     final candidates = [
       p.join(paths.jreDir.path, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
-      p.join(
-        paths.jreDir.path,
-        'Contents',
-        'Home',
-        'bin',
-        'java',
-      ),
+      p.join(paths.jreDir.path, 'Contents', 'Home', 'bin', 'java'),
     ];
     for (final c in candidates) {
       if (File(c).existsSync()) return c;
@@ -248,13 +248,11 @@ class JavaResolver {
   Future<int?> _probeMajor(String javaExecutable) async {
     try {
       final result = await Process.run(javaExecutable, ['-version']);
-      // java -version writes to stderr.
       final text = '${result.stderr}\n${result.stdout}';
-      // "21.0.11" or "1.8.0_xxx"
       final m21 = RegExp(r'version "(\d+)').firstMatch(text);
       if (m21 != null) {
         final major = int.tryParse(m21.group(1)!);
-        if (major != null && major >= 2) return major; // skip 1.x style below
+        if (major != null && major >= 2) return major;
         if (major == 1) {
           final legacy = RegExp(r'version "1\.(\d+)').firstMatch(text);
           if (legacy != null) return int.tryParse(legacy.group(1)!);
@@ -265,5 +263,10 @@ class JavaResolver {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Test helper: path to monorepo vendor JRE root, or null.
+  static String? findMonorepoVendorJreRootForTest() {
+    return const JavaResolver()._findVendorJreRoot();
   }
 }

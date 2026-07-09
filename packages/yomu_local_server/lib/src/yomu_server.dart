@@ -79,7 +79,12 @@ class YomuServer {
     });
 
     router.post('/api/v1/pairing/claim', (Request request) async {
-      final body = await _readJson(request);
+      Map<String, dynamic> body;
+      try {
+        body = await _readJson(request);
+      } catch (e) {
+        return _json({'error': 'body_too_large'}, status: 413);
+      }
       final code = '${body['code'] ?? ''}';
       final name = '${body['deviceName'] ?? 'iPhone'}';
       final clientKey = _clientKey(request);
@@ -119,7 +124,13 @@ class YomuServer {
       return _json({
         'deviceName': session.deviceName,
         'createdAt': session.createdAt.toIso8601String(),
+        'expiresAt': session.expiresAt.toIso8601String(),
       });
+    }));
+
+    router.post('/api/v1/session/revoke', _auth((req, session) async {
+      await auth.revoke(session.token);
+      return _json({'revoked': true});
     }));
 
     router.get('/api/v1/library', _auth((req, session) async {
@@ -507,8 +518,17 @@ class YomuServer {
     return h == '127.0.0.1' || h == 'localhost' || h == '::1';
   }
 
+  static const int maxJsonBodyBytes = 32 * 1024;
+
   Future<Map<String, dynamic>> _readJson(Request request) async {
-    final raw = await request.readAsString();
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in request.read()) {
+      builder.add(chunk);
+      if (builder.length > maxJsonBodyBytes) {
+        throw StateError('body_too_large');
+      }
+    }
+    final raw = utf8.decode(builder.takeBytes());
     if (raw.isEmpty) return {};
     final decoded = jsonDecode(raw);
     if (decoded is Map<String, dynamic>) return decoded;

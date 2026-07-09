@@ -213,7 +213,7 @@ void main() {
   });
 
   test('pairing rate limit returns 429 + Retry-After', () async {
-    final auth = DeviceAuthStore(maxFailedAttempts: 3);
+    final auth = DeviceAuthStore(maxFailedAttemptsPerIp: 3);
     auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',

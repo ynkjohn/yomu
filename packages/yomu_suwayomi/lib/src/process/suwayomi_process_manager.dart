@@ -255,7 +255,13 @@ server.authMode = NONE
       return Ok(_status);
     }
 
-    // Phase 2D: never blind-adopt health-only.
+    // Phase 2D.2: if our identity is still alive, never spawn a second JVM.
+    final existing = await _handleExistingOwnedIdentity(
+      readyTimeout: readyTimeout,
+    );
+    if (existing != null) return existing;
+
+    // Phase 2D: never blind-adopt health-only foreign processes.
     final portIssue = await _resolvePortOccupantBeforeStart();
     if (portIssue != null) {
       _emit(SuwayomiStatus(
@@ -281,8 +287,8 @@ server.authMode = NONE
     if (java == null) {
       final msg =
           'Java ${manifest.suwayomi.minJre}+ não encontrado. '
-          'Defina YOMU_JAVA_HOME ou JAVA_HOME para um JRE ${manifest.suwayomi.minJre}+, '
-          'ou mantenha packages/yomu_suwayomi/vendor/jre21 no monorepo.';
+          'Use o JRE empacotado (jre/ ao lado do .exe) ou o monorepo '
+          r'vendor\jre21. Opcional: YOMU_JAVA_HOME como override explícito.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
       return Err(msg);
     }
@@ -290,9 +296,8 @@ server.authMode = NONE
       final msg =
           'Java ${java.versionMajor} encontrado (${java.source}), '
           'mas Suwayomi exige ${manifest.suwayomi.minJre}+. '
-          'Seu JAVA_HOME aponta para um JDK antigo; o Yomu tenta o JRE 21 em '
-          'vendor/jre21 (ou YOMU_JAVA_HOME). Feche o app, confira se '
-          r'packages\yomu_suwayomi\vendor\jre21\bin\java.exe existe, e reinicie.';
+          'O Yomu deve usar o JRE empacotado/runtime; não altere JAVA_HOME. '
+          'Reinstale o app ou rode tool/bundle_jre_windows.ps1.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
       return Err(msg);
     }
@@ -337,16 +342,36 @@ server.authMode = NONE
     }
 
     final pid = _process!.pid;
-    _identity = ManagedInstanceIdentity(
+    final identity = ManagedInstanceIdentity(
       runId: runId,
       pid: pid,
       startedAt: startedAt,
-      javaExecutable: java.javaExecutable,
+      javaExecutable: File(java.javaExecutable).absolute.path,
       jarPath: jar.absolute.path,
-      rootDir: managedRootDir,
+      rootDir: Directory(managedRootDir).absolute.path,
       port: port,
     );
-    await _identity!.save(identityFile);
+    try {
+      await identity.save(identityFile);
+      _identity = identity;
+    } catch (e) {
+      // Must not leave an untracked JVM.
+      try {
+        _process?.kill(ProcessSignal.sigkill);
+        await _process?.exitCode.timeout(const Duration(seconds: 5));
+      } catch (_) {}
+      _process = null;
+      _identity = null;
+      final msg =
+          'JVM iniciada (pid $pid) mas falhou ao salvar identidade: $e. '
+          'Processo encerrado para evitar órfão sem registro.';
+      _emit(SuwayomiStatus(
+        state: SuwayomiProcessState.crashed,
+        message: msg,
+        baseUrl: baseUrl,
+      ));
+      return Err(msg, e);
+    }
 
     void onLog(String data) {
       _combinedLog.write(data);
@@ -414,57 +439,108 @@ server.authMode = NONE
     return Ok(ok);
   }
 
-  /// Returns error message if port cannot be used; null if free (or Yomu orphan cleared).
-  Future<String?> _resolvePortOccupantBeforeStart() async {
-    final healthy = await createClient().isHealthy();
-    final listenerPid = await _ownership.probe.findListenerPid(port);
-    if (!healthy && listenerPid == null) {
-      // Clear stale identity if dead.
-      final stored = await ManagedInstanceIdentity.load(identityFile);
-      if (stored != null) {
-        final check = await _ownership.verifyIdentity(stored);
-        if (check.verdict == OwnershipVerdict.dead) {
-          await ManagedInstanceIdentity.clear(identityFile);
-          _identity = null;
-        }
+  /// If identity file points at a live Yomu-owned process, wait/reattach or
+  /// stop with ownership — never start a second JVM / overwrite identity.
+  ///
+  /// Returns a [Result] when handled; null when caller may proceed to start.
+  Future<Result<SuwayomiStatus>?> _handleExistingOwnedIdentity({
+    required Duration readyTimeout,
+  }) async {
+    final stored = await ManagedInstanceIdentity.load(identityFile);
+    if (stored == null) return null;
+
+    final check = await _ownership.verifyIdentity(stored);
+    if (check.verdict == OwnershipVerdict.dead) {
+      final healthy = await createClient().isHealthy();
+      final listener = await _ownership.probe.findListenerPid(port);
+      if (!healthy && listener == null) {
+        await ManagedInstanceIdentity.clear(identityFile);
+        _identity = null;
       }
       return null;
     }
 
-    // Something is up — only act if we can prove Yomu ownership.
-    final stored = await ManagedInstanceIdentity.load(identityFile);
-    if (stored != null) {
-      final check = await _ownership.verifyIdentity(stored);
-      if (check.verdict == OwnershipVerdict.yomuOwned) {
-        _logSink?.writeln(
-          'Yomu orphan PID ${stored.pid} validated — stopping before restart',
-        );
-        final killed =
-            await _ownership.probe.killOwnedPid(stored.pid, force: true);
-        if (!killed) {
-          return 'Órfão Yomu PID ${stored.pid} validado, mas falhou ao encerrar. '
-              'Encerre manualmente e tente de novo.';
-        }
-        final freed = await _waitPortAndHealthDown(
-          const Duration(seconds: 20),
-        );
-        if (!freed) {
-          // Keep identity for retry/diagnosis.
-          return 'Órfão Yomu encerrado, mas a porta $port ainda responde. '
-              'Identidade preservada. Aguarde e tente de novo.';
-        }
-        await ManagedInstanceIdentity.clear(identityFile);
-        _identity = null;
-        return null;
-      }
-      if (check.verdict == OwnershipVerdict.dead && listenerPid == null && !healthy) {
-        await ManagedInstanceIdentity.clear(identityFile);
-        return null;
-      }
+    if (check.verdict != OwnershipVerdict.yomuOwned) {
+      // Identity file exists but process is foreign/unverifiable — do not overwrite.
+      return Err(
+        check.message ??
+            'Identidade em disco não confere com o processo vivo. '
+            'Não iniciaremos outra JVM nem sobrescreveremos a identidade.',
+      );
     }
 
-    // Foreign / unverifiable: do NOT kill, do NOT adopt.
-    final who = listenerPid != null ? 'PID $listenerPid' : 'processo desconhecido';
+    // Owned and alive: wait for health (pending startup) without spawning.
+    _identity = stored;
+    _emit(
+      SuwayomiStatus(
+        state: SuwayomiProcessState.starting,
+        message:
+            'Instância Yomu (pid ${stored.pid}) ainda viva — aguardando API…',
+        baseUrl: baseUrl,
+        pid: stored.pid,
+        version: manifest.suwayomi.displayVersion,
+      ),
+    );
+
+    final ready = await _waitUntilHealthy(readyTimeout);
+    if (ready) {
+      final ok = SuwayomiStatus(
+        state: SuwayomiProcessState.running,
+        message:
+            'Suwayomi reaproveitado (pid ${stored.pid}, ownership Yomu verificado).',
+        baseUrl: baseUrl,
+        pid: stored.pid,
+        version: manifest.suwayomi.displayVersion,
+        lastHealthCheck: DateTime.now(),
+      );
+      _emit(ok);
+      return Ok(ok);
+    }
+
+    // Still not healthy: stop with ownership proof, then allow a clean start.
+    final killed =
+        await _ownership.probe.killOwnedPid(stored.pid, force: true);
+    if (!killed) {
+      final msg =
+          'PID ${stored.pid} Yomu-owned não saudável e não pôde ser encerrado. '
+          'Identidade preservada.';
+      _emit(SuwayomiStatus(
+        state: SuwayomiProcessState.unhealthy,
+        message: msg,
+        baseUrl: baseUrl,
+        pid: stored.pid,
+      ));
+      return Err(msg);
+    }
+    final freed =
+        await _waitPortAndHealthDown(const Duration(seconds: 20));
+    if (!freed) {
+      final msg =
+          'PID ${stored.pid} encerrado, mas porta $port ainda ativa. '
+          'Identidade preservada — não iniciaremos outra JVM.';
+      _emit(SuwayomiStatus(
+        state: SuwayomiProcessState.unhealthy,
+        message: msg,
+        baseUrl: baseUrl,
+      ));
+      return Err(msg);
+    }
+    await ManagedInstanceIdentity.clear(identityFile);
+    _identity = null;
+    return null; // free to start
+  }
+
+  /// Returns error message if port cannot be used; null if free.
+  Future<String?> _resolvePortOccupantBeforeStart() async {
+    final healthy = await createClient().isHealthy();
+    final listenerPid = await _ownership.probe.findListenerPid(port);
+    if (!healthy && listenerPid == null) {
+      return null;
+    }
+
+    // Port/health busy without a handled owned identity → refuse.
+    final who =
+        listenerPid != null ? 'PID $listenerPid' : 'processo desconhecido';
     return 'Porta $port já em uso ($who) e não foi possível provar ownership Yomu. '
         'Não será adotado nem encerrado. Feche a outra instância de Suwayomi '
         'ou libere a porta, depois tente de novo.';
@@ -557,7 +633,14 @@ server.authMode = NONE
       if (_process == null && _identity == null) return false;
       final healthy = await client.isHealthy();
       if (healthy) return true;
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      // Short sleep; isHealthy already has its own timeouts.
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining.isNegative) break;
+      await Future<void>.delayed(
+        remaining < const Duration(milliseconds: 200)
+            ? remaining
+            : const Duration(milliseconds: 200),
+      );
     }
     return false;
   }
@@ -565,10 +648,18 @@ server.authMode = NONE
   Future<bool> _waitPortAndHealthDown(Duration timeout) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      final healthy = await createClient().isHealthy();
       final listener = await _ownership.probe.findListenerPid(port);
-      if (!healthy && listener == null) return true;
-      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (listener == null) {
+        final healthy = await createClient().isHealthy();
+        if (!healthy) return true;
+      }
+      final remaining = deadline.difference(DateTime.now());
+      if (remaining.isNegative) break;
+      await Future<void>.delayed(
+        remaining < const Duration(milliseconds: 200)
+            ? remaining
+            : const Duration(milliseconds: 200),
+      );
     }
     final healthy = await createClient().isHealthy();
     final listener = await _ownership.probe.findListenerPid(port);

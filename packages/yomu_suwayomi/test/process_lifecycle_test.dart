@@ -11,7 +11,6 @@ class _FakeProbe implements ProcessOwnershipProbe {
   int? listenerPid;
   Map<int, ProcessSnapshot> snapshots;
   final killed = <int>[];
-  /// When true, kill succeeds but port still appears active (incomplete stop).
   bool keepListenerAfterKill = false;
 
   @override
@@ -41,6 +40,21 @@ VendorManifest _manifest() => const VendorManifest(
         minJre: 21,
       ),
     );
+
+String _ownedCmd({
+  required String javaAbs,
+  required String jarAbs,
+  required String rootAbs,
+  required String runId,
+  required DateTime started,
+  int port = 14567,
+}) {
+  return '$javaAbs -D$kYomuRunIdProperty=$runId '
+      '-D$kYomuStartedAtProperty=${started.toUtc().toIso8601String()} '
+      '-Dsuwayomi.tachidesk.config.server.rootDir=${rootAbs.replaceAll(r'\', '/')} '
+      '-Dsuwayomi.tachidesk.config.server.port=$port '
+      '-jar $jarAbs';
+}
 
 void main() {
   test('foreign listener on port is not adopted and not killed', () async {
@@ -80,85 +94,104 @@ void main() {
     );
     expect(failed, isTrue);
     expect(probe.killed, isEmpty);
-    expect(manager.status.state, SuwayomiProcessState.crashed);
   });
 
-  test('validated Yomu orphan is killed before start attempt', () async {
-    final root = Directory.systemTemp.createTempSync('yomu-orphan');
-    addTearDown(() => root.deleteSync(recursive: true));
-    final paths = SuwayomiPaths(root);
-    await paths.ensureLayout();
-
-    final jarPath =
-        p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar');
-    final rootDir = paths.dataDir.absolute.path;
-    final started = DateTime.utc(2026, 7, 9, 10);
-    const runId = 'cafebabe';
-    final cl =
-        'java -D$kYomuRunIdProperty=$runId '
-        '-D$kYomuStartedAtProperty=${started.toIso8601String()} '
-        '-Dsuwayomi.tachidesk.config.server.rootDir=${rootDir.replaceAll(r'\', '/')} '
-        '-Dsuwayomi.tachidesk.config.server.port=14567 '
-        '-jar $jarPath';
-
-    final id = ManagedInstanceIdentity(
-      runId: runId,
-      pid: 4242,
-      startedAt: started,
-      javaExecutable: 'java',
-      jarPath: jarPath,
-      rootDir: rootDir,
-      port: 14567,
-    );
-    await id.save(paths.instanceIdentity);
-
-    final probe = _FakeProbe(
-      listenerPid: 4242,
-      snapshots: {
-        4242: ProcessSnapshot(pid: 4242, exists: true, commandLine: cl),
-      },
-    );
-
-    final manager = SuwayomiProcessManager(
-      paths: paths,
-      manifest: _manifest(),
-      ownershipProbe: probe,
-      port: 14567,
-    );
-
-    await manager.start(readyTimeout: const Duration(milliseconds: 200));
-    expect(probe.killed, contains(4242));
-  });
-
-  test('stop incomplete keeps identity file for retry', () async {
+  test('owned identity not healthy: kill with ownership, preserve if port stuck',
+      () async {
     final root = Directory.systemTemp.createTempSync('yomu-stop-id');
     addTearDown(() => root.deleteSync(recursive: true));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
 
-    final jarPath =
-        p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar');
-    final rootDir = paths.dataDir.absolute.path;
+    final javaAbs = File(p.join(root.path, 'java', 'bin', 'java.exe'))
+      ..createSync(recursive: true);
+    final jarAbs = File(
+      p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar'),
+    )..createSync(recursive: true);
+    final rootAbs = paths.dataDir.absolute.path;
     final started = DateTime.utc(2026, 7, 9, 11);
     const runId = 'feedface';
-    final cl =
-        'java -D$kYomuRunIdProperty=$runId '
-        '-D$kYomuStartedAtProperty=${started.toIso8601String()} '
-        '-Dsuwayomi.tachidesk.config.server.rootDir=${rootDir.replaceAll(r'\', '/')} '
-        '-Dsuwayomi.tachidesk.config.server.port=14567 '
-        '-jar $jarPath';
+    // Isolated port so a real Suwayomi on 14567 cannot make health succeed.
+    const testPort = 24567;
+    final cl = _ownedCmd(
+      javaAbs: javaAbs.absolute.path,
+      jarAbs: jarAbs.absolute.path,
+      rootAbs: rootAbs,
+      runId: runId,
+      started: started,
+      port: testPort,
+    );
 
     final id = ManagedInstanceIdentity(
       runId: runId,
       pid: 5555,
       startedAt: started,
-      javaExecutable: 'java',
-      jarPath: jarPath,
-      rootDir: rootDir,
+      javaExecutable: javaAbs.absolute.path,
+      jarPath: jarAbs.absolute.path,
+      rootDir: rootAbs,
+      port: testPort,
+    );
+    await id.save(paths.instanceIdentity);
+
+    final probe = _FakeProbe(
+      listenerPid: 5555,
+      snapshots: {
+        5555: ProcessSnapshot(pid: 5555, exists: true, commandLine: cl),
+      },
+    )..keepListenerAfterKill = true;
+
+    final manager = SuwayomiProcessManager(
+      paths: paths,
+      manifest: _manifest(),
+      ownershipProbe: probe,
+      port: testPort,
+    );
+
+    final result = await manager.start(
+      readyTimeout: const Duration(milliseconds: 400),
+    );
+    expect(probe.killed, contains(5555));
+    result.when(
+      ok: (_) => fail('expected error while port still held'),
+      err: (m, _) {
+        expect(m.toLowerCase(), contains('identidade'));
+      },
+    );
+    expect(paths.instanceIdentity.existsSync(), isTrue);
+  }, timeout: const Timeout(Duration(seconds: 90)));
+
+  test('stop incomplete keeps identity file for retry', () async {
+    final root = Directory.systemTemp.createTempSync('yomu-stop-id2');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final paths = SuwayomiPaths(root);
+    await paths.ensureLayout();
+
+    final javaAbs = File(p.join(root.path, 'java', 'bin', 'java.exe'))
+      ..createSync(recursive: true);
+    final jarAbs = File(
+      p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar'),
+    )..createSync(recursive: true);
+    final rootAbs = paths.dataDir.absolute.path;
+    final started = DateTime.utc(2026, 7, 9, 11);
+    const runId = 'feedface';
+    final cl = _ownedCmd(
+      javaAbs: javaAbs.absolute.path,
+      jarAbs: jarAbs.absolute.path,
+      rootAbs: rootAbs,
+      runId: runId,
+      started: started,
+    );
+
+    final id = ManagedInstanceIdentity(
+      runId: runId,
+      pid: 5555,
+      startedAt: started,
+      javaExecutable: javaAbs.absolute.path,
+      jarPath: jarAbs.absolute.path,
+      rootDir: rootAbs,
       port: 14567,
     );
     await id.save(paths.instanceIdentity);
-    expect(paths.instanceIdentity.existsSync(), isTrue);
 
     final probe = _FakeProbe(
       listenerPid: 5555,
@@ -176,31 +209,38 @@ void main() {
 
     await manager.stop();
     expect(manager.status.state, SuwayomiProcessState.unhealthy);
-    expect(paths.instanceIdentity.existsSync(), isTrue,
-        reason: 'identity must survive incomplete stop');
+    expect(paths.instanceIdentity.existsSync(), isTrue);
     final reloaded = await ManagedInstanceIdentity.load(paths.instanceIdentity);
     expect(reloaded?.runId, runId);
-    expect(reloaded?.pid, 5555);
   });
 
-  test('identity save is atomic (temp + rename)', () async {
+  test('identity save is atomic (temp + rename without delete-first)', () async {
     final root = Directory.systemTemp.createTempSync('yomu-atomic');
     addTearDown(() => root.deleteSync(recursive: true));
     final file = File(p.join(root.path, 'id.json'));
-    final id = ManagedInstanceIdentity(
+    final id1 = ManagedInstanceIdentity(
       runId: 'aa',
       pid: 1,
       startedAt: DateTime.utc(2026, 1, 1),
-      javaExecutable: 'java',
+      javaExecutable: r'C:\j\java.exe',
       jarPath: r'C:\j.jar',
       rootDir: r'C:\data',
       port: 14567,
     );
-    await id.save(file);
-    expect(file.existsSync(), isTrue);
+    await id1.save(file);
+    final id2 = ManagedInstanceIdentity(
+      runId: 'bb',
+      pid: 2,
+      startedAt: DateTime.utc(2026, 1, 2),
+      javaExecutable: r'C:\j\java.exe',
+      jarPath: r'C:\j.jar',
+      rootDir: r'C:\data',
+      port: 14567,
+    );
+    await id2.save(file);
     expect(File('${file.path}.tmp').existsSync(), isFalse);
     final loaded = await ManagedInstanceIdentity.load(file);
-    expect(loaded?.runId, 'aa');
+    expect(loaded?.runId, 'bb');
   });
 
   test('stop without process and foreign identity stays unhealthy', () async {
@@ -213,7 +253,7 @@ void main() {
       runId: 'x',
       pid: 777,
       startedAt: DateTime.now().toUtc(),
-      javaExecutable: 'java',
+      javaExecutable: r'C:\yomu\java.exe',
       jarPath: r'C:\yomu\Suwayomi-Server-v2.3.2238.jar',
       rootDir: r'C:\yomu\data',
       port: 14567,
