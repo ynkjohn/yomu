@@ -4,41 +4,29 @@
 
 ### Gate funcional #1 — extensão → páginas ✅
 
-Probe + UI mínima de leitura.
-
-### Hard gate — biblioteca + progresso + downloads ✅ (código 2C)
-
-- Biblioteca Suwayomi (`inLibrary`)
-- Salvar/retomar `lastPageRead` no leitor
-- Fila de downloads (enqueue / status / clear)
+### Hard gate — biblioteca + progresso + downloads ✅
 
 ### Gate 1.5 — isolamento Suwayomi ✅
 
-`127.0.0.1:14567`, data root gerenciado.
+### PWA iPhone mínima ✅ (código + fix de páginas)
 
 ## Phases
 
 | Fase | Estado |
 |------|--------|
 | 2B UI mínima leitura | ✅ |
-| Foundation fix (git, loopback HTTP, testes) | ✅ |
+| Foundation fix | ✅ |
 | 2C biblioteca / progresso / downloads | ✅ |
-| **PWA iPhone mínima (auth + LAN opt-in + SPA)** | ✅ código |
-| Maya | bloqueada |
+| PWA iPhone (auth + LAN + SPA + media proxy) | ✅ |
+| **Maya mínima (chat + ActionProposal)** | ✅ código |
 | Source Builder | bloqueado |
 | Design final | bloqueado |
-
-## PWA mínima
-
-- Desktop: LAN opt-in, código de pareamento, sessões persistidas
-- API: Bearer proxy para library / manga / chapters / pages / progress / images
-- SPA: `apps/yomu_mobile_pwa` — pair, biblioteca, obra, leitor + progresso
-- Suwayomi **nunca** na LAN
-
-Validação manual: runbook em `docs/iphone-runbook.md`.
+| LLM cloud Maya | opcional futuro |
 
 ## Validação
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 ```
+
+Subagente de verificação (PWA stack): **PASS** (2026-07-09) — testes packages + desktop verdes; follow-ups não bloqueantes (stop de órfão, harden SSRF media).

@@ -1,4 +1,8 @@
-/// Maya AI (blocked until Suwayomi + extension + reading gates are green).
+/// Maya AI assistant — offline heuristic + ActionProposal safety rail.
 library;
 
-export 'src/placeholder.dart';
+export 'src/heuristic_engine.dart';
+export 'src/maya_port.dart';
+export 'src/maya_service.dart';
+export 'src/maya_store.dart';
+export 'src/models.dart';

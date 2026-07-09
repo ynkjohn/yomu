@@ -85,10 +85,11 @@ Isso roda: `flutter analyze` (raiz), testes (core, suwayomi, local_server, deskt
 |------|--------|
 | Gate funcional #1 (páginas reais) | ✅ |
 | Hard gate (biblioteca + salvar/retomar progresso + downloads) | ✅ (Fase 2C) |
-| PWA LAN real | bloqueada (stub loopback-only) |
-| Maya / Source Builder | bloqueados |
+| PWA LAN real | ✅ (opt-in + pairing + proxy) |
+| Maya mínima | ✅ (heurística local + ActionProposal) |
+| Source Builder | bloqueado |
 
-Yomu HTTP default: `http://127.0.0.1:8787` (não LAN). Suwayomi: `http://127.0.0.1:14567` apenas.
+Yomu HTTP default: `http://127.0.0.1:8787`; LAN só com opt-in. Suwayomi: `http://127.0.0.1:14567` apenas.
 
 ### Suwayomi JAR
 
@@ -97,7 +98,7 @@ JAR may live under `vendor/` (gitignored if large) or downloaded on first start 
 
 ## Architecture summary
 
-See `docs/architecture.md`. Hard rule: **do not** implement Maya / full PWA / Source Builder until Suwayomi + Keiyoushi extension + reading gates are green.
+See `docs/architecture.md`. Reading stack + PWA mínima + Maya mínima estão verdes; Source Builder e design final continuam bloqueados.
 
 ## License
 

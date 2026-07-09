@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_local_server/yomu_local_server.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
@@ -15,8 +16,11 @@ import '../screens/downloads_screen.dart';
 import '../screens/explore_screen.dart';
 import '../screens/extensions_screen.dart';
 import '../screens/library_screen.dart';
+import '../screens/manga_detail_screen.dart';
+import '../screens/maya_screen.dart';
 import '../screens/placeholder_screen.dart';
 import '../screens/server_screen.dart';
+import '../services/suwayomi_maya_port.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -79,6 +83,7 @@ class _HomeShellState extends State<HomeShell> {
   SuwayomiApi? _api;
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
+  MayaService? _maya;
   Directory? _pwaDir;
   String? _bootstrapError;
   bool _bootstrapping = true;
@@ -92,6 +97,7 @@ class _HomeShellState extends State<HomeShell> {
   StreamSubscription<SuwayomiStatus>? _statusSub;
   SuwayomiStatus _suwayomiStatus =
       const SuwayomiStatus(state: SuwayomiProcessState.stopped);
+
 
   bool get _engineReady =>
       _manager != null &&
@@ -116,6 +122,13 @@ class _HomeShellState extends State<HomeShell> {
         persistFile: File(p.join(root.path, 'device_sessions.json')),
       );
       await auth.load();
+
+      final mayaStore = MayaStore(File(p.join(root.path, 'maya_chat.json')));
+      await mayaStore.load();
+      final maya = MayaService(
+        store: mayaStore,
+        libraryPort: SuwayomiMayaPort(() => _api),
+      );
 
       final manifestJson =
           await rootBundle.loadString('assets/vendor/manifest.json');
@@ -155,6 +168,7 @@ class _HomeShellState extends State<HomeShell> {
         _manager = manager;
         _api = SuwayomiApi(manager.createClient());
         _auth = auth;
+        _maya = maya;
         _pwaDir = pwaDir;
         _yomuServer = server;
         _suwayomiStatus = manager.status;
@@ -479,11 +493,20 @@ class _HomeShellState extends State<HomeShell> {
         ),
       'source_builder' => const PlaceholderScreen(
           title: 'Criador de fontes',
-          message: 'Bloqueado — após PWA estável e Maya na sequência.',
+          message: 'Bloqueado — fase posterior (após Maya estável).',
         ),
-      'maya' => const PlaceholderScreen(
-          title: 'Maya',
-          message: 'Bloqueado — fase posterior (após PWA mínima).',
+      'maya' => MayaScreen(
+          service: _maya,
+          engineReady: _engineReady,
+          onOpenManga: (id, title) {
+            final api = _api;
+            if (api == null) return;
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => MangaDetailScreen(api: api, mangaId: id),
+              ),
+            );
+          },
         ),
       _ => PlaceholderScreen(
           title: _nav.firstWhere((e) => e.id == _selected).label,

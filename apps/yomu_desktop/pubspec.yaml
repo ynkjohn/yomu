@@ -21,6 +21,8 @@ dependencies:
     path: ../../packages/yomu_local_server
   yomu_ui:
     path: ../../packages/yomu_ui
+  yomu_ai:
+    path: ../../packages/yomu_ai
   path: ^1.9.1
   path_provider: ^2.1.5
 

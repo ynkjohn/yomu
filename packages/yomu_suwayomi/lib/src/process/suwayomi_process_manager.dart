@@ -216,6 +216,23 @@ server.authMode = NONE
       return Ok(_status);
     }
 
+    // Orphan from a previous app session (crash / flutter hot-restart): if the
+    // managed loopback API is already healthy, attach instead of spawning a
+    // second JVM (Suwayomi exits with MutexCheckFailedTachideskRunning / code 1).
+    final alreadyUp = await createClient().isHealthy();
+    if (alreadyUp) {
+      final ok = SuwayomiStatus(
+        state: SuwayomiProcessState.running,
+        message:
+            'Suwayomi já estava em $baseUrl (reaproveitado; sem novo processo).',
+        baseUrl: baseUrl,
+        version: manifest.suwayomi.displayVersion,
+        lastHealthCheck: DateTime.now(),
+      );
+      _emit(ok);
+      return Ok(ok);
+    }
+
     _combinedLog.clear();
     _emit(
       const SuwayomiStatus(
@@ -291,11 +308,11 @@ server.authMode = NONE
       _logSink?.writeln('--- exit code $code ---');
       if (_status.state != SuwayomiProcessState.stopping &&
           _status.state != SuwayomiProcessState.stopped) {
+        final hint = _crashHintFromLog(_combinedLog.toString(), code);
         _emit(
           SuwayomiStatus(
             state: SuwayomiProcessState.crashed,
-            message:
-                'Suwayomi encerrou inesperadamente (code $code). Veja logs/suwayomi.log',
+            message: hint,
             baseUrl: baseUrl,
           ),
         );
@@ -427,6 +444,17 @@ server.authMode = NONE
     final match = re.firstMatch(log);
     if (match == null) return null;
     return match.group(1)!.trim();
+  }
+
+  String _crashHintFromLog(String log, int code) {
+    if (log.contains('MutexCheckFailedTachideskRunning') ||
+        log.contains('Another instance of Suwayomi-Server is running')) {
+      return 'Porta $port já em uso por outro Suwayomi. '
+          'Feche a instância antiga ou reinicie o PC; depois tente de novo. '
+          '(code $code)';
+    }
+    return 'Suwayomi encerrou inesperadamente (code $code). '
+        'Veja ${paths.processLog.path}';
   }
 
   Future<bool> _waitUntilHealthy(Duration timeout) async {

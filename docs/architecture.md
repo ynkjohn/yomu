@@ -29,12 +29,13 @@ iPhone Safari/PWA talks **only** to Yomu Core.
 
 Personal status is dual-layer: Suwayomi = facts; Yomu = intention; conflicts are visible.
 
-## Hard gates
-
-Do not build Maya or Source Builder until the reading stack is solid:
+## Hard gates (done)
 
 1. Suwayomi start/health/stop
 2. Keiyoushi → install extension → search → details → chapters → pages
 3. Desktop reader + progress save/resume
 4. Library / downloads (hard gate)
-5. PWA mínima (LAN opt-in + pairing + library/reader) — **done at code level**
+5. PWA mínima (LAN opt-in + pairing + library/reader)
+6. Maya mínima (local chat + ActionProposal) — **done at code level**
+
+Still blocked: Source Builder product, final design, optional cloud LLM for Maya.

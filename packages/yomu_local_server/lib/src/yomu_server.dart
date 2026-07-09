@@ -202,7 +202,6 @@ class YomuServer {
                 (e) => {
                   'index': e.key,
                   'url': _mediaProxyUrl(e.value),
-                  'upstream': e.value,
                 },
               )
               .toList(),
