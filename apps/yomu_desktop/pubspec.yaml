@@ -1,0 +1,35 @@
+name: yomu_desktop
+description: Yomu desktop native app — manages Suwayomi, UI, local server.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.8.0
+
+resolution: workspace
+
+dependencies:
+  flutter:
+    sdk: flutter
+  yomu_core:
+    path: ../../packages/yomu_core
+  yomu_storage:
+    path: ../../packages/yomu_storage
+  yomu_suwayomi:
+    path: ../../packages/yomu_suwayomi
+  yomu_local_server:
+    path: ../../packages/yomu_local_server
+  yomu_ui:
+    path: ../../packages/yomu_ui
+  path: ^1.9.1
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/vendor/manifest.json

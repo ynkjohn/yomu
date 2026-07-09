@@ -1,0 +1,33 @@
+name: yomu_workspace
+publish_to: none
+environment:
+  sdk: ^3.8.0
+
+workspace:
+  - packages/yomu_core
+  - packages/yomu_storage
+  - packages/yomu_suwayomi
+  - packages/yomu_local_server
+  - packages/yomu_sources
+  - packages/yomu_source_builder
+  - packages/yomu_reader
+  - packages/yomu_ai
+  - packages/yomu_ui
+  - apps/yomu_desktop
+
+# Deps used by tool/*.dart entrypoints (workspace-root analyze + dart run).
+dependencies:
+  crypto: ^3.0.6
+  http: ^1.4.0
+  path: ^1.9.1
+  yomu_core:
+    path: packages/yomu_core
+  yomu_local_server:
+    path: packages/yomu_local_server
+  yomu_suwayomi:
+    path: packages/yomu_suwayomi
+
+dev_dependencies:
+  lints: ^5.1.1
+  melos: ^6.3.2
+  test: ^1.25.15

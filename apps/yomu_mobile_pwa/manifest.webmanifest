@@ -1,0 +1,9 @@
+{
+  "name": "Yomu",
+  "short_name": "Yomu",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121418",
+  "theme_color": "#121418",
+  "description": "Yomu mobile stub — local LAN PWA via desktop Core"
+}

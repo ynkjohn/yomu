@@ -1,0 +1,75 @@
+# Dart / Flutter
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+**/doc/api/
+.flutter-plugins
+.flutter-plugins-dependencies
+.melos_tool/
+pubspec_overrides.yaml
+**/Generated.xcconfig
+**/flutter_export_environment.sh
+**/ephemeral/
+**/local.properties
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Yomu local runtime / data (never commit)
+.yomu/
+**/data/suwayomi/
+**/logs/
+*.log
+downloads/
+cache/
+**/cache/
+*.db
+*.db-journal
+*.mv.db
+*.trace.db
+
+# Vendor binaries (manifest.json IS committed)
+packages/yomu_suwayomi/vendor/*.jar
+packages/yomu_suwayomi/vendor/jre*/
+packages/yomu_suwayomi/vendor/**/bin/
+**/runtime/suwayomi/*.jar
+**/runtime/jre/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+secrets/
+**/app_settings.local.json
+
+# Node PWA (stub)
+apps/yomu_mobile_pwa/node_modules/
+apps/yomu_mobile_pwa/dist/
+
+# Coverage / test artifacts
+coverage/
+test-results/
+*.lcov
+
+# Windows
+*.exe
+*.dll
+*.pdb
+!apps/**/windows/**/*.dll
+*.user
+*.suo

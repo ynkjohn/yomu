@@ -1,0 +1,22 @@
+name: yomu
+repository: https://github.com/yomu-app/yomu
+
+packages:
+  - apps/**
+  - packages/**
+
+command:
+  bootstrap:
+    environment:
+      sdk: ^3.8.0
+
+scripts:
+  analyze:
+    run: melos exec -- flutter analyze --fatal-infos
+    description: Run analyzer on all packages
+  test:
+    run: melos exec --dir-exists=test -- flutter test
+    description: Run tests
+  format:
+    run: melos exec -- dart format .
+    description: Format all Dart code

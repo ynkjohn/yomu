@@ -1,0 +1,3 @@
+class MayaService {
+  const MayaService();
+}

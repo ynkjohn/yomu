@@ -1,0 +1,18 @@
+include: package:lints/recommended.yaml
+
+analyzer:
+  exclude:
+    - '**/*.g.dart'
+    - '**/*.freezed.dart'
+    - 'apps/yomu_mobile_pwa/**'
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    avoid_print: true
+    public_member_api_docs: false
