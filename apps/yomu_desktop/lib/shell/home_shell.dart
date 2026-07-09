@@ -29,7 +29,7 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends State<HomeShell> {
+class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   static const _nav = <YomuNavItem>[
     YomuNavItem(
       id: 'server',
@@ -107,7 +107,15 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_bootstrap());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      unawaited(_coordinatedShutdown());
+    }
   }
 
   Future<void> _bootstrap() async {
@@ -149,6 +157,7 @@ class _HomeShellState extends State<HomeShell> {
         auth: auth,
         pwaDir: pwaDir,
         lanEnabled: false,
+        lanAddresses: const [],
       );
       await server.start();
 
@@ -189,12 +198,18 @@ class _HomeShellState extends State<HomeShell> {
     required DeviceAuthStore auth,
     required Directory? pwaDir,
     required bool lanEnabled,
+    required List<String> lanAddresses,
   }) {
+    final port = 8787;
+    final origins = lanEnabled
+        ? lanAddresses.map((ip) => 'http://$ip:$port').toList()
+        : <String>[];
     return YomuServer(
       host: lanEnabled ? '0.0.0.0' : '127.0.0.1',
-      port: 8787,
+      port: port,
       pwaDir: pwaDir,
       allowLanCors: lanEnabled,
+      allowedOrigins: origins,
       auth: auth,
       suwayomiStatus: () => manager.status,
       apiProvider: () {
@@ -216,14 +231,15 @@ class _HomeShellState extends State<HomeShell> {
     try {
       await _yomuServer?.stop();
       _yomuServer?.close();
+      final addrs = lanEnabled ? await listLanIpv4Addresses() : <String>[];
       final server = _buildYomuServer(
         manager: manager,
         auth: auth,
         pwaDir: _pwaDir,
         lanEnabled: lanEnabled,
+        lanAddresses: addrs,
       );
       await server.start();
-      final addrs = lanEnabled ? await listLanIpv4Addresses() : <String>[];
       if (!mounted) return;
       setState(() {
         _yomuServer = server;
@@ -322,14 +338,26 @@ class _HomeShellState extends State<HomeShell> {
     return null;
   }
 
-  @override
-  void dispose() {
-    unawaited(_statusSub?.cancel() ?? Future<void>.value());
-    unawaited(() async {
+  Future<void> _coordinatedShutdown() async {
+    await _statusSub?.cancel();
+    _statusSub = null;
+    try {
       await _yomuServer?.stop();
       _yomuServer?.close();
-    }());
-    unawaited(_manager?.dispose() ?? Future<void>.value());
+    } catch (_) {}
+    try {
+      await _manager?.shutdown();
+    } catch (_) {
+      // dispose is last-resort fallback only
+      await _manager?.dispose();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Fallback if lifecycle did not run — still attempt async teardown.
+    unawaited(_coordinatedShutdown());
     super.dispose();
   }
 
@@ -372,6 +400,16 @@ class _HomeShellState extends State<HomeShell> {
         _suwayomiStatus = _manager?.status ?? _suwayomiStatus;
         _busyEngine = false;
       });
+      if (_suwayomiStatus.state != SuwayomiProcessState.stopped) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _suwayomiStatus.message ??
+                  'Stop incompleto — porta pode ainda estar ativa.',
+            ),
+          ),
+        );
+      }
     }
   }
 

@@ -45,13 +45,42 @@ class PairingCode {
   bool get isExpired => DateTime.now().isAfter(expiresAt);
 }
 
+/// Outcome of [DeviceAuthStore.claimPairing].
+enum PairingClaimResult {
+  success,
+  invalidOrExpired,
+  rateLimited,
+}
+
+class PairingClaimOutcome {
+  const PairingClaimOutcome({
+    required this.result,
+    this.session,
+    this.retryAfterSeconds,
+  });
+
+  final PairingClaimResult result;
+  final DeviceSession? session;
+  final int? retryAfterSeconds;
+}
+
 class DeviceAuthStore {
-  DeviceAuthStore({this.persistFile});
+  DeviceAuthStore({
+    this.persistFile,
+    this.maxFailedAttempts = 5,
+    this.failWindow = const Duration(minutes: 10),
+  });
 
   final File? persistFile;
+  final int maxFailedAttempts;
+  final Duration failWindow;
   final _sessions = <String, DeviceSession>{};
   PairingCode? _activePairing;
   final _rng = Random.secure();
+
+  /// Failed claim timestamps keyed by client IP (and a global bucket).
+  final _failTimestamps = <String, List<DateTime>>{};
+  DateTime? _rateLimitedUntil;
 
   List<DeviceSession> get sessions =>
       _sessions.values.toList()
@@ -61,6 +90,18 @@ class DeviceAuthStore {
       (_activePairing != null && !_activePairing!.isExpired)
           ? _activePairing
           : null;
+
+  bool get isRateLimited {
+    final until = _rateLimitedUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  int? get rateLimitRetryAfterSeconds {
+    final until = _rateLimitedUntil;
+    if (until == null) return null;
+    final s = until.difference(DateTime.now()).inSeconds;
+    return s > 0 ? s : null;
+  }
 
   Future<void> load() async {
     final file = persistFile;
@@ -92,12 +133,15 @@ class DeviceAuthStore {
   }
 
   /// Creates a short numeric pairing code (6 digits), valid 5 minutes.
+  /// Clears prior rate-limit window for a fresh code.
   PairingCode startPairing({Duration ttl = const Duration(minutes: 5)}) {
     final code = (_rng.nextInt(900000) + 100000).toString();
     _activePairing = PairingCode(
       code: code,
       expiresAt: DateTime.now().add(ttl),
     );
+    _failTimestamps.clear();
+    _rateLimitedUntil = null;
     return _activePairing!;
   }
 
@@ -106,14 +150,44 @@ class DeviceAuthStore {
   }
 
   /// Claims pairing code and returns a bearer token.
-  Future<DeviceSession?> claimPairing({
+  ///
+  /// Never log [code] or resulting token. Rate-limited by [clientKey] (IP).
+  Future<PairingClaimOutcome> claimPairing({
     required String code,
     required String deviceName,
+    String clientKey = 'unknown',
   }) async {
+    if (isRateLimited) {
+      return PairingClaimOutcome(
+        result: PairingClaimResult.rateLimited,
+        retryAfterSeconds: rateLimitRetryAfterSeconds,
+      );
+    }
+
     final p = _activePairing;
-    if (p == null || p.isExpired) return null;
-    if (p.code != code.trim()) return null;
+    if (p == null || p.isExpired) {
+      await _registerFailure(clientKey);
+      if (isRateLimited) {
+        return PairingClaimOutcome(
+          result: PairingClaimResult.rateLimited,
+          retryAfterSeconds: rateLimitRetryAfterSeconds,
+        );
+      }
+      return const PairingClaimOutcome(result: PairingClaimResult.invalidOrExpired);
+    }
+    if (p.code != code.trim()) {
+      await _registerFailure(clientKey);
+      if (isRateLimited) {
+        return PairingClaimOutcome(
+          result: PairingClaimResult.rateLimited,
+          retryAfterSeconds: rateLimitRetryAfterSeconds,
+        );
+      }
+      return const PairingClaimOutcome(result: PairingClaimResult.invalidOrExpired);
+    }
+
     _activePairing = null;
+    _failTimestamps.clear();
     final token = _randomToken();
     final session = DeviceSession(
       token: token,
@@ -123,7 +197,31 @@ class DeviceAuthStore {
     );
     _sessions[token] = session;
     await _persist();
-    return session;
+    return PairingClaimOutcome(
+      result: PairingClaimResult.success,
+      session: session,
+    );
+  }
+
+  Future<void> _registerFailure(String clientKey) async {
+    final now = DateTime.now();
+    final cutoff = now.subtract(failWindow);
+    void add(String key) {
+      final list = _failTimestamps.putIfAbsent(key, () => <DateTime>[]);
+      list.removeWhere((t) => t.isBefore(cutoff));
+      list.add(now);
+    }
+
+    add(clientKey);
+    add('__global__');
+
+    final ipFails = _failTimestamps[clientKey]?.length ?? 0;
+    final globalFails = _failTimestamps['__global__']?.length ?? 0;
+    if (ipFails >= maxFailedAttempts || globalFails >= maxFailedAttempts) {
+      _rateLimitedUntil = now.add(failWindow);
+      // Invalidate active pairing — desktop must mint a new code.
+      _activePairing = null;
+    }
   }
 
   DeviceSession? authenticate(String? bearer) {

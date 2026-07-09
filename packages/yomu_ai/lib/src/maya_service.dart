@@ -155,6 +155,15 @@ class MayaService {
   Future<ActionProposal> rejectProposal(String proposalId) async {
     final p = store.proposals[proposalId];
     if (p == null) throw StateError('Proposta não encontrada: $proposalId');
+    // Executed (and failed) proposals are immutable for audit.
+    if (p.status == ActionProposalStatus.executed ||
+        p.status == ActionProposalStatus.failed ||
+        p.status == ActionProposalStatus.confirmed) {
+      return p;
+    }
+    if (p.status != ActionProposalStatus.pending) {
+      return p;
+    }
     final rejected = p.copyWith(status: ActionProposalStatus.rejected);
     store.proposals[proposalId] = rejected;
     store.messages.add(

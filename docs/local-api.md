@@ -29,8 +29,9 @@
 | GET | `/api/v1/manga/:id` | manga detail |
 | POST | `/api/v1/manga/:id/library` | `{ inLibrary: bool }` |
 | GET | `/api/v1/manga/:id/chapters` | list / fetch chapters |
-| GET | `/api/v1/chapters/:id/pages` | page list with Yomu image URLs |
-| GET | `/api/v1/chapters/:id/pages/:index/image` | image proxy (loopback → Suwayomi) |
+| GET | `/api/v1/chapters/:id/pages` | page list with **ticket** media URLs (`/api/v1/media?t=…`) |
+| GET | `/api/v1/media?t=` | ticket-bound media proxy (session must match; **no raw `u=`**) |
+| GET | `/api/v1/chapters/:id/pages/:index/image` | back-compat image proxy (loopback Suwayomi) |
 | GET | `/api/v1/manga/:id/thumbnail` | thumbnail proxy |
 | PUT | `/api/v1/chapters/:id/progress` | `{ lastPageRead, isRead }` |
 | GET | `/api/v1/sources` | installed sources |

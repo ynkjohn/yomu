@@ -254,6 +254,12 @@
     saveProgress(state.reader.chapterId, state.reader.pageCount - 1, true);
   });
 
+  // Phase 2D: limited preload window + blob lifecycle
+  const PRELOAD_AHEAD = 2;
+  const PRELOAD_BEHIND = 1;
+  const blobByPage = new Map(); // index -> blob URL
+  let progressError = '';
+
   function setToken(token) {
     state.token = token || '';
     if (token) localStorage.setItem(TOKEN_KEY, token);
@@ -289,6 +295,10 @@
       data = await res.arrayBuffer();
     }
     if (!res.ok) {
+      if (res.status === 429) {
+        const ra = res.headers.get('retry-after') || (data && data.retryAfter) || '';
+        throw new Error('rate_limited' + (ra ? (':' + ra) : ''));
+      }
       const msg = (data && data.message) || (data && data.error) || ('HTTP ' + res.status);
       throw new Error(msg);
     }
@@ -350,9 +360,15 @@
       state.view = 'library';
       await loadLibrary();
     } catch (e) {
-      state.error = e.message === 'invalid_or_expired_code'
-        ? 'Código inválido ou expirado.'
-        : String(e.message || e);
+      const msg = String(e.message || e);
+      if (msg === 'invalid_or_expired_code') {
+        state.error = 'Código inválido ou expirado.';
+      } else if (msg.startsWith('rate_limited')) {
+        state.error =
+          'Muitas tentativas. Gere um novo código no desktop e aguarde alguns minutos.';
+      } else {
+        state.error = msg;
+      }
     }
     state.loading = false;
     render();
@@ -371,14 +387,19 @@
     }
     state.loading = false;
     render();
-    // Lazy thumbs
+    // Lazy thumbs via same-origin tickets only (Bearer never leaves Core host)
     for (const m of state.library) {
       if (!m.thumbnailUrl) continue;
+      if (!m.thumbnailUrl.startsWith('/')) continue;
       const img = document.querySelector('[data-thumb="' + m.id + '"]');
       if (!img) continue;
-      authBlobUrl(m.thumbnailUrl).then((url) => {
-        if (url) img.src = url;
-      });
+      authBlobUrl(m.thumbnailUrl)
+        .then((url) => {
+          if (url) img.src = url;
+        })
+        .catch(() => {
+          img.alt = '';
+        });
     }
   }
 
@@ -403,8 +424,89 @@
     render();
   }
 
+  function revokeBlob(index) {
+    const u = blobByPage.get(index);
+    if (u) {
+      URL.revokeObjectURL(u);
+      blobByPage.delete(index);
+    }
+  }
+
+  function revokeAllBlobs() {
+    for (const u of blobByPage.values()) URL.revokeObjectURL(u);
+    blobByPage.clear();
+  }
+
+  async function ensurePageLoaded(index) {
+    const r = state.reader;
+    if (!r || index < 0 || index >= r.pages.length) return;
+    if (blobByPage.has(index)) {
+      const img = readerPages.querySelector('[data-page="' + index + '"] img');
+      if (img && !img.src) img.src = blobByPage.get(index);
+      return;
+    }
+    const wrap = readerPages.querySelector('[data-page="' + index + '"]');
+    if (!wrap) return;
+    const img = wrap.querySelector('img');
+    try {
+      const url = await authBlobUrl(r.pages[index].url);
+      blobByPage.set(index, url);
+      if (img) img.src = url;
+    } catch (err) {
+      if (img) {
+        img.alt = 'Falha pág. ' + (index + 1);
+        img.style.minHeight = '80px';
+        img.style.background = '#331';
+      }
+    }
+  }
+
+  function syncPreloadWindow(center) {
+    const r = state.reader;
+    if (!r) return;
+    const n = r.pages.length;
+    const lo = Math.max(0, center - PRELOAD_BEHIND);
+    const hi = Math.min(n - 1, center + PRELOAD_AHEAD);
+    // Revoke outside window
+    for (const idx of Array.from(blobByPage.keys())) {
+      if (idx < lo || idx > hi) {
+        const img = readerPages.querySelector('[data-page="' + idx + '"] img');
+        if (img) img.removeAttribute('src');
+        revokeBlob(idx);
+      }
+    }
+    for (let i = lo; i <= hi; i++) {
+      ensurePageLoaded(i);
+    }
+  }
+
+  function updateProgressUi(current, total) {
+    let t = 'Pág. ' + (current + 1) + ' / ' + total;
+    if (progressError) t += ' · progresso falhou';
+    readerProgress.innerHTML = '';
+    readerProgress.appendChild(document.createTextNode(t));
+    if (progressError) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'secondary';
+      btn.style.marginLeft = '8px';
+      btn.textContent = 'Retry';
+      btn.onclick = () => {
+        if (!state.reader) return;
+        saveProgress(
+          state.reader.chapterId,
+          current,
+          current >= total - 1
+        );
+      };
+      readerProgress.appendChild(btn);
+    }
+  }
+
   async function openChapter(chapter) {
     state.error = '';
+    progressError = '';
+    revokeAllBlobs();
     readerTitle.textContent = chapter.name || ('Cap. ' + chapter.id);
     readerPages.innerHTML = '<div class="spinner"></div>';
     readerProgress.textContent = 'Carregando…';
@@ -420,41 +522,34 @@
         pageCount: data.pageCount || pages.length,
         lastPageRead: data.lastPageRead || 0,
         mangaId: data.mangaId,
+        currentPage: 0,
       };
       readerTitle.textContent = state.reader.title;
       readerPages.innerHTML = '';
-      const start = Math.max(0, Math.min(state.reader.lastPageRead || 0, pages.length - 1));
+      const start = Math.max(
+        0,
+        Math.min(state.reader.lastPageRead || 0, pages.length - 1)
+      );
+      state.reader.currentPage = start;
 
-      // Sequential load keeps memory/network sane on phone.
+      // Placeholders only — fetch limited window around resume page.
       for (let i = 0; i < pages.length; i++) {
         const wrap = document.createElement('div');
         wrap.dataset.page = String(i);
+        wrap.style.minHeight = '40vh';
         const img = document.createElement('img');
         img.alt = 'Página ' + (i + 1);
-        img.loading = i < start + 2 ? 'eager' : 'lazy';
         wrap.appendChild(img);
         readerPages.appendChild(wrap);
-
-        // Auth fetch → blob (img tags cannot send Authorization)
-        (async (index, imageEl) => {
-          try {
-            const url = await authBlobUrl(pages[index].url);
-            if (url) imageEl.src = url;
-          } catch (err) {
-            imageEl.alt = 'Falha pág. ' + (index + 1) + ': ' + (err.message || err);
-            imageEl.style.minHeight = '80px';
-            imageEl.style.background = '#331';
-          }
-        })(i, img);
       }
 
-      // Scroll to resume
+      syncPreloadWindow(start);
+
       requestAnimationFrame(() => {
         const target = readerPages.querySelector('[data-page="' + start + '"]');
         if (target) target.scrollIntoView({ block: 'start' });
       });
 
-      // Progress via scroll
       let lastSaved = state.reader.lastPageRead || 0;
       let saveTimer = null;
       const onScroll = () => {
@@ -464,13 +559,18 @@
         for (const el of kids) {
           if (el.offsetTop <= top) current = Number(el.dataset.page || 0);
         }
-        readerProgress.textContent =
-          'Pág. ' + (current + 1) + ' / ' + pages.length;
+        if (state.reader) state.reader.currentPage = current;
+        updateProgressUi(current, pages.length);
+        syncPreloadWindow(current);
         if (current !== lastSaved) {
           lastSaved = current;
           clearTimeout(saveTimer);
           saveTimer = setTimeout(() => {
-            saveProgress(state.reader.chapterId, current, current >= pages.length - 1);
+            saveProgress(
+              state.reader.chapterId,
+              current,
+              current >= pages.length - 1
+            );
           }, 600);
         }
       };
@@ -478,7 +578,9 @@
       onScroll();
     } catch (e) {
       readerPages.innerHTML =
-        '<p class="empty" style="color:var(--danger)">' + escapeHtml(String(e.message || e)) + '</p>';
+        '<p class="empty" style="color:var(--danger)">' +
+        escapeHtml(String(e.message || e)) +
+        '</p>';
       readerProgress.textContent = 'Erro';
     }
   }
@@ -489,29 +591,38 @@
         method: 'PUT',
         json: { lastPageRead: lastPageRead, isRead: !!isRead },
       });
-      // Update local chapter list if open
+      progressError = '';
       const ch = state.chapters.find((c) => c.id === chapterId);
       if (ch) {
         ch.lastPageRead = lastPageRead;
         ch.isRead = !!isRead || ch.isRead;
       }
-    } catch (_) {
-      // silent — offline desktop
+      if (state.reader) {
+        updateProgressUi(
+          state.reader.currentPage || lastPageRead,
+          state.reader.pageCount
+        );
+      }
+    } catch (e) {
+      progressError = String(e.message || e);
+      if (state.reader) {
+        updateProgressUi(
+          state.reader.currentPage || lastPageRead,
+          state.reader.pageCount
+        );
+      }
     }
   }
 
   function closeReader() {
-    // revoke blob urls
-    readerPages.querySelectorAll('img').forEach((img) => {
-      if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
-    });
+    revokeAllBlobs();
     readerPages.innerHTML = '';
     readerPages.onscroll = null;
     readerEl.classList.remove('open');
     readerEl.setAttribute('aria-hidden', 'true');
     state.reader = null;
+    progressError = '';
     if (state.view === 'manga' && state.manga) {
-      // refresh chapter badges
       render();
     }
   }
@@ -529,15 +640,17 @@
     if (!h) {
       return '<span class="pill bad">Yomu: offline</span>';
     }
-    const s = h.suwayomi || {};
-    const bind = h.bind || {};
+    // LAN health is sanitized: suwayomiReady only
+    const ready =
+      h.suwayomiReady === true ||
+      (h.suwayomi && (h.suwayomi.isReady || h.suwayomi.state === 'running'));
     return (
       '<span class="pill ok">Yomu: ok</span>' +
-      '<span class="pill ' + (s.isReady || s.state === 'running' ? 'ok' : 'bad') + '">Suwayomi: ' +
-      escapeHtml(s.state || '?') + '</span>' +
-      (bind.loopbackOnly === false
-        ? '<span class="pill warn">LAN</span>'
-        : '<span class="pill warn">loopback</span>')
+      '<span class="pill ' +
+      (ready ? 'ok' : 'bad') +
+      '">Motor: ' +
+      (ready ? 'pronto' : 'indisponível') +
+      '</span>'
     );
   }
 

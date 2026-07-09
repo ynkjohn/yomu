@@ -25,6 +25,10 @@ class SuwayomiPaths {
   File get processLog => File(p.join(logsDir.path, 'suwayomi.log'));
   File get vendorManifestCopy => File(p.join(runtimeDir.path, 'manifest.json'));
 
+  /// Phase 2D: persisted PID/run identity for ownership checks.
+  File get instanceIdentity =>
+      File(p.join(root.path, 'runtime', 'suwayomi-instance.json'));
+
   Future<void> ensureLayout() async {
     await Future.wait([
       runtimeDir.create(recursive: true),

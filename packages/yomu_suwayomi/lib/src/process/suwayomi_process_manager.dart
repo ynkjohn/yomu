@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
@@ -11,26 +12,23 @@ import '../client/suwayomi_client.dart';
 import '../config/suwayomi_paths.dart';
 import '../config/vendor_manifest.dart';
 import '../java/java_resolver.dart';
-
-typedef StatusListener = void Function(SuwayomiStatus status);
+import 'managed_instance_identity.dart';
+import 'process_ownership.dart';
 
 /// Default loopback port dedicated to Yomu-managed Suwayomi.
-///
-/// Avoids colliding with a standalone Suwayomi on 4567.
 const int kYomuSuwayomiPort = 14567;
 
-/// System property confirmed in Suwayomi-Server v2.3.2238 bytecode
-/// (`ApplicationRootDirKt` → `suwayomi.tachidesk.config.server.rootDir`).
+/// System property confirmed in Suwayomi-Server v2.3.2238 bytecode.
 const String kSuwayomiRootDirProperty =
     'suwayomi.tachidesk.config.server.rootDir';
 
 /// Starts, monitors and stops a loopback-only Suwayomi-Server process.
 ///
-/// Hard isolation rules:
-/// - Never read/write/patch `%LOCALAPPDATA%\\Tachidesk`.
-/// - JVM `-D` system properties must be **before** `-jar`.
-/// - Data root is [SuwayomiPaths.dataDir] only.
-/// - Start fails if the real data root is not the managed directory.
+/// Phase 2D ownership rules:
+/// - Never adopt a foreign process on the port.
+/// - Only kill PIDs proven to match Yomu identity (jar + rootDir).
+/// - Persist identity (PID, runId, java, jar, rootDir, port).
+/// - Serialize start/stop/restart/shutdown.
 class SuwayomiProcessManager {
   SuwayomiProcessManager({
     required this.paths,
@@ -38,8 +36,12 @@ class SuwayomiProcessManager {
     this.javaResolver = const JavaResolver(),
     this.host = '127.0.0.1',
     this.port = kYomuSuwayomiPort,
+    ProcessOwnershipProbe? ownershipProbe,
     http.Client? httpClient,
-  }) : _http = httpClient ?? http.Client();
+  })  : _http = httpClient ?? http.Client(),
+        _ownership = ProcessOwnership(
+          ownershipProbe ?? const PlatformProcessOwnershipProbe(),
+        );
 
   final SuwayomiPaths paths;
   final VendorManifest manifest;
@@ -47,21 +49,30 @@ class SuwayomiProcessManager {
   final String host;
   final int port;
   final http.Client _http;
+  final ProcessOwnership _ownership;
 
   Process? _process;
+  ManagedInstanceIdentity? _identity;
   IOSink? _logSink;
   final StringBuffer _combinedLog = StringBuffer();
   SuwayomiStatus _status =
       const SuwayomiStatus(state: SuwayomiProcessState.stopped);
   final _controller = StreamController<SuwayomiStatus>.broadcast();
 
+  /// Serializes lifecycle ops.
+  Future<void> _chain = Future<void>.value();
+  bool _shuttingDown = false;
+
   SuwayomiStatus get status => _status;
   Stream<SuwayomiStatus> get statusStream => _controller.stream;
+  ManagedInstanceIdentity? get identity => _identity;
 
   String get baseUrl => 'http://$host:$port';
 
-  /// Absolute managed data root (Suwayomi `server.rootDir`).
   String get managedRootDir => paths.dataDir.absolute.path;
+
+  File get identityFile =>
+      File(p.join(paths.root.path, 'runtime', 'suwayomi-instance.json'));
 
   SuwayomiClient createClient() =>
       SuwayomiClient(baseUrl: baseUrl, httpClient: _http);
@@ -71,7 +82,18 @@ class SuwayomiProcessManager {
     if (!_controller.isClosed) _controller.add(next);
   }
 
-  /// Ensures JAR is present and SHA-256 matches the pinned manifest.
+  Future<T> _serialized<T>(Future<T> Function() op) {
+    final c = Completer<T>();
+    _chain = _chain.then((_) async {
+      try {
+        c.complete(await op());
+      } catch (e, st) {
+        c.completeError(e, st);
+      }
+    });
+    return c.future;
+  }
+
   Future<Result<File>> ensureJar({bool downloadIfMissing = true}) async {
     await paths.ensureLayout();
     final jar = paths.jarFile(manifest.suwayomi.jarFile);
@@ -167,9 +189,6 @@ class SuwayomiProcessManager {
     return digest.toString() == expectedHex.toLowerCase();
   }
 
-  /// Writes seed config **only** under the managed Yomu data dir.
-  ///
-  /// Never touches `%LOCALAPPDATA%\Tachidesk`.
   Future<void> writeManagedConfig() async {
     await paths.ensureLayout();
     final conf = '''
@@ -183,14 +202,11 @@ server.webUIInterface = BROWSER
 server.debugLogsEnabled = false
 server.authMode = NONE
 ''';
-    final managedConf =
-        File(p.join(paths.dataDir.path, 'server.conf'));
+    final managedConf = File(p.join(paths.dataDir.path, 'server.conf'));
     await managedConf.writeAsString(conf);
-    // Mirror for Yomu diagnostics only (still outside Tachidesk AppData).
     await paths.serverConf.writeAsString(conf);
   }
 
-  /// JVM args: all `-D` system properties **before** `-jar`.
   List<String> buildJavaArgs(File jar) {
     final root = _normalizedRootPath(managedRootDir);
     return [
@@ -205,32 +221,40 @@ server.authMode = NONE
   }
 
   String _normalizedRootPath(String path) {
-    // Suwayomi/Typesafe accept forward slashes on Windows.
     return path.replaceAll(r'\', '/');
   }
 
   Future<Result<SuwayomiStatus>> start({
     Duration readyTimeout = const Duration(minutes: 3),
+  }) {
+    return _serialized(() => _startBody(readyTimeout: readyTimeout));
+  }
+
+  Future<Result<SuwayomiStatus>> _startBody({
+    required Duration readyTimeout,
   }) async {
-    if (_process != null) {
+    if (_shuttingDown) {
+      const msg = 'Shutdown em andamento — start recusado.';
+      _emit(const SuwayomiStatus(
+        state: SuwayomiProcessState.crashed,
+        message: msg,
+      ));
+      return const Err(msg);
+    }
+
+    if (_process != null && _status.state == SuwayomiProcessState.running) {
       return Ok(_status);
     }
 
-    // Orphan from a previous app session (crash / flutter hot-restart): if the
-    // managed loopback API is already healthy, attach instead of spawning a
-    // second JVM (Suwayomi exits with MutexCheckFailedTachideskRunning / code 1).
-    final alreadyUp = await createClient().isHealthy();
-    if (alreadyUp) {
-      final ok = SuwayomiStatus(
-        state: SuwayomiProcessState.running,
-        message:
-            'Suwayomi já estava em $baseUrl (reaproveitado; sem novo processo).',
+    // Phase 2D: never blind-adopt health-only.
+    final portIssue = await _resolvePortOccupantBeforeStart();
+    if (portIssue != null) {
+      _emit(SuwayomiStatus(
+        state: SuwayomiProcessState.crashed,
+        message: portIssue,
         baseUrl: baseUrl,
-        version: manifest.suwayomi.displayVersion,
-        lastHealthCheck: DateTime.now(),
-      );
-      _emit(ok);
-      return Ok(ok);
+      ));
+      return Err(portIssue);
     }
 
     _combinedLog.clear();
@@ -276,9 +300,10 @@ server.authMode = NONE
 
     _logSink = paths.processLog.openWrite(mode: FileMode.append);
     final args = buildJavaArgs(jar);
+    final runId = _newRunId();
     _logSink!.writeln(
       '\n--- start ${DateTime.now().toIso8601String()} '
-      'java=${java.javaExecutable} ---\n'
+      'runId=$runId java=${java.javaExecutable} ---\n'
       'rootDir=$managedRootDir\n'
       'args=${args.join(' ')}',
     );
@@ -297,6 +322,18 @@ server.authMode = NONE
       return Err(msg, e);
     }
 
+    final pid = _process!.pid;
+    _identity = ManagedInstanceIdentity(
+      runId: runId,
+      pid: pid,
+      startedAt: DateTime.now(),
+      javaExecutable: java.javaExecutable,
+      jarPath: jar.absolute.path,
+      rootDir: managedRootDir,
+      port: port,
+    );
+    await _identity!.save(identityFile);
+
     void onLog(String data) {
       _combinedLog.write(data);
       _logSink?.write(data);
@@ -304,10 +341,11 @@ server.authMode = NONE
 
     _process!.stdout.transform(utf8.decoder).listen(onLog);
     _process!.stderr.transform(utf8.decoder).listen(onLog);
-    unawaited(_process!.exitCode.then((code) {
+    unawaited(_process!.exitCode.then((code) async {
       _logSink?.writeln('--- exit code $code ---');
       if (_status.state != SuwayomiProcessState.stopping &&
-          _status.state != SuwayomiProcessState.stopped) {
+          _status.state != SuwayomiProcessState.stopped &&
+          !_shuttingDown) {
         final hint = _crashHintFromLog(_combinedLog.toString(), code);
         _emit(
           SuwayomiStatus(
@@ -325,14 +363,14 @@ server.authMode = NONE
         state: SuwayomiProcessState.starting,
         message: 'Aguardando API Suwayomi em $baseUrl…',
         baseUrl: baseUrl,
-        pid: _process!.pid,
+        pid: pid,
         version: manifest.suwayomi.displayVersion,
       ),
     );
 
     final ready = await _waitUntilHealthy(readyTimeout);
     if (!ready) {
-      await stop();
+      await _stopBody(expectPortFree: true);
       final msg =
           'Timeout aguardando health do Suwayomi em $baseUrl. '
           'Verifique Java, porta $port e ${paths.processLog.path}';
@@ -342,7 +380,7 @@ server.authMode = NONE
 
     final isolation = await verifyManagedDataRoot();
     if (!isolation.isOk) {
-      await stop();
+      await _stopBody(expectPortFree: true);
       final msg = isolation.message ??
           'Isolamento falhou: data root não é o diretório gerenciado pelo Yomu.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
@@ -354,7 +392,7 @@ server.authMode = NONE
       message:
           'Suwayomi pronto (isolado em ${paths.dataDir.path}, loopback $host:$port)',
       baseUrl: baseUrl,
-      pid: _process?.pid,
+      pid: pid,
       version: manifest.suwayomi.displayVersion,
       lastHealthCheck: DateTime.now(),
     );
@@ -362,21 +400,71 @@ server.authMode = NONE
     return Ok(ok);
   }
 
-  /// Verifies real data root is the Yomu managed directory.
-  ///
-  /// Uses log line `Data Root directory is set to:` and on-disk artifacts.
+  /// Returns error message if port cannot be used; null if free (or Yomu orphan cleared).
+  Future<String?> _resolvePortOccupantBeforeStart() async {
+    final healthy = await createClient().isHealthy();
+    final listenerPid = await _ownership.probe.findListenerPid(port);
+    if (!healthy && listenerPid == null) {
+      // Clear stale identity if dead.
+      final stored = await ManagedInstanceIdentity.load(identityFile);
+      if (stored != null) {
+        final check = await _ownership.verifyIdentity(stored);
+        if (check.verdict == OwnershipVerdict.dead) {
+          await ManagedInstanceIdentity.clear(identityFile);
+          _identity = null;
+        }
+      }
+      return null;
+    }
+
+    // Something is up — only act if we can prove Yomu ownership.
+    final stored = await ManagedInstanceIdentity.load(identityFile);
+    if (stored != null) {
+      final check = await _ownership.verifyIdentity(stored);
+      if (check.verdict == OwnershipVerdict.yomuOwned) {
+        _logSink?.writeln(
+          'Yomu orphan PID ${stored.pid} validated — stopping before restart',
+        );
+        final killed =
+            await _ownership.probe.killOwnedPid(stored.pid, force: true);
+        if (!killed) {
+          return 'Órfão Yomu PID ${stored.pid} validado, mas falhou ao encerrar. '
+              'Encerre manualmente e tente de novo.';
+        }
+        final freed = await _waitPortAndHealthDown(
+          const Duration(seconds: 20),
+        );
+        await ManagedInstanceIdentity.clear(identityFile);
+        _identity = null;
+        if (!freed) {
+          return 'Órfão Yomu encerrado, mas a porta $port ainda responde. '
+              'Aguarde e tente de novo.';
+        }
+        return null;
+      }
+      if (check.verdict == OwnershipVerdict.dead && listenerPid == null && !healthy) {
+        await ManagedInstanceIdentity.clear(identityFile);
+        return null;
+      }
+    }
+
+    // Foreign / unverifiable: do NOT kill, do NOT adopt.
+    final who = listenerPid != null ? 'PID $listenerPid' : 'processo desconhecido';
+    return 'Porta $port já em uso ($who) e não foi possível provar ownership Yomu. '
+        'Não será adotado nem encerrado. Feche a outra instância de Suwayomi '
+        'ou libere a porta, depois tente de novo.';
+  }
+
   Future<({bool isOk, String? message, String? observedRoot})>
       verifyManagedDataRoot() async {
     final expected = _normalizedRootPath(managedRootDir).toLowerCase();
     final expectedNative = managedRootDir.toLowerCase();
 
-    // Give the log a moment to flush the data-root line if it arrived late.
     String? fromLog = _parseDataRootFromLog(_combinedLog.toString());
     if (fromLog == null && paths.processLog.existsSync()) {
       fromLog = _parseDataRootFromLog(await paths.processLog.readAsString());
     }
 
-    // On-disk proof: Suwayomi creates server.conf / database under rootDir.
     final managedConf = File(p.join(paths.dataDir.path, 'server.conf'));
     final hasManagedArtifacts = managedConf.existsSync() ||
         Directory(paths.dataDir.path)
@@ -398,19 +486,9 @@ server.authMode = NONE
           observedRoot: fromLog,
         );
       }
-      if (!hasManagedArtifacts) {
-        // Log ok but empty dir is suspicious; still accept if log matches.
-        return (
-          isOk: true,
-          message: null,
-          observedRoot: fromLog,
-        );
-      }
       return (isOk: true, message: null, observedRoot: fromLog);
     }
 
-    // Fallback without log line: require managed artifacts AND no exclusive
-    // reliance on global Tachidesk (we still require managed conf/db).
     if (!hasManagedArtifacts) {
       return (
         isOk: false,
@@ -450,7 +528,7 @@ server.authMode = NONE
     if (log.contains('MutexCheckFailedTachideskRunning') ||
         log.contains('Another instance of Suwayomi-Server is running')) {
       return 'Porta $port já em uso por outro Suwayomi. '
-          'Feche a instância antiga ou reinicie o PC; depois tente de novo. '
+          'Ownership não verificado — encerre a instância estrangeira manualmente. '
           '(code $code)';
     }
     return 'Suwayomi encerrou inesperadamente (code $code). '
@@ -461,7 +539,7 @@ server.authMode = NONE
     final client = createClient();
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      if (_process == null) return false;
+      if (_process == null && _identity == null) return false;
       final healthy = await client.isHealthy();
       if (healthy) return true;
       await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -469,30 +547,80 @@ server.authMode = NONE
     return false;
   }
 
-  Future<void> stop() async {
-    final proc = _process;
-    if (proc == null) {
-      _emit(const SuwayomiStatus(state: SuwayomiProcessState.stopped));
-      return;
+  Future<bool> _waitPortAndHealthDown(Duration timeout) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final healthy = await createClient().isHealthy();
+      final listener = await _ownership.probe.findListenerPid(port);
+      if (!healthy && listener == null) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
     }
+    final healthy = await createClient().isHealthy();
+    final listener = await _ownership.probe.findListenerPid(port);
+    return !healthy && listener == null;
+  }
+
+  Future<void> stop() => _serialized(() => _stopBody(expectPortFree: true));
+
+  Future<void> _stopBody({required bool expectPortFree}) async {
     _emit(
       _status.copyWith(
         state: SuwayomiProcessState.stopping,
         message: 'Parando Suwayomi…',
       ),
     );
-    proc.kill(ProcessSignal.sigterm);
-    try {
-      await proc.exitCode.timeout(const Duration(seconds: 8));
-    } on TimeoutException {
-      proc.kill(ProcessSignal.sigkill);
+
+    final proc = _process;
+    if (proc != null) {
+      proc.kill(ProcessSignal.sigterm);
       try {
-        await proc.exitCode.timeout(const Duration(seconds: 3));
-      } catch (_) {}
+        await proc.exitCode.timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        proc.kill(ProcessSignal.sigkill);
+        try {
+          await proc.exitCode.timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      }
+      _process = null;
+    } else {
+      // No Process handle — only kill if identity is Yomu-owned.
+      final id = _identity ?? await ManagedInstanceIdentity.load(identityFile);
+      if (id != null) {
+        final check = await _ownership.verifyIdentity(id);
+        if (check.verdict == OwnershipVerdict.yomuOwned) {
+          await _ownership.probe.killOwnedPid(id.pid, force: true);
+        } else if (check.verdict == OwnershipVerdict.foreignOrUnverifiable) {
+          final msg = check.message ??
+              'Stop recusado: processo na porta não é ownership Yomu verificável.';
+          _emit(SuwayomiStatus(
+            state: SuwayomiProcessState.unhealthy,
+            message: msg,
+            baseUrl: baseUrl,
+          ));
+          return;
+        }
+      }
     }
-    _process = null;
+
+    final down = await _waitPortAndHealthDown(const Duration(seconds: 15));
     await _logSink?.close();
     _logSink = null;
+    await ManagedInstanceIdentity.clear(identityFile);
+    _identity = null;
+
+    if (!down && expectPortFree) {
+      _emit(
+        SuwayomiStatus(
+          state: SuwayomiProcessState.unhealthy,
+          message:
+              'Stop incompleto: a porta $port ou o health ainda respondem. '
+              'Estado não marcado como stopped.',
+          baseUrl: baseUrl,
+        ),
+      );
+      return;
+    }
+
     _emit(
       const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
@@ -501,9 +629,14 @@ server.authMode = NONE
     );
   }
 
-  Future<Result<SuwayomiStatus>> restart() async {
-    await stop();
-    return start();
+  Future<Result<SuwayomiStatus>> restart() {
+    return _serialized(() async {
+      await _stopBody(expectPortFree: true);
+      if (_status.state != SuwayomiProcessState.stopped) {
+        return Err(_status.message ?? 'Restart abortado: stop incompleto');
+      }
+      return _startBody(readyTimeout: const Duration(minutes: 3));
+    });
   }
 
   Future<bool> checkHealth() async {
@@ -516,23 +649,33 @@ server.authMode = NONE
           lastHealthCheck: DateTime.now(),
         ),
       );
-    } else if (healthy && _status.state != SuwayomiProcessState.running) {
-      _emit(
-        _status.copyWith(
-          state: SuwayomiProcessState.running,
-          message: 'Suwayomi pronto',
-          lastHealthCheck: DateTime.now(),
-        ),
-      );
-    } else if (healthy) {
+    } else if (healthy && _status.state == SuwayomiProcessState.running) {
       _emit(_status.copyWith(lastHealthCheck: DateTime.now()));
     }
+    // Do not flip foreign health into "running" without our process.
     return healthy;
   }
 
+  /// Coordinated shutdown for app close — await this instead of dispose alone.
+  Future<void> shutdown() {
+    return _serialized(() async {
+      _shuttingDown = true;
+      await _stopBody(expectPortFree: true);
+    });
+  }
+
+  /// Fallback only — prefer [shutdown] from UI.
   Future<void> dispose() async {
-    await stop();
-    await _controller.close();
+    try {
+      await shutdown();
+    } catch (_) {}
+    if (!_controller.isClosed) await _controller.close();
     _http.close();
+  }
+
+  String _newRunId() {
+    final r = Random.secure();
+    final n = List.generate(8, (_) => r.nextInt(256));
+    return n.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 }

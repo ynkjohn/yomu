@@ -37,6 +37,15 @@ dart test
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
+Push-Location packages/yomu_ai
+dart test
+if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+Pop-Location
+
+Write-Host '== PWA preload logic =='
+node apps/yomu_mobile_pwa/test_preload_logic.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host '== desktop tests =='
 Push-Location apps/yomu_desktop
 flutter test

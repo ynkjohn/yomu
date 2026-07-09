@@ -10,15 +10,15 @@ import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
 import 'device_auth.dart';
+import 'media_ticket_store.dart';
+import 'safe_http_fetch.dart';
 
 typedef SuwayomiStatusProvider = SuwayomiStatus Function();
 typedef SuwayomiApiProvider = SuwayomiApi? Function();
 
 /// Yomu local HTTP server: PWA static + authenticated API proxy to Suwayomi.
 ///
-/// - Default bind: `127.0.0.1` (loopback).
-/// - LAN bind (`0.0.0.0`) only when [host] is set explicitly by the desktop app.
-/// - Suwayomi is never bound to LAN; API calls go to loopback Suwayomi via [apiProvider].
+/// Phase 2D: media tickets (no open URL proxy), sanitized LAN health, CORS allowlist.
 class YomuServer {
   YomuServer({
     required this.suwayomiStatus,
@@ -28,7 +28,13 @@ class YomuServer {
     this.host = '127.0.0.1',
     this.port = 8787,
     this.allowLanCors = false,
-  });
+    this.allowedOrigins = const [],
+    MediaTicketStore? mediaTickets,
+    SafeHttpFetch? safeFetch,
+    http.Client? httpClient,
+  })  : mediaTickets = mediaTickets ?? MediaTicketStore(),
+        safeFetch = safeFetch ?? SafeHttpFetch(),
+        _http = httpClient ?? http.Client();
 
   final SuwayomiStatusProvider suwayomiStatus;
   final DeviceAuthStore auth;
@@ -37,12 +43,17 @@ class YomuServer {
   final String host;
   final int port;
 
-  /// When LAN is enabled, allow browser Origin from phone (same network).
-  /// Still requires Bearer token. Not a wildcard for unauthenticated routes only.
+  /// When true, CORS may reflect an Origin that is in [allowedOrigins].
   final bool allowLanCors;
 
+  /// Explicit Origins allowed for LAN CORS (e.g. `http://192.168.0.10:8787`).
+  final List<String> allowedOrigins;
+
+  final MediaTicketStore mediaTickets;
+  final SafeHttpFetch safeFetch;
+  final http.Client _http;
+
   HttpServer? _server;
-  final _http = http.Client();
 
   int? get boundPort => _server?.port;
   String? get boundAddress => _server?.address.address;
@@ -57,42 +68,49 @@ class YomuServer {
   Handler buildHandler() {
     final router = Router();
 
-    // --- Public ---
+    // --- Public (sanitized on LAN) ---
     router.get('/health', (Request request) {
-      return _json({
-        'yomu': 'ok',
-        'bind': {
-          'host': host,
-          'port': boundPort ?? port,
-          'loopbackOnly': isLoopbackOnly,
-        },
-        'suwayomi': suwayomiStatus().toJson(),
-        'auth': {
-          'sessions': auth.sessions.length,
-          'pairingActive': auth.activePairing != null,
-        },
-        'timestamp': DateTime.now().toIso8601String(),
-      });
+      return _json(_healthPayload());
     });
 
     router.get('/api/v1/health', (Request request) async {
-      return router.call(Request('GET', Uri.parse('http://local/health')));
+      return _json(_healthPayload());
     });
 
-    // Pairing claim is public (phone enters code). Start is desktop-only via Flutter.
     router.post('/api/v1/pairing/claim', (Request request) async {
       final body = await _readJson(request);
       final code = '${body['code'] ?? ''}';
       final name = '${body['deviceName'] ?? 'iPhone'}';
-      final session = await auth.claimPairing(code: code, deviceName: name);
-      if (session == null) {
-        return _json({'error': 'invalid_or_expired_code'}, status: 401);
+      final clientKey = _clientKey(request);
+      final outcome = await auth.claimPairing(
+        code: code,
+        deviceName: name,
+        clientKey: clientKey,
+      );
+      switch (outcome.result) {
+        case PairingClaimResult.rateLimited:
+          return Response(
+            429,
+            body: jsonEncode({
+              'error': 'rate_limited',
+              'retryAfter': outcome.retryAfterSeconds,
+            }),
+            headers: {
+              'content-type': 'application/json; charset=utf-8',
+              if (outcome.retryAfterSeconds != null)
+                'retry-after': '${outcome.retryAfterSeconds}',
+            },
+          );
+        case PairingClaimResult.invalidOrExpired:
+          return _json({'error': 'invalid_or_expired_code'}, status: 401);
+        case PairingClaimResult.success:
+          final session = outcome.session!;
+          return _json({
+            'token': session.token,
+            'deviceName': session.deviceName,
+            'createdAt': session.createdAt.toIso8601String(),
+          });
       }
-      return _json({
-        'token': session.token,
-        'deviceName': session.deviceName,
-        'createdAt': session.createdAt.toIso8601String(),
-      });
     });
 
     // --- Authenticated API ---
@@ -112,7 +130,7 @@ class YomuServer {
               (m) => {
                 'id': m.id,
                 'title': m.title,
-                'thumbnailUrl': _publicMediaUrl(m.thumbnailUrl),
+                'thumbnailUrl': _ticketMediaUrl(session.token, m.thumbnailUrl),
                 'inLibrary': m.inLibrary,
                 'unreadCount': m.unreadCount,
                 'lastReadChapter': m.lastReadChapter == null
@@ -139,7 +157,7 @@ class YomuServer {
         'author': m.author,
         'artist': m.artist,
         'status': m.status,
-        'thumbnailUrl': _publicMediaUrl(m.thumbnailUrl),
+        'thumbnailUrl': _ticketMediaUrl(session.token, m.thumbnailUrl),
         'sourceId': m.sourceId,
         'inLibrary': m.inLibrary,
       });
@@ -187,8 +205,6 @@ class YomuServer {
         final ch = await api.getChapter(id);
         final pages = await api.fetchChapterPages(id);
         final mangaId = ch?.mangaId;
-        // Suwayomi page URLs use mangaId + chapter *index* (not DB chapter id),
-        // e.g. /api/v1/manga/33/chapter/1/page/0. Always proxy that exact path.
         return _json({
           'chapterId': pages.chapterId,
           'chapterName': pages.chapterName,
@@ -201,7 +217,7 @@ class YomuServer {
               .map(
                 (e) => {
                   'index': e.key,
-                  'url': _mediaProxyUrl(e.value),
+                  'url': _issueTicketUrl(session.token, e.value),
                 },
               )
               .toList(),
@@ -209,18 +225,26 @@ class YomuServer {
       }),
     );
 
-    // Authenticated media proxy — never expose Suwayomi port to the phone.
-    // Query `u` = Suwayomi-relative path (/api/v1/...) or absolute http(s) URL.
+    // Ticket-only media proxy — never accept raw `u=` absolute URLs from client.
     router.get('/api/v1/media', _auth((req, session) async {
-      final raw = req.url.queryParameters['u'];
-      if (raw == null || raw.isEmpty) {
-        return _json({'error': 'missing_u'}, status: 400);
+      // Reject legacy open-proxy param first (SSRF surface).
+      if (req.url.queryParameters.containsKey('u')) {
+        return _json({'error': 'raw_url_forbidden'}, status: 400);
       }
-      return _proxyMedia(raw);
+      final ticketId = req.url.queryParameters['t'];
+      if (ticketId == null || ticketId.isEmpty) {
+        return _json({'error': 'missing_ticket'}, status: 400);
+      }
+      final ticket = mediaTickets.resolve(
+        ticketId: ticketId,
+        sessionToken: session.token,
+      );
+      if (ticket == null) {
+        return _json({'error': 'invalid_or_expired_ticket'}, status: 404);
+      }
+      return _proxyMediaTarget(ticket.target);
     }));
 
-    // Back-compat image route: resolve real Suwayomi path via page list
-    // (must NOT rebuild path with chapter DB id — REST uses chapter index).
     router.get(
       '/api/v1/chapters/<id|[0-9]+>/pages/<index|[0-9]+>/image',
       _auth((req, session) async {
@@ -231,11 +255,10 @@ class YomuServer {
         if (index < 0 || index >= pages.pages.length) {
           return _json({'error': 'page_out_of_range'}, status: 404);
         }
-        return _proxyMedia(pages.pages[index]);
+        return _proxyMediaTarget(pages.pages[index]);
       }),
     );
 
-    // Thumbnail proxy
     router.get('/api/v1/manga/<id|[0-9]+>/thumbnail', _auth((req, session) async {
       final id = int.parse(req.params['id']!);
       final api = _requireApi();
@@ -292,7 +315,7 @@ class YomuServer {
               (m) => {
                 'id': m.id,
                 'title': m.title,
-                'thumbnailUrl': _publicMediaUrl(m.thumbnailUrl),
+                'thumbnailUrl': _ticketMediaUrl(session.token, m.thumbnailUrl),
                 'inLibrary': m.inLibrary,
               },
             )
@@ -311,11 +334,52 @@ class YomuServer {
       handler = Cascade().add(router.call).add(staticHandler).handler;
     }
 
-    var pipeline = const Pipeline().addMiddleware(logRequests());
-    if (allowLanCors) {
-      pipeline = pipeline.addMiddleware(_lanCors());
-    }
+    // Never log request bodies (may contain pairing codes) — use method/path only.
+    var pipeline = const Pipeline().addMiddleware(_safeLogRequests());
+    pipeline = pipeline.addMiddleware(_corsMiddleware());
     return pipeline.addHandler(handler);
+  }
+
+  Map<String, Object?> _healthPayload() {
+    if (!isLoopbackOnly) {
+      // LAN: minimal disclosure.
+      final s = suwayomiStatus();
+      return {
+        'yomu': 'ok',
+        'suwayomiReady': s.isReady,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+    }
+    // Loopback: fuller diagnostics for desktop tooling.
+    return {
+      'yomu': 'ok',
+      'bind': {
+        'host': host,
+        'port': boundPort ?? port,
+        'loopbackOnly': true,
+      },
+      'suwayomi': {
+        'state': suwayomiStatus().state.name,
+        'isReady': suwayomiStatus().isReady,
+      },
+      'auth': {
+        'sessions': auth.sessions.length,
+        'pairingActive': auth.activePairing != null,
+      },
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+  }
+
+  String _clientKey(Request request) {
+    final xff = request.headers['x-forwarded-for'];
+    if (xff != null && xff.isNotEmpty) {
+      return xff.split(',').first.trim();
+    }
+    final conn = request.context['shelf.io.connection_info'];
+    if (conn is HttpConnectionInfo) {
+      return conn.remoteAddress.address;
+    }
+    return 'unknown';
   }
 
   Handler _auth(
@@ -347,41 +411,43 @@ class YomuServer {
     return api;
   }
 
-  String? _publicMediaUrl(String? path) {
+  String? _ticketMediaUrl(String sessionToken, String? path) {
     if (path == null || path.isEmpty) return null;
-    // Rewrite Suwayomi relative thumbs to authenticated Yomu routes when possible.
     final m = RegExp(r'/api/v1/manga/(\d+)/thumbnail').firstMatch(path);
     if (m != null) {
       return '/api/v1/manga/${m.group(1)}/thumbnail';
     }
-    if (path.startsWith('/api/v1/')) {
-      return _mediaProxyUrl(path);
-    }
-    if (path.startsWith('/')) return path;
-    return path;
+    return _issueTicketUrl(sessionToken, path);
   }
 
-  /// Public (authenticated) URL that streams a Suwayomi path/URL through Core.
-  String _mediaProxyUrl(String suwayomiPathOrUrl) {
-    return '/api/v1/media?u=${Uri.encodeQueryComponent(suwayomiPathOrUrl)}';
+  String _issueTicketUrl(String sessionToken, String target) {
+    final id = mediaTickets.issue(
+      sessionToken: sessionToken,
+      target: target,
+    );
+    return '/api/v1/media?t=$id';
   }
 
-  Future<Response> _proxyMedia(String pathOrUrl) async {
+  Future<Response> _proxyMediaTarget(String pathOrUrl) async {
     final api = _api;
     if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
-      final res = await _http
-          .get(Uri.parse(pathOrUrl))
-          .timeout(const Duration(seconds: 60));
-      return Response(
-        res.statusCode,
-        body: res.bodyBytes,
-        headers: {
-          'content-type': res.headers['content-type'] ?? 'image/jpeg',
-          'cache-control': 'private, max-age=3600',
-        },
-      );
+      try {
+        final r = await safeFetch.get(Uri.parse(pathOrUrl));
+        return Response(
+          r.statusCode,
+          body: r.body,
+          headers: {
+            'content-type': r.contentType,
+            'cache-control': 'private, max-age=3600',
+          },
+        );
+      } catch (e) {
+        return _json(
+          {'error': 'external_fetch_blocked', 'message': e.toString()},
+          status: 502,
+        );
+      }
     }
-    // Only allow Suwayomi API-relative paths (no open proxy).
     final cleaned = pathOrUrl.startsWith('/') ? pathOrUrl : '/$pathOrUrl';
     if (!cleaned.startsWith('/api/v1/') || cleaned.contains('..')) {
       return _json({'error': 'invalid_media_path'}, status: 400);
@@ -397,8 +463,13 @@ class YomuServer {
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
     final p = path.startsWith('/') ? path : '/$path';
+    // Loopback Suwayomi only — not an open proxy.
+    final uri = Uri.parse('$base$p');
+    if (!_isLoopbackUri(uri)) {
+      return _json({'error': 'upstream_not_loopback'}, status: 500);
+    }
     final res =
-        await _http.get(Uri.parse('$base$p')).timeout(const Duration(seconds: 60));
+        await _http.get(uri).timeout(const Duration(seconds: 60));
     return Response(
       res.statusCode,
       body: res.bodyBytes,
@@ -407,6 +478,11 @@ class YomuServer {
         'cache-control': 'private, max-age=3600',
       },
     );
+  }
+
+  bool _isLoopbackUri(Uri uri) {
+    final h = uri.host.toLowerCase();
+    return h == '127.0.0.1' || h == 'localhost' || h == '::1';
   }
 
   Future<Map<String, dynamic>> _readJson(Request request) async {
@@ -426,23 +502,51 @@ class YomuServer {
     );
   }
 
-  /// CORS for LAN PWA served from same host is mostly unnecessary, but Safari
-  /// edge cases may need it. Reflect request origin when present; never `*`.
-  Middleware _lanCors() {
+  Middleware _safeLogRequests() {
     return (inner) {
       return (request) async {
+        final watch = Stopwatch()..start();
+        final response = await inner(request);
+        watch.stop();
+        // Path only — never query (tickets) or body (codes).
+        // ignore: avoid_print
+        print(
+          '${request.method} ${request.requestedUri.path} '
+          '[${response.statusCode}] ${watch.elapsed}',
+        );
+        return response;
+      };
+    };
+  }
+
+  Middleware _corsMiddleware() {
+    return (inner) {
+      return (request) async {
+        if (!allowLanCors) {
+          // Same-origin default: no CORS headers.
+          if (request.method == 'OPTIONS') {
+            return Response(403);
+          }
+          return inner(request);
+        }
         final origin = request.headers['origin'];
+        final allowed = origin != null &&
+            origin.isNotEmpty &&
+            allowedOrigins.contains(origin);
         final headers = <String, String>{
-          if (origin != null && origin.isNotEmpty)
-            'Access-Control-Allow-Origin': origin,
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-          'Vary': 'Origin',
+          if (allowed) 'Access-Control-Allow-Origin': origin!,
+          if (allowed)
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+          if (allowed)
+            'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+          if (allowed) 'Vary': 'Origin',
         };
         if (request.method == 'OPTIONS') {
+          if (!allowed) return Response(403);
           return Response.ok('', headers: headers);
         }
         final response = await inner(request);
+        if (!allowed) return response;
         return response.change(headers: {...response.headers, ...headers});
       };
     };

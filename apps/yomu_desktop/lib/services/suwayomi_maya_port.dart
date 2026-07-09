@@ -40,5 +40,7 @@ class SuwayomiMayaPort implements MayaLibraryPort {
   @override
   Future<void> enqueueChapterDownload(int chapterId) async {
     await _api.enqueueChapterDownloads([chapterId]);
+    // Match manga_detail_screen: queue alone does not start the worker.
+    await _api.startDownloader();
   }
 }
