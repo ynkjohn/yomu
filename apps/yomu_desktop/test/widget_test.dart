@@ -26,6 +26,14 @@ void main() {
           onStop: () {},
           onRestart: () {},
           onHealthCheck: () {},
+          lanEnabled: false,
+          onToggleLan: (_) {},
+          pairingCode: null,
+          pairingExpiresAt: null,
+          onStartPairing: () {},
+          onCancelPairing: () {},
+          lanAddresses: const [],
+          sessionCount: 0,
         ),
       ),
     );
@@ -35,6 +43,7 @@ void main() {
     expect(find.textContaining('127.0.0.1:14567'), findsWidgets);
     expect(find.text('Iniciar'), findsOneWidget);
     expect(find.textContaining('Yomu HTTP'), findsOneWidget);
+    expect(find.textContaining('Permitir acesso na LAN'), findsOneWidget);
   });
 
   testWidgets('ServerScreen shows running motor state', (tester) async {
@@ -59,6 +68,14 @@ void main() {
           onStop: () {},
           onRestart: () {},
           onHealthCheck: () {},
+          lanEnabled: true,
+          onToggleLan: (_) {},
+          pairingCode: '123456',
+          pairingExpiresAt: DateTime.now().add(const Duration(minutes: 5)),
+          onStartPairing: () {},
+          onCancelPairing: () {},
+          lanAddresses: const ['192.168.1.10'],
+          sessionCount: 1,
         ),
       ),
     );
@@ -67,6 +84,8 @@ void main() {
     expect(find.text('running'), findsOneWidget);
     expect(find.textContaining('Suwayomi pronto'), findsOneWidget);
     expect(find.text('Parar'), findsOneWidget);
+    expect(find.textContaining('Código: 123456'), findsOneWidget);
+    expect(find.textContaining('http://192.168.1.10:8787/'), findsOneWidget);
   });
 
   testWidgets('ExtensionsScreen empty when motor not ready', (tester) async {

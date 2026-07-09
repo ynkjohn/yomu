@@ -78,10 +78,17 @@ class _HomeShellState extends State<HomeShell> {
   SuwayomiProcessManager? _manager;
   SuwayomiApi? _api;
   YomuServer? _yomuServer;
+  DeviceAuthStore? _auth;
+  Directory? _pwaDir;
   String? _bootstrapError;
   bool _bootstrapping = true;
   bool _busyEngine = false;
+  bool _busyHttp = false;
+  bool _lanEnabled = false;
   String? _aboutVersion;
+  String? _pairingCode;
+  DateTime? _pairingExpiresAt;
+  List<String> _lanAddresses = const [];
   StreamSubscription<SuwayomiStatus>? _statusSub;
   SuwayomiStatus _suwayomiStatus =
       const SuwayomiStatus(state: SuwayomiProcessState.stopped);
@@ -101,8 +108,14 @@ class _HomeShellState extends State<HomeShell> {
     try {
       final support = await getApplicationSupportDirectory();
       final root = Directory(p.join(support.path, 'yomu'));
+      await root.create(recursive: true);
       final paths = SuwayomiPaths(root);
       await paths.ensureLayout();
+
+      final auth = DeviceAuthStore(
+        persistFile: File(p.join(root.path, 'device_sessions.json')),
+      );
+      await auth.load();
 
       final manifestJson =
           await rootBundle.loadString('assets/vendor/manifest.json');
@@ -118,13 +131,11 @@ class _HomeShellState extends State<HomeShell> {
       );
 
       final pwaDir = await _resolvePwaDir();
-      // Phase 2B: loopback only. LAN/PWA needs future explicit opt-in + auth.
-      final server = YomuServer(
-        host: '127.0.0.1',
-        port: 8787,
+      final server = _buildYomuServer(
+        manager: manager,
+        auth: auth,
         pwaDir: pwaDir,
-        allowOpenCors: false,
-        suwayomiStatus: () => manager.status,
+        lanEnabled: false,
       );
       await server.start();
 
@@ -143,8 +154,11 @@ class _HomeShellState extends State<HomeShell> {
       setState(() {
         _manager = manager;
         _api = SuwayomiApi(manager.createClient());
+        _auth = auth;
+        _pwaDir = pwaDir;
         _yomuServer = server;
         _suwayomiStatus = manager.status;
+        _lanEnabled = false;
         _bootstrapping = false;
       });
     } catch (e) {
@@ -154,6 +168,113 @@ class _HomeShellState extends State<HomeShell> {
         _bootstrapping = false;
       });
     }
+  }
+
+  YomuServer _buildYomuServer({
+    required SuwayomiProcessManager manager,
+    required DeviceAuthStore auth,
+    required Directory? pwaDir,
+    required bool lanEnabled,
+  }) {
+    return YomuServer(
+      host: lanEnabled ? '0.0.0.0' : '127.0.0.1',
+      port: 8787,
+      pwaDir: pwaDir,
+      allowLanCors: lanEnabled,
+      auth: auth,
+      suwayomiStatus: () => manager.status,
+      apiProvider: () {
+        if (_api != null) return _api;
+        if (manager.status.isReady) {
+          return SuwayomiApi(manager.createClient());
+        }
+        return null;
+      },
+    );
+  }
+
+  Future<void> _restartYomuHttp({required bool lanEnabled}) async {
+    final manager = _manager;
+    final auth = _auth;
+    if (manager == null || auth == null) return;
+
+    setState(() => _busyHttp = true);
+    try {
+      await _yomuServer?.stop();
+      _yomuServer?.close();
+      final server = _buildYomuServer(
+        manager: manager,
+        auth: auth,
+        pwaDir: _pwaDir,
+        lanEnabled: lanEnabled,
+      );
+      await server.start();
+      final addrs = lanEnabled ? await listLanIpv4Addresses() : <String>[];
+      if (!mounted) return;
+      setState(() {
+        _yomuServer = server;
+        _lanEnabled = lanEnabled;
+        _lanAddresses = addrs;
+        if (!lanEnabled) {
+          _pairingCode = null;
+          _pairingExpiresAt = null;
+          auth.cancelPairing();
+        }
+        _busyHttp = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busyHttp = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Falha ao reiniciar HTTP Yomu: $e')),
+      );
+    }
+  }
+
+  Future<void> _toggleLan(bool enabled) async {
+    if (enabled) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Permitir acesso na LAN?'),
+          content: const Text(
+            'O Yomu Core passará a escutar em 0.0.0.0:8787 na rede local. '
+            'O Suwayomi continua só em 127.0.0.1:14567.\n\n'
+            'API autenticada por pareamento. Use só em Wi‑Fi de confiança.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Ativar LAN'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    await _restartYomuHttp(lanEnabled: enabled);
+  }
+
+  void _startPairing() {
+    final auth = _auth;
+    if (auth == null) return;
+    final code = auth.startPairing();
+    setState(() {
+      _pairingCode = code.code;
+      _pairingExpiresAt = code.expiresAt;
+    });
+  }
+
+  void _cancelPairing() {
+    _auth?.cancelPairing();
+    setState(() {
+      _pairingCode = null;
+      _pairingExpiresAt = null;
+    });
   }
 
   Future<Directory?> _resolvePwaDir() async {
@@ -190,7 +311,10 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void dispose() {
     unawaited(_statusSub?.cancel() ?? Future<void>.value());
-    unawaited(_yomuServer?.stop() ?? Future<void>.value());
+    unawaited(() async {
+      await _yomuServer?.stop();
+      _yomuServer?.close();
+    }());
     unawaited(_manager?.dispose() ?? Future<void>.value());
     super.dispose();
   }
@@ -287,13 +411,36 @@ class _HomeShellState extends State<HomeShell> {
       );
     }
 
+    // Refresh expired pairing display.
+    final pairing = _auth?.activePairing;
+    final displayCode = pairing?.code ?? _pairingCode;
+    final displayExpiry = pairing?.expiresAt ?? _pairingExpiresAt;
+    if (pairing == null && _pairingCode != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _auth?.activePairing == null && _pairingCode != null) {
+          setState(() {
+            _pairingCode = null;
+            _pairingExpiresAt = null;
+          });
+        }
+      });
+    }
+
     return switch (_selected) {
       'server' => ServerScreen(
           status: _suwayomiStatus,
           yomuPort: _yomuServer?.boundPort ?? 8787,
           managedRootDir: _manager?.managedRootDir ?? '—',
           aboutVersion: _aboutVersion,
-          busy: _busyEngine,
+          busy: _busyEngine || _busyHttp,
+          lanEnabled: _lanEnabled,
+          onToggleLan: (v) => unawaited(_toggleLan(v)),
+          pairingCode: displayCode,
+          pairingExpiresAt: displayExpiry,
+          onStartPairing: _startPairing,
+          onCancelPairing: _cancelPairing,
+          lanAddresses: _lanAddresses,
+          sessionCount: _auth?.sessions.length ?? 0,
           onStart: () => unawaited(_startSuwayomi()),
           onStop: () => unawaited(_stopSuwayomi()),
           onRestart: () => unawaited(_restartSuwayomi()),
@@ -332,11 +479,11 @@ class _HomeShellState extends State<HomeShell> {
         ),
       'source_builder' => const PlaceholderScreen(
           title: 'Criador de fontes',
-          message: 'Bloqueado — após hard gate e PWA/Maya na sequência.',
+          message: 'Bloqueado — após PWA estável e Maya na sequência.',
         ),
       'maya' => const PlaceholderScreen(
           title: 'Maya',
-          message: 'Bloqueado — após hard gate (biblioteca + progresso + downloads).',
+          message: 'Bloqueado — fase posterior (após PWA mínima).',
         ),
       _ => PlaceholderScreen(
           title: _nav.firstWhere((e) => e.id == _selected).label,
@@ -375,8 +522,10 @@ class _HomeShellState extends State<HomeShell> {
           ),
           const SizedBox(width: 12),
           StatusPill(
-            label: 'Yomu local :${_yomuServer?.boundPort ?? 8787}',
-            color: YomuTokens.textMuted,
+            label: _lanEnabled
+                ? 'Yomu LAN :${_yomuServer?.boundPort ?? 8787}'
+                : 'Yomu local :${_yomuServer?.boundPort ?? 8787}',
+            color: _lanEnabled ? YomuTokens.warning : YomuTokens.textMuted,
           ),
           if (_suwayomiStatus.message != null) ...[
             const SizedBox(width: 12),

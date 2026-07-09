@@ -12,8 +12,6 @@ Probe + UI mínima de leitura.
 - Salvar/retomar `lastPageRead` no leitor
 - Fila de downloads (enqueue / status / clear)
 
-Validação manual: biblioteca → continuar → páginas; download na obra → aba Downloads.
-
 ### Gate 1.5 — isolamento Suwayomi ✅
 
 `127.0.0.1:14567`, data root gerenciado.
@@ -24,15 +22,20 @@ Validação manual: biblioteca → continuar → páginas; download na obra → 
 |------|--------|
 | 2B UI mínima leitura | ✅ |
 | Foundation fix (git, loopback HTTP, testes) | ✅ |
-| **2C biblioteca / progresso / downloads** | ✅ código |
-| PWA iPhone real | bloqueada |
+| 2C biblioteca / progresso / downloads | ✅ |
+| **PWA iPhone mínima (auth + LAN opt-in + SPA)** | ✅ código |
 | Maya | bloqueada |
 | Source Builder | bloqueado |
 | Design final | bloqueado |
 
-## PWA stub
+## PWA mínima
 
-Loopback-only dev stub — **não** release. LAN exige opt-in + auth futuros.
+- Desktop: LAN opt-in, código de pareamento, sessões persistidas
+- API: Bearer proxy para library / manga / chapters / pages / progress / images
+- SPA: `apps/yomu_mobile_pwa` — pair, biblioteca, obra, leitor + progresso
+- Suwayomi **nunca** na LAN
+
+Validação manual: runbook em `docs/iphone-runbook.md`.
 
 ## Validação
 

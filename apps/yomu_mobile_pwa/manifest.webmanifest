@@ -5,5 +5,5 @@
   "display": "standalone",
   "background_color": "#121418",
   "theme_color": "#121418",
-  "description": "Yomu mobile stub — local LAN PWA via desktop Core"
+  "description": "Yomu mobile PWA — biblioteca e leitura via Yomu Core na LAN local"
 }

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#121418" />
     <title>Yomu</title>
     <link rel="manifest" href="/manifest.webmanifest" />
@@ -12,99 +13,663 @@
         color-scheme: dark;
         --bg: #121418;
         --surface: #1c1f26;
+        --border: #2e3440;
         --text: #e8eaed;
         --muted: #9aa0a6;
         --accent: #6c9eff;
         --danger: #ff6b6b;
         --ok: #3ddc97;
+        --warn: #f0c674;
       }
       * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
         margin: 0;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         background: var(--bg);
         color: var(--text);
         min-height: 100dvh;
-        padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
       }
-      main {
-        max-width: 480px;
-        margin: 0 auto;
+      #app {
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        padding:
+          max(12px, env(safe-area-inset-top))
+          14px
+          max(12px, env(safe-area-inset-bottom));
       }
-      h1 { font-size: 1.5rem; margin: 0 0 8px; }
-      p { color: var(--muted); line-height: 1.45; }
+      header.appbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        min-height: 40px;
+      }
+      header.appbar h1 {
+        font-size: 1.15rem;
+        margin: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .muted { color: var(--muted); line-height: 1.45; font-size: 0.95rem; }
       .card {
         background: var(--surface);
-        border: 1px solid #2e3440;
-        border-radius: 8px;
-        padding: 16px;
-        margin-top: 16px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px;
+        margin-bottom: 12px;
       }
       .pill {
         display: inline-block;
-        padding: 4px 10px;
+        padding: 3px 9px;
         border-radius: 999px;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 600;
-        margin-right: 8px;
+        margin-right: 6px;
+        margin-bottom: 4px;
       }
-      .ok { color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 50%, transparent); background: color-mix(in srgb, var(--ok) 15%, transparent); }
-      .bad { color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 50%, transparent); background: color-mix(in srgb, var(--danger) 15%, transparent); }
-      code { font-size: 0.85rem; word-break: break-all; }
-      button {
-        margin-top: 12px;
-        background: var(--accent);
-        color: #0b0d10;
+      .ok { color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+      .bad { color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+      .warn { color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+      button, .btn {
+        appearance: none;
         border: 0;
         border-radius: 8px;
         padding: 10px 14px;
         font-weight: 600;
+        font-size: 0.95rem;
+        background: var(--accent);
+        color: #0b0d10;
+        cursor: pointer;
       }
+      button.secondary, .btn.secondary {
+        background: transparent;
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      button:disabled { opacity: 0.5; cursor: default; }
+      button.block { width: 100%; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; }
+      input[type="text"], input[type="number"] {
+        width: 100%;
+        background: #0f1115;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        padding: 12px;
+        font-size: 1.1rem;
+        letter-spacing: 0.12em;
+        text-align: center;
+      }
+      label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+      .error { color: var(--danger); font-size: 0.9rem; margin-top: 8px; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .manga-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        cursor: pointer;
+        text-align: left;
+        padding: 0;
+        color: inherit;
+        width: 100%;
+      }
+      .manga-card .thumb {
+        aspect-ratio: 2/3;
+        background: #0f1115;
+        width: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .manga-card .meta {
+        padding: 8px;
+        font-size: 0.85rem;
+        font-weight: 600;
+        line-height: 1.25;
+        min-height: 2.6em;
+      }
+      .chapter-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        text-align: left;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        color: inherit;
+        margin-bottom: 8px;
+      }
+      .chapter-item .name { flex: 1; font-weight: 600; }
+      .chapter-item .sub { color: var(--muted); font-size: 0.8rem; }
+      #reader {
+        position: fixed;
+        inset: 0;
+        background: #000;
+        z-index: 50;
+        display: none;
+        flex-direction: column;
+      }
+      #reader.open { display: flex; }
+      #reader .top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        padding-top: max(8px, env(safe-area-inset-top));
+        background: rgba(0,0,0,0.85);
+      }
+      #reader .top h2 {
+        margin: 0;
+        font-size: 0.95rem;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #reader .pages {
+        flex: 1;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      #reader .pages img {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: #111;
+      }
+      #reader .bottom {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        padding-bottom: max(8px, env(safe-area-inset-bottom));
+        background: rgba(0,0,0,0.85);
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .empty { text-align: center; padding: 32px 12px; color: var(--muted); }
+      .spinner {
+        width: 22px; height: 22px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        margin: 24px auto;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .hidden { display: none !important; }
     </style>
   </head>
   <body>
-    <main>
-      <h1>Yomu (PWA stub)</h1>
-      <p>
-        Interface mobile provisória. No MVP ela só fala com o <strong>Yomu Core</strong>
-        (nunca com o Suwayomi diretamente). Pareamento e leitura entram após o gate de extensões + leitura.
-      </p>
-      <div class="card">
-        <div id="status-pills">
-          <span class="pill bad" id="yomu-pill">Yomu: …</span>
-          <span class="pill bad" id="suw-pill">Suwayomi: …</span>
-        </div>
-        <p id="detail" style="margin-top:12px"></p>
-        <button type="button" id="reload">Atualizar health</button>
+    <div id="app"></div>
+    <div id="reader" aria-hidden="true">
+      <div class="top">
+        <button type="button" class="secondary" id="reader-close">Fechar</button>
+        <h2 id="reader-title">Capítulo</h2>
       </div>
-    </main>
+      <div class="pages" id="reader-pages"></div>
+      <div class="bottom">
+        <span id="reader-progress">—</span>
+        <button type="button" class="secondary" id="reader-mark-read">Marcar lido</button>
+      </div>
+    </div>
     <script>
-      async function refresh() {
-        const yomuPill = document.getElementById('yomu-pill');
-        const suwPill = document.getElementById('suw-pill');
-        const detail = document.getElementById('detail');
-        try {
-          const res = await fetch('/health', { cache: 'no-store' });
-          const data = await res.json();
-          yomuPill.textContent = 'Yomu: ' + (data.yomu || 'ok');
-          yomuPill.className = 'pill ok';
-          const s = data.suwayomi || {};
-          suwPill.textContent = 'Suwayomi: ' + (s.state || 'unknown');
-          suwPill.className = 'pill ' + (s.isReady ? 'ok' : 'bad');
-          detail.innerHTML =
-            '<code>' + JSON.stringify(data, null, 2) + '</code>';
-        } catch (e) {
-          yomuPill.textContent = 'Yomu: offline';
-          yomuPill.className = 'pill bad';
-          suwPill.textContent = 'Suwayomi: ?';
-          suwPill.className = 'pill bad';
-          detail.textContent =
-            'Não foi possível alcançar o Yomu Core. Confirme Wi‑Fi, app desktop aberto e firewall.';
+(function () {
+  const TOKEN_KEY = 'yomu_token';
+  const DEVICE_KEY = 'yomu_device_name';
+
+  const state = {
+    token: localStorage.getItem(TOKEN_KEY) || '',
+    deviceName: localStorage.getItem(DEVICE_KEY) || 'iPhone',
+    view: 'boot', // boot | pair | library | manga
+    health: null,
+    library: [],
+    manga: null,
+    chapters: [],
+    reader: null, // { chapterId, title, pages, pageCount, lastPageRead, mangaId }
+    error: '',
+    loading: false,
+  };
+
+  const app = document.getElementById('app');
+  const readerEl = document.getElementById('reader');
+  const readerPages = document.getElementById('reader-pages');
+  const readerTitle = document.getElementById('reader-title');
+  const readerProgress = document.getElementById('reader-progress');
+
+  document.getElementById('reader-close').addEventListener('click', closeReader);
+  document.getElementById('reader-mark-read').addEventListener('click', () => {
+    if (!state.reader) return;
+    saveProgress(state.reader.chapterId, state.reader.pageCount - 1, true);
+  });
+
+  function setToken(token) {
+    state.token = token || '';
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  }
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (opts.json) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (state.token && !opts.noAuth) {
+      headers['Authorization'] = 'Bearer ' + state.token;
+    }
+    const res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers,
+      body: opts.json ? JSON.stringify(opts.json) : opts.body,
+      cache: 'no-store',
+    });
+    if (res.status === 401 && !opts.noAuth) {
+      setToken('');
+      state.view = 'pair';
+      state.error = 'Sessão inválida. Pareie de novo.';
+      render();
+      throw new Error('unauthorized');
+    }
+    let data = null;
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      data = await res.json();
+    } else {
+      data = await res.arrayBuffer();
+    }
+    if (!res.ok) {
+      const msg = (data && data.message) || (data && data.error) || ('HTTP ' + res.status);
+      throw new Error(msg);
+    }
+    return data;
+  }
+
+  async function authBlobUrl(path) {
+    const res = await fetch(path, {
+      headers: { Authorization: 'Bearer ' + state.token },
+      cache: 'force-cache',
+    });
+    if (!res.ok) return '';
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  async function refreshHealth() {
+    try {
+      state.health = await api('/health', { noAuth: true });
+    } catch (e) {
+      state.health = null;
+    }
+  }
+
+  async function boot() {
+    state.loading = true;
+    render();
+    await refreshHealth();
+    if (state.token) {
+      try {
+        await api('/api/v1/me');
+        state.view = 'library';
+        await loadLibrary();
+      } catch (_) {
+        state.view = 'pair';
+      }
+    } else {
+      state.view = 'pair';
+    }
+    state.loading = false;
+    render();
+  }
+
+  async function claimPairing(code) {
+    state.error = '';
+    state.loading = true;
+    render();
+    try {
+      const data = await api('/api/v1/pairing/claim', {
+        method: 'POST',
+        noAuth: true,
+        json: { code: code.trim(), deviceName: state.deviceName || 'iPhone' },
+      });
+      setToken(data.token);
+      state.view = 'library';
+      await loadLibrary();
+    } catch (e) {
+      state.error = e.message === 'invalid_or_expired_code'
+        ? 'Código inválido ou expirado.'
+        : String(e.message || e);
+    }
+    state.loading = false;
+    render();
+  }
+
+  async function loadLibrary() {
+    state.loading = true;
+    state.error = '';
+    render();
+    try {
+      const data = await api('/api/v1/library');
+      state.library = data.items || [];
+    } catch (e) {
+      state.error = String(e.message || e);
+      state.library = [];
+    }
+    state.loading = false;
+    render();
+    // Lazy thumbs
+    for (const m of state.library) {
+      if (!m.thumbnailUrl) continue;
+      const img = document.querySelector('[data-thumb="' + m.id + '"]');
+      if (!img) continue;
+      authBlobUrl(m.thumbnailUrl).then((url) => {
+        if (url) img.src = url;
+      });
+    }
+  }
+
+  async function openManga(id) {
+    state.loading = true;
+    state.error = '';
+    state.view = 'manga';
+    render();
+    try {
+      const [manga, chapters] = await Promise.all([
+        api('/api/v1/manga/' + id),
+        api('/api/v1/manga/' + id + '/chapters'),
+      ]);
+      state.manga = manga;
+      state.chapters = chapters.items || [];
+    } catch (e) {
+      state.error = String(e.message || e);
+      state.manga = null;
+      state.chapters = [];
+    }
+    state.loading = false;
+    render();
+  }
+
+  async function openChapter(chapter) {
+    state.error = '';
+    readerTitle.textContent = chapter.name || ('Cap. ' + chapter.id);
+    readerPages.innerHTML = '<div class="spinner"></div>';
+    readerProgress.textContent = 'Carregando…';
+    readerEl.classList.add('open');
+    readerEl.setAttribute('aria-hidden', 'false');
+    try {
+      const data = await api('/api/v1/chapters/' + chapter.id + '/pages');
+      const pages = data.pages || [];
+      state.reader = {
+        chapterId: data.chapterId || chapter.id,
+        title: data.chapterName || chapter.name,
+        pages,
+        pageCount: data.pageCount || pages.length,
+        lastPageRead: data.lastPageRead || 0,
+        mangaId: data.mangaId,
+      };
+      readerTitle.textContent = state.reader.title;
+      readerPages.innerHTML = '';
+      const start = Math.max(0, Math.min(state.reader.lastPageRead || 0, pages.length - 1));
+
+      // Sequential load keeps memory/network sane on phone.
+      for (let i = 0; i < pages.length; i++) {
+        const wrap = document.createElement('div');
+        wrap.dataset.page = String(i);
+        const img = document.createElement('img');
+        img.alt = 'Página ' + (i + 1);
+        img.loading = i < start + 2 ? 'eager' : 'lazy';
+        wrap.appendChild(img);
+        readerPages.appendChild(wrap);
+
+        // Auth fetch → blob
+        (async (index, imageEl) => {
+          try {
+            const url = await authBlobUrl(pages[index].url);
+            if (url) imageEl.src = url;
+          } catch (_) {}
+        })(i, img);
+      }
+
+      // Scroll to resume
+      requestAnimationFrame(() => {
+        const target = readerPages.querySelector('[data-page="' + start + '"]');
+        if (target) target.scrollIntoView({ block: 'start' });
+      });
+
+      // Progress via scroll
+      let lastSaved = state.reader.lastPageRead || 0;
+      let saveTimer = null;
+      const onScroll = () => {
+        const kids = Array.from(readerPages.children);
+        let current = 0;
+        const top = readerPages.scrollTop + 40;
+        for (const el of kids) {
+          if (el.offsetTop <= top) current = Number(el.dataset.page || 0);
+        }
+        readerProgress.textContent =
+          'Pág. ' + (current + 1) + ' / ' + pages.length;
+        if (current !== lastSaved) {
+          lastSaved = current;
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(() => {
+            saveProgress(state.reader.chapterId, current, current >= pages.length - 1);
+          }, 600);
+        }
+      };
+      readerPages.onscroll = onScroll;
+      onScroll();
+    } catch (e) {
+      readerPages.innerHTML =
+        '<p class="empty" style="color:var(--danger)">' + escapeHtml(String(e.message || e)) + '</p>';
+      readerProgress.textContent = 'Erro';
+    }
+  }
+
+  async function saveProgress(chapterId, lastPageRead, isRead) {
+    try {
+      await api('/api/v1/chapters/' + chapterId + '/progress', {
+        method: 'PUT',
+        json: { lastPageRead: lastPageRead, isRead: !!isRead },
+      });
+      // Update local chapter list if open
+      const ch = state.chapters.find((c) => c.id === chapterId);
+      if (ch) {
+        ch.lastPageRead = lastPageRead;
+        ch.isRead = !!isRead || ch.isRead;
+      }
+    } catch (_) {
+      // silent — offline desktop
+    }
+  }
+
+  function closeReader() {
+    // revoke blob urls
+    readerPages.querySelectorAll('img').forEach((img) => {
+      if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    });
+    readerPages.innerHTML = '';
+    readerPages.onscroll = null;
+    readerEl.classList.remove('open');
+    readerEl.setAttribute('aria-hidden', 'true');
+    state.reader = null;
+    if (state.view === 'manga' && state.manga) {
+      // refresh chapter badges
+      render();
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function healthPills() {
+    const h = state.health;
+    if (!h) {
+      return '<span class="pill bad">Yomu: offline</span>';
+    }
+    const s = h.suwayomi || {};
+    const bind = h.bind || {};
+    return (
+      '<span class="pill ok">Yomu: ok</span>' +
+      '<span class="pill ' + (s.isReady || s.state === 'running' ? 'ok' : 'bad') + '">Suwayomi: ' +
+      escapeHtml(s.state || '?') + '</span>' +
+      (bind.loopbackOnly === false
+        ? '<span class="pill warn">LAN</span>'
+        : '<span class="pill warn">loopback</span>')
+    );
+  }
+
+  function renderPair() {
+    app.innerHTML =
+      '<header class="appbar"><h1>Yomu</h1></header>' +
+      '<p class="muted">Pareie com o desktop na mesma rede Wi‑Fi. O iPhone nunca fala com o Suwayomi.</p>' +
+      '<div class="card">' + healthPills() + '</div>' +
+      '<div class="card">' +
+        '<label for="code">Código de pareamento (6 dígitos)</label>' +
+        '<input id="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="000000" />' +
+        '<label for="dname" style="margin-top:12px">Nome do dispositivo</label>' +
+        '<input id="dname" type="text" maxlength="40" style="letter-spacing:normal;text-align:left;font-size:1rem" value="' +
+          escapeHtml(state.deviceName) + '" />' +
+        (state.error ? '<p class="error">' + escapeHtml(state.error) + '</p>' : '') +
+        '<button type="button" class="block" id="btn-pair" style="margin-top:14px"' +
+          (state.loading ? ' disabled' : '') + '>Parear</button>' +
+      '</div>' +
+      '<p class="muted" style="font-size:0.85rem">No PC: Servidor → ativar LAN → Gerar código.</p>';
+
+    document.getElementById('btn-pair').onclick = () => {
+      const code = document.getElementById('code').value;
+      state.deviceName = document.getElementById('dname').value || 'iPhone';
+      localStorage.setItem(DEVICE_KEY, state.deviceName);
+      claimPairing(code);
+    };
+  }
+
+  function renderLibrary() {
+    const items = state.library;
+    app.innerHTML =
+      '<header class="appbar">' +
+        '<h1>Biblioteca</h1>' +
+        '<button type="button" class="secondary" id="btn-refresh">Atualizar</button>' +
+        '<button type="button" class="secondary" id="btn-logout">Sair</button>' +
+      '</header>' +
+      '<div class="card" style="padding:10px">' + healthPills() + '</div>' +
+      (state.error ? '<p class="error">' + escapeHtml(state.error) + '</p>' : '') +
+      (state.loading
+        ? '<div class="spinner"></div>'
+        : items.length === 0
+          ? '<div class="empty">Biblioteca vazia. Adicione obras no desktop.</div>'
+          : '<div class="grid" id="lib-grid">' +
+              items.map((m) =>
+                '<button type="button" class="manga-card" data-id="' + m.id + '">' +
+                  '<img class="thumb" data-thumb="' + m.id + '" alt="" />' +
+                  '<div class="meta">' + escapeHtml(m.title || ('#' + m.id)) +
+                    (m.unreadCount ? '<div class="sub" style="color:var(--accent);font-weight:500;margin-top:4px">' + m.unreadCount + ' não lidos</div>' : '') +
+                  '</div>' +
+                '</button>'
+              ).join('') +
+            '</div>');
+
+    const refresh = document.getElementById('btn-refresh');
+    if (refresh) refresh.onclick = () => loadLibrary();
+    const logout = document.getElementById('btn-logout');
+    if (logout) logout.onclick = () => {
+      setToken('');
+      state.view = 'pair';
+      state.library = [];
+      render();
+    };
+    document.querySelectorAll('.manga-card').forEach((el) => {
+      el.onclick = () => openManga(Number(el.dataset.id));
+    });
+  }
+
+  function renderManga() {
+    const m = state.manga;
+    app.innerHTML =
+      '<header class="appbar">' +
+        '<button type="button" class="secondary" id="btn-back">←</button>' +
+        '<h1>' + escapeHtml(m ? m.title : 'Obra') + '</h1>' +
+      '</header>' +
+      (state.error ? '<p class="error">' + escapeHtml(state.error) + '</p>' : '') +
+      (state.loading || !m
+        ? '<div class="spinner"></div>'
+        : '<div class="card">' +
+            (m.description ? '<p class="muted" style="margin:0;font-size:0.9rem">' + escapeHtml(m.description).slice(0, 400) + '</p>' : '<p class="muted" style="margin:0">Sem descrição</p>') +
+          '</div>' +
+          '<h2 style="font-size:1rem;margin:8px 0">Capítulos</h2>' +
+          (state.chapters.length === 0
+            ? '<div class="empty">Nenhum capítulo.</div>'
+            : state.chapters.map((c) =>
+                '<button type="button" class="chapter-item" data-id="' + c.id + '">' +
+                  '<div style="flex:1">' +
+                    '<div class="name">' + escapeHtml(c.name || ('Cap. ' + c.chapterNumber)) + '</div>' +
+                    '<div class="sub">' +
+                      (c.isRead ? 'Lido · ' : '') +
+                      (c.lastPageRead ? 'pág. ' + (c.lastPageRead + 1) + ' · ' : '') +
+                      (c.isDownloaded ? 'offline · ' : '') +
+                      (c.pageCount ? c.pageCount + ' págs' : '') +
+                    '</div>' +
+                  '</div>' +
+                  '<span class="muted">›</span>' +
+                '</button>'
+              ).join('')));
+
+    const back = document.getElementById('btn-back');
+    if (back) back.onclick = () => {
+      state.view = 'library';
+      state.manga = null;
+      loadLibrary();
+    };
+    document.querySelectorAll('.chapter-item').forEach((el) => {
+      el.onclick = () => {
+        const ch = state.chapters.find((c) => String(c.id) === el.dataset.id);
+        if (ch) openChapter(ch);
+      };
+    });
+  }
+
+  function render() {
+    if (state.view === 'boot') {
+      app.innerHTML = '<div class="spinner"></div><p class="muted" style="text-align:center">Conectando…</p>';
+      return;
+    }
+    if (state.view === 'pair') return renderPair();
+    if (state.view === 'library') return renderLibrary();
+    if (state.view === 'manga') return renderManga();
+  }
+
+  // Health poll
+  setInterval(() => {
+    refreshHealth().then(() => {
+      if (state.view === 'pair' || state.view === 'library') {
+        const pills = document.querySelector('.card .pill');
+        if (pills) {
+          // light refresh of first card only when not mid-input
+          const first = app.querySelector('.card');
+          if (first && first.querySelector('.pill')) {
+            first.innerHTML = healthPills();
+          }
         }
       }
-      document.getElementById('reload').addEventListener('click', refresh);
-      refresh();
-      setInterval(refresh, 5000);
+    });
+  }, 8000);
+
+  boot();
+})();
     </script>
   </body>
 </html>

@@ -31,8 +31,10 @@ Personal status is dual-layer: Suwayomi = facts; Yomu = intention; conflicts are
 
 ## Hard gates
 
-Do not build Maya, full PWA, or Source Builder until:
+Do not build Maya or Source Builder until the reading stack is solid:
 
 1. Suwayomi start/health/stop
 2. Keiyoushi → install extension → search → details → chapters → pages
 3. Desktop reader + progress save/resume
+4. Library / downloads (hard gate)
+5. PWA mínima (LAN opt-in + pairing + library/reader) — **done at code level**

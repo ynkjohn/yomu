@@ -1,31 +1,44 @@
 # Local API (Yomu Core)
 
-## Phase 2B defaults (foundation fix)
+## Defaults
 
 | Item | Value |
 |------|--------|
-| Bind | **`127.0.0.1:8787`** (loopback only) |
-| Auth | none (dev stub) |
-| CORS | **disabled** by default (`allowOpenCors: false`) |
-| PWA | static stub if present — **dev only, not release** |
-| Suwayomi | **never** bound on LAN (`127.0.0.1:14567` only) |
+| Bind default | **`127.0.0.1:8787`** (loopback) |
+| Bind LAN | **`0.0.0.0:8787`** only after **explicit opt-in** in desktop Servidor |
+| Auth | Bearer token after pairing (`DeviceAuthStore`) |
+| CORS | Off on loopback; on LAN reflects `Origin` (never `*`) |
+| PWA | static SPA from `apps/yomu_mobile_pwa` when folder found |
+| Suwayomi | **never** on LAN (`127.0.0.1:14567` only) |
 
-### Endpoints (dev)
+## Public endpoints
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/health` | Yomu + Suwayomi status JSON |
+| GET | `/health` | Yomu + Suwayomi + bind + auth summary |
 | GET | `/api/v1/health` | alias |
-| GET | `/` | PWA stub static (if folder exists) |
+| POST | `/api/v1/pairing/claim` | body `{ code, deviceName }` → `{ token }` |
+| GET | `/` | PWA SPA (if present) |
 
-## Before real mobile PWA / LAN
+## Authenticated endpoints (`Authorization: Bearer <token>`)
 
-Must implement **before** enabling non-loopback bind:
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/api/v1/me` | session device |
+| GET | `/api/v1/library` | library items (thumb URLs rewritten to Yomu) |
+| GET | `/api/v1/manga/:id` | manga detail |
+| POST | `/api/v1/manga/:id/library` | `{ inLibrary: bool }` |
+| GET | `/api/v1/manga/:id/chapters` | list / fetch chapters |
+| GET | `/api/v1/chapters/:id/pages` | page list with Yomu image URLs |
+| GET | `/api/v1/chapters/:id/pages/:index/image` | image proxy (loopback → Suwayomi) |
+| GET | `/api/v1/manga/:id/thumbnail` | thumbnail proxy |
+| PUT | `/api/v1/chapters/:id/progress` | `{ lastPageRead, isRead }` |
+| GET | `/api/v1/sources` | installed sources |
+| GET | `/api/v1/sources/:id/search?q=` | search |
 
-1. Explicit user opt-in to LAN bind (`0.0.0.0` or interface IP)
-2. Device pairing + bearer token per session
-3. Restricted CORS (same-origin or allowlist, never `*` in production)
-4. Rate limits + audit logs without secrets
-5. Clear UX when desktop offline / wrong network
+## Security notes
 
-Until then, UI must **not** advertise LAN availability.
+1. Pairing codes: 6 digits, ~5 minutes TTL, single use.
+2. Sessions persisted under app support `yomu/device_sessions.json`.
+3. Phone never receives Suwayomi host/port; all media goes through Yomu proxy.
+4. LAN bind requires confirmation dialog on desktop.

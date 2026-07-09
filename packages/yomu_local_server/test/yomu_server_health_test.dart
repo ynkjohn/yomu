@@ -11,16 +11,18 @@ void main() {
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
       ),
+      auth: DeviceAuthStore(),
     );
     expect(s.host, '127.0.0.1');
     expect(s.isLoopbackOnly, isTrue);
-    expect(s.allowOpenCors, isFalse);
+    expect(s.allowLanCors, isFalse);
   });
 
   test('health endpoint reports yomu and suwayomi on loopback', () async {
     final s = YomuServer(
       host: '127.0.0.1',
       port: 18787,
+      auth: DeviceAuthStore(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
         message: 'test',
@@ -41,7 +43,8 @@ void main() {
     final s = YomuServer(
       host: '127.0.0.1',
       port: 18788,
-      allowOpenCors: false,
+      allowLanCors: false,
+      auth: DeviceAuthStore(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
       ),
@@ -51,15 +54,15 @@ void main() {
 
     final res = await http.get(Uri.parse('http://127.0.0.1:18788/health'));
     expect(res.statusCode, 200);
-    final acao = res.headers['access-control-allow-origin'];
-    expect(acao, isNull);
+    expect(res.headers['access-control-allow-origin'], isNull);
   });
 
-  test('open CORS only when explicitly enabled', () async {
+  test('LAN CORS reflects Origin when enabled', () async {
     final s = YomuServer(
       host: '127.0.0.1',
       port: 18789,
-      allowOpenCors: true,
+      allowLanCors: true,
+      auth: DeviceAuthStore(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
       ),
@@ -67,28 +70,67 @@ void main() {
     await s.start();
     addTearDown(s.stop);
 
-    final res = await http.get(Uri.parse('http://127.0.0.1:18789/health'));
-    expect(res.headers['access-control-allow-origin'], '*');
+    final res = await http.get(
+      Uri.parse('http://127.0.0.1:18789/health'),
+      headers: {'origin': 'http://192.168.1.10:8787'},
+    );
+    expect(res.headers['access-control-allow-origin'], 'http://192.168.1.10:8787');
+    expect(res.headers['access-control-allow-origin'], isNot('*'));
   });
 
-  test('loopback detection for localhost variants', () {
-    expect(
-      YomuServer(
-        host: 'localhost',
-        suwayomiStatus: () => const SuwayomiStatus(
-          state: SuwayomiProcessState.stopped,
-        ),
-      ).isLoopbackOnly,
-      isTrue,
+  test('pairing claim issues token; API requires auth', () async {
+    final auth = DeviceAuthStore();
+    final pairing = auth.startPairing();
+    final s = YomuServer(
+      host: '127.0.0.1',
+      port: 18790,
+      auth: auth,
+      suwayomiStatus: () => const SuwayomiStatus(
+        state: SuwayomiProcessState.stopped,
+      ),
     );
-    expect(
-      YomuServer(
-        host: '0.0.0.0',
-        suwayomiStatus: () => const SuwayomiStatus(
-          state: SuwayomiProcessState.stopped,
-        ),
-      ).isLoopbackOnly,
-      isFalse,
+    await s.start();
+    addTearDown(s.stop);
+
+    final denied = await http.get(Uri.parse('http://127.0.0.1:18790/api/v1/library'));
+    expect(denied.statusCode, 401);
+
+    final claim = await http.post(
+      Uri.parse('http://127.0.0.1:18790/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'code': pairing.code, 'deviceName': 'TestPhone'}),
     );
+    expect(claim.statusCode, 200);
+    final token = (jsonDecode(claim.body) as Map)['token'] as String;
+    expect(token, isNotEmpty);
+
+    final me = await http.get(
+      Uri.parse('http://127.0.0.1:18790/api/v1/me'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    expect(me.statusCode, 200);
+    expect((jsonDecode(me.body) as Map)['deviceName'], 'TestPhone');
+  });
+
+  test('invalid pairing code rejected', () async {
+    final auth = DeviceAuthStore();
+    auth.startPairing();
+    final s = YomuServer(
+      host: '127.0.0.1',
+      port: 18791,
+      auth: auth,
+      suwayomiStatus: () => const SuwayomiStatus(
+        state: SuwayomiProcessState.stopped,
+      ),
+    );
+    await s.start();
+    addTearDown(s.stop);
+
+    final claim = await http.post(
+      Uri.parse('http://127.0.0.1:18791/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'code': '000000', 'deviceName': 'X'}),
+    );
+    expect(claim.statusCode, 401);
   });
 }

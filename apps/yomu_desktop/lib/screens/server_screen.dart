@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:yomu_core/yomu_core.dart';
@@ -14,6 +16,14 @@ class ServerScreen extends StatelessWidget {
     required this.onStop,
     required this.onRestart,
     required this.onHealthCheck,
+    required this.lanEnabled,
+    required this.onToggleLan,
+    required this.pairingCode,
+    required this.pairingExpiresAt,
+    required this.onStartPairing,
+    required this.onCancelPairing,
+    required this.lanAddresses,
+    required this.sessionCount,
     this.aboutVersion,
     this.busy = false,
   });
@@ -25,6 +35,14 @@ class ServerScreen extends StatelessWidget {
   final VoidCallback onStop;
   final VoidCallback onRestart;
   final VoidCallback onHealthCheck;
+  final bool lanEnabled;
+  final ValueChanged<bool> onToggleLan;
+  final String? pairingCode;
+  final DateTime? pairingExpiresAt;
+  final VoidCallback onStartPairing;
+  final VoidCallback onCancelPairing;
+  final List<String> lanAddresses;
+  final int sessionCount;
   final String? aboutVersion;
   final bool busy;
 
@@ -43,7 +61,7 @@ class ServerScreen extends StatelessWidget {
         ),
         const SizedBox(height: YomuTokens.space2),
         const Text(
-          'Loopback only. Não exposto na LAN. Isolado do %LOCALAPPDATA%\\Tachidesk.',
+          'Sempre em 127.0.0.1:14567 (nunca na LAN). Isolado do AppData Tachidesk.',
           style: TextStyle(color: YomuTokens.textMuted),
         ),
         const SizedBox(height: YomuTokens.space4),
@@ -75,8 +93,6 @@ class ServerScreen extends StatelessWidget {
                 if (aboutVersion != null) _kv('About runtime', aboutVersion!),
                 _kv('PID', status.pid?.toString() ?? '—'),
                 _kv('Data root', managedRootDir),
-                if (status.lastHealthCheck != null)
-                  _kv('Último health', status.lastHealthCheck!.toLocal().toString()),
                 if (status.message != null) ...[
                   const SizedBox(height: YomuTokens.space2),
                   SelectableText(
@@ -110,21 +126,6 @@ class ServerScreen extends StatelessWidget {
                       onPressed: busy ? null : onHealthCheck,
                       child: const Text('Health check'),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        Clipboard.setData(
-                          ClipboardData(
-                            text: status.baseUrl ??
-                                'http://127.0.0.1:$kYomuSuwayomiPort',
-                          ),
-                        );
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('URL copiada')),
-                        );
-                      },
-                      icon: const Icon(Icons.copy, size: 16),
-                      label: const Text('Copiar URL'),
-                    ),
                   ],
                 ),
               ],
@@ -139,19 +140,88 @@ class ServerScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Yomu HTTP (loopback — dev stub)',
+                  'Acesso iPhone (PWA mínima)',
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: YomuTokens.space2),
-                Text('Health/PWA stub: http://127.0.0.1:$yomuPort/'),
-                const SizedBox(height: YomuTokens.space2),
                 const Text(
-                  'Por padrão o Yomu Server escuta só em 127.0.0.1 (sem LAN). '
-                  'A PWA stub não é release. Antes de PWA real na rede: '
-                  'opt-in LAN explícito, token/pareamento por dispositivo e CORS restrito. '
-                  'Suwayomi nunca é exposto na LAN (só 127.0.0.1:14567).',
+                  'O iPhone fala só com o Yomu Core (nunca com a porta do Suwayomi). '
+                  'LAN exige opt-in explícito + código de pareamento.',
                   style: TextStyle(color: YomuTokens.textMuted),
                 ),
+                const SizedBox(height: YomuTokens.space3),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Permitir acesso na LAN (Wi‑Fi)'),
+                  subtitle: Text(
+                    lanEnabled
+                        ? 'Yomu escuta em 0.0.0.0:$yomuPort (API autenticada)'
+                        : 'Yomu só em 127.0.0.1:$yomuPort (sem iPhone na rede)',
+                  ),
+                  value: lanEnabled,
+                  onChanged: busy ? null : onToggleLan,
+                ),
+                _kv('Yomu HTTP', lanEnabled ? '0.0.0.0:$yomuPort' : '127.0.0.1:$yomuPort'),
+                _kv('Sessões pareadas', '$sessionCount'),
+                if (lanEnabled) ...[
+                  const SizedBox(height: 8),
+                  const Text('URLs na rede local:', style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  if (lanAddresses.isEmpty)
+                    const Text(
+                      'Não foi possível listar IPs. Confira o Wi‑Fi do PC.',
+                      style: TextStyle(color: YomuTokens.warning),
+                    )
+                  else
+                    ...lanAddresses.map(
+                      (ip) => Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          children: [
+                            Expanded(child: SelectableText('http://$ip:$yomuPort/')),
+                            IconButton(
+                              icon: const Icon(Icons.copy, size: 18),
+                              onPressed: () {
+                                Clipboard.setData(
+                                  ClipboardData(text: 'http://$ip:$yomuPort/'),
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('URL copiada')),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  if (pairingCode == null)
+                    FilledButton(
+                      onPressed: onStartPairing,
+                      child: const Text('Gerar código de pareamento'),
+                    )
+                  else ...[
+                    Text(
+                      'Código: $pairingCode',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    if (pairingExpiresAt != null)
+                      Text(
+                        'Expira: ${pairingExpiresAt!.toLocal()}',
+                        style: const TextStyle(color: YomuTokens.textMuted),
+                      ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'No iPhone: abra a URL acima → digite o código → use a biblioteca.',
+                      style: TextStyle(color: YomuTokens.textMuted),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: onCancelPairing,
+                      child: const Text('Cancelar código'),
+                    ),
+                  ],
+                ],
               ],
             ),
           ),
@@ -178,7 +248,7 @@ class ServerScreen extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 120,
+            width: 140,
             child: Text(k, style: const TextStyle(color: YomuTokens.textMuted)),
           ),
           Expanded(child: SelectableText(v)),
@@ -186,4 +256,24 @@ class ServerScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Best-effort LAN IPv4 addresses (Wi‑Fi/Ethernet).
+Future<List<String>> listLanIpv4Addresses() async {
+  final out = <String>[];
+  try {
+    final ifaces = await NetworkInterface.list(
+      includeLinkLocal: false,
+      type: InternetAddressType.IPv4,
+    );
+    for (final iface in ifaces) {
+      for (final addr in iface.addresses) {
+        if (addr.isLoopback) continue;
+        final ip = addr.address;
+        if (ip.startsWith('127.')) continue;
+        out.add(ip);
+      }
+    }
+  } catch (_) {}
+  return out.toSet().toList()..sort();
 }
