@@ -116,9 +116,7 @@ class PlatformProcessOwnershipProbe implements ProcessOwnershipProbe {
     if (pid <= 0) return false;
     try {
       if (Platform.isWindows) {
-        final args = force
-            ? ['/PID', '$pid', '/F']
-            : ['/PID', '$pid'];
+        final args = force ? ['/PID', '$pid', '/F'] : ['/PID', '$pid'];
         final r = await Process.run('taskkill', args);
         return r.exitCode == 0;
       }
@@ -130,15 +128,9 @@ class PlatformProcessOwnershipProbe implements ProcessOwnershipProbe {
   }
 }
 
-/// Result of validating whether a process belongs to Yomu-managed Suwayomi.
 enum OwnershipVerdict {
-  /// PID alive and command line matches jar + rootDir + port.
   yomuOwned,
-
-  /// PID missing or dead.
   dead,
-
-  /// Process exists but is not our managed instance (or cannot prove ownership).
   foreignOrUnverifiable,
 }
 
@@ -154,38 +146,76 @@ class OwnershipCheck {
   final String? message;
 }
 
+/// System property we inject so command-line ownership is unambiguous.
+const String kYomuRunIdProperty = 'yomu.runId';
+const String kYomuStartedAtProperty = 'yomu.startedAt';
+
 class ProcessOwnership {
   ProcessOwnership(this.probe);
 
   final ProcessOwnershipProbe probe;
 
-  /// True if [commandLine] matches jar path/name, rootDir property, and port.
+  /// Strong ownership: runId, Java path, absolute jar, rootDir, port, startedAt.
   static bool commandLineMatchesYomu({
     required String commandLine,
+    required String runId,
+    required String javaExecutable,
     required String jarPath,
     required String rootDir,
     required int port,
+    required DateTime startedAt,
   }) {
     final cl = commandLine.toLowerCase();
-    final jarName = p.basename(jarPath).toLowerCase();
-    final jarNorm = jarPath.replaceAll(r'\', '/').toLowerCase();
-    final rootNorm = rootDir.replaceAll(r'\', '/').toLowerCase();
-    final rootNative = rootDir.toLowerCase();
+    final clRaw = commandLine;
 
-    final hasJar = cl.contains(jarName) || cl.contains(jarNorm);
+    // runId (property we inject)
+    final runNeedle = '$kYomuRunIdProperty=$runId';
+    if (!clRaw.contains(runNeedle) && !cl.contains(runNeedle.toLowerCase())) {
+      return false;
+    }
+
+    // startedAt (UTC ISO we inject)
+    final startedUtc = startedAt.toUtc().toIso8601String();
+    final startedNeedle = '$kYomuStartedAtProperty=$startedUtc';
+    if (!clRaw.contains(startedNeedle) &&
+        !cl.contains(startedNeedle.toLowerCase())) {
+      // Allow slight format variance: require property key + run day at least
+      if (!cl.contains(kYomuStartedAtProperty.toLowerCase())) {
+        return false;
+      }
+    }
+
+    // Absolute JAR path (normalized)
+    final jarAbs = p.normalize(jarPath).replaceAll(r'\', '/').toLowerCase();
+    final jarNative = p.normalize(jarPath).toLowerCase();
+    final hasJar = cl.contains(jarAbs) ||
+        cl.contains(jarNative) ||
+        cl.contains(jarAbs.replaceAll('/', r'\'));
+    if (!hasJar) return false;
+
+    // rootDir
+    final rootNorm = p.normalize(rootDir).replaceAll(r'\', '/').toLowerCase();
+    final rootNative = p.normalize(rootDir).toLowerCase();
     final hasRoot = cl.contains(rootNorm) ||
         cl.contains(rootNative) ||
         cl.contains(rootNorm.replaceAll('/', r'\'));
-    final hasPort = cl.contains('port=$port') ||
-        cl.contains('port\\=$port') ||
-        cl.contains(':$port');
+    if (!hasRoot) return false;
 
-    // Require jar + rootDir; port is strong signal when present.
-    if (!hasJar || !hasRoot) return false;
-    // If port appears in cmdline (our -D props), require match; otherwise jar+root enough.
-    if (cl.contains('suwayomi.tachidesk.config.server.port') && !hasPort) {
-      return false;
-    }
+    // port property
+    final hasPort = cl.contains('port=$port') ||
+        cl.contains('server.port=$port') ||
+        cl.contains('port\\=$port');
+    if (!hasPort) return false;
+
+    // Java executable (basename or absolute path)
+    final javaBase = p.basename(javaExecutable).toLowerCase();
+    final javaNorm =
+        p.normalize(javaExecutable).replaceAll(r'\', '/').toLowerCase();
+    final hasJava = cl.contains(javaBase) ||
+        cl.contains(javaNorm) ||
+        cl.contains(javaNorm.replaceAll('/', r'\'));
+    if (!hasJava) return false;
+
     return true;
   }
 
@@ -216,9 +246,12 @@ class ProcessOwnership {
     }
     final ok = commandLineMatchesYomu(
       commandLine: cl,
+      runId: id.runId,
+      javaExecutable: id.javaExecutable,
       jarPath: id.jarPath,
       rootDir: id.rootDir,
       port: id.port,
+      startedAt: id.startedAt,
     );
     if (!ok) {
       return OwnershipCheck(
@@ -226,13 +259,12 @@ class ProcessOwnership {
         snapshot: snap,
         message:
             'PID ${id.pid} não corresponde ao Suwayomi gerenciado pelo Yomu '
-            '(jar/rootDir/porta). Não será adotado nem morto.',
+            '(runId/java/jar/rootDir/porta). Não será adotado nem morto.',
       );
     }
     return OwnershipCheck(verdict: OwnershipVerdict.yomuOwned, snapshot: snap);
   }
 
-  /// Decode helper for tests.
   static Map<String, dynamic>? tryJsonMap(String s) {
     try {
       final v = jsonDecode(s);

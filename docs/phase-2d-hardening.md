@@ -50,4 +50,19 @@ Fechar gaps de **ownership do Suwayomi**, **proxy de mídia/SSRF**, **pareamento
 powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 ```
 
-Inclui testes `yomu_ai` e `node apps/yomu_mobile_pwa/test_preload_logic.mjs`.
+Inclui testes `yomu_ai`, preload e `node apps/yomu_mobile_pwa/test_reader_races.mjs`.
+
+## 2D.1 — confiabilidade
+
+- Stop incompleto **preserva** `suwayomi-instance.json`
+- Ownership: `-Dyomu.runId` + `-Dyomu.startedAt` + jar absoluto + java + rootDir + porta
+- Identity save atômico (tmp + rename)
+- Rate limit **por IP** (sem lockout global de outros devices)
+- Sem confiança em `X-Forwarded-For`
+- Proxy loopback **recusa redirects**
+- PWA: generation ID, inflight map, progresso com `chapterId` capturado
+
+### PWA e HTTP
+
+A PWA em **HTTP** é **somente para LAN confiável** (opt-in + pairing).  
+**HTTPS / Service Worker / A2HS de produção** ficam para a fase PWA final.

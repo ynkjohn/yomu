@@ -9,19 +9,18 @@
 | 1.5 — isolamento Suwayomi | ✅ |
 | PWA iPhone mínima | ✅ |
 | Maya mínima | ✅ |
-| **2D — hardening lifecycle / LAN / Maya** | ✅ código |
+| 2D — hardening lifecycle / LAN / Maya | ✅ |
+| **2D.1 — reliability (races / ownership / SSRF)** | ✅ código |
 
 ## Phases
 
 | Fase | Estado |
 |------|--------|
-| 2B UI mínima | ✅ |
-| 2C library / progress / downloads | ✅ |
-| PWA auth + LAN + media proxy | ✅ |
-| Maya mínima | ✅ |
-| **2D hardening** | ✅ |
-| Source Builder | bloqueado (não iniciar ainda) |
-| Design final / SQLite Drift / histórico / settings | bloqueados |
+| 2B–2C leitura + library | ✅ |
+| PWA + Maya | ✅ |
+| 2D / 2D.1 hardening | ✅ |
+| Source Builder | bloqueado |
+| Design / SQLite / histórico / settings | bloqueados |
 
 ## Validação
 
@@ -29,9 +28,8 @@
 powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 ```
 
-## Limitações restantes (não bloqueantes 2D)
+## Limitações restantes
 
-- Probe de ownership depende de PowerShell/CIM no Windows (falha → “unverifiable”, não mata)
-- External media fetch ainda carrega body em memória (cap 25 MB)
-- PWA sem Service Worker / HTTPS prod
-- Orphan stop exige command line legível
+- Ownership via PowerShell/CIM (command line ilegível → não mata)
+- DNS rebinding TOCTOU residual entre resolve e TCP connect
+- PWA HTTP só em LAN confiável (HTTPS na fase PWA final)

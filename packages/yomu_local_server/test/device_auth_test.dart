@@ -23,37 +23,37 @@ void main() {
     expect(store.authenticate(s.session!.token), isNull);
   });
 
-  test('rate limit after max failed claims invalidates pairing', () async {
+  test('rate limit is per-IP only (does not lock other clients)', () async {
     final store = DeviceAuthStore(
       maxFailedAttempts: 5,
       failWindow: const Duration(minutes: 10),
     );
-    store.startPairing();
+    final pairing = store.startPairing();
+
     for (var i = 0; i < 5; i++) {
-      final r = await store.claimPairing(
+      await store.claimPairing(
         code: '000000',
         deviceName: 'X',
         clientKey: '10.0.0.5',
       );
-      if (i < 4) {
-        expect(r.result, PairingClaimResult.invalidOrExpired);
-      }
     }
-    expect(store.isRateLimited, isTrue);
-    expect(store.activePairing, isNull);
+    expect(store.isRateLimitedFor('10.0.0.5'), isTrue);
+    expect(store.activePairing?.code, pairing.code,
+        reason: 'pairing stays active for other IPs');
 
     final blocked = await store.claimPairing(
-      code: '123456',
-      deviceName: 'X',
+      code: pairing.code,
+      deviceName: 'Attacker',
       clientKey: '10.0.0.5',
     );
     expect(blocked.result, PairingClaimResult.rateLimited);
-    expect(blocked.retryAfterSeconds, isNotNull);
 
-    // New code from desktop clears rate limit.
-    final p = store.startPairing();
-    expect(store.isRateLimited, isFalse);
-    final ok = await store.claimPairing(code: p.code, deviceName: 'Phone');
+    // Different IP can still claim the same active code.
+    final ok = await store.claimPairing(
+      code: pairing.code,
+      deviceName: 'Phone',
+      clientKey: '10.0.0.9',
+    );
     expect(ok.result, PairingClaimResult.success);
   });
 }

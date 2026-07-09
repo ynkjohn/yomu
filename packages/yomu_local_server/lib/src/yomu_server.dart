@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart';
@@ -370,11 +371,8 @@ class YomuServer {
     };
   }
 
+  /// Client key for rate limits. Direct local server — never trust X-Forwarded-For.
   String _clientKey(Request request) {
-    final xff = request.headers['x-forwarded-for'];
-    if (xff != null && xff.isNotEmpty) {
-      return xff.split(',').first.trim();
-    }
     final conn = request.context['shelf.io.connection_info'];
     if (conn is HttpConnectionInfo) {
       return conn.remoteAddress.address;
@@ -468,16 +466,40 @@ class YomuServer {
     if (!_isLoopbackUri(uri)) {
       return _json({'error': 'upstream_not_loopback'}, status: 500);
     }
-    final res =
-        await _http.get(uri).timeout(const Duration(seconds: 60));
-    return Response(
-      res.statusCode,
-      body: res.bodyBytes,
-      headers: {
-        'content-type': res.headers['content-type'] ?? 'application/octet-stream',
-        'cache-control': 'private, max-age=3600',
-      },
-    );
+    // No automatic redirects (package:http follows them by default).
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final req = await client.getUrl(uri).timeout(const Duration(seconds: 30));
+      req.followRedirects = false;
+      final res = await req.close().timeout(const Duration(seconds: 60));
+      if (res.isRedirect ||
+          res.statusCode == 301 ||
+          res.statusCode == 302 ||
+          res.statusCode == 303 ||
+          res.statusCode == 307 ||
+          res.statusCode == 308) {
+        await res.drain<void>();
+        return _json({'error': 'upstream_redirect_refused'}, status: 502);
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in res) {
+        builder.add(chunk);
+        if (builder.length > 40 * 1024 * 1024) {
+          return _json({'error': 'upstream_body_too_large'}, status: 502);
+        }
+      }
+      final ct = res.headers.contentType?.mimeType ?? 'application/octet-stream';
+      return Response(
+        res.statusCode,
+        body: builder.takeBytes(),
+        headers: {
+          'content-type': ct,
+          'cache-control': 'private, max-age=3600',
+        },
+      );
+    } finally {
+      client.close(force: true);
+    }
   }
 
   bool _isLoopbackUri(Uri uri) {

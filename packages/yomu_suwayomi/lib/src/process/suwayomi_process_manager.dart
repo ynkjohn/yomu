@@ -207,16 +207,25 @@ server.authMode = NONE
     await paths.serverConf.writeAsString(conf);
   }
 
-  List<String> buildJavaArgs(File jar) {
+  /// JVM args: ownership markers + server props **before** `-jar`.
+  List<String> buildJavaArgs(
+    File jar, {
+    required String runId,
+    required DateTime startedAt,
+  }) {
     final root = _normalizedRootPath(managedRootDir);
+    final jarAbs = jar.absolute.path;
+    final started = startedAt.toUtc().toIso8601String();
     return [
+      '-D$kYomuRunIdProperty=$runId',
+      '-D$kYomuStartedAtProperty=$started',
       '-D$kSuwayomiRootDirProperty=$root',
       '-Dsuwayomi.tachidesk.config.server.ip=$host',
       '-Dsuwayomi.tachidesk.config.server.port=$port',
       '-Dsuwayomi.tachidesk.config.server.systemTrayEnabled=false',
       '-Dsuwayomi.tachidesk.config.server.initialOpenInBrowserEnabled=false',
       '-jar',
-      jar.path,
+      jarAbs,
     ];
   }
 
@@ -299,10 +308,11 @@ server.authMode = NONE
     await writeManagedConfig();
 
     _logSink = paths.processLog.openWrite(mode: FileMode.append);
-    final args = buildJavaArgs(jar);
     final runId = _newRunId();
+    final startedAt = DateTime.now().toUtc();
+    final args = buildJavaArgs(jar, runId: runId, startedAt: startedAt);
     _logSink!.writeln(
-      '\n--- start ${DateTime.now().toIso8601String()} '
+      '\n--- start ${startedAt.toIso8601String()} '
       'runId=$runId java=${java.javaExecutable} ---\n'
       'rootDir=$managedRootDir\n'
       'args=${args.join(' ')}',
@@ -326,7 +336,7 @@ server.authMode = NONE
     _identity = ManagedInstanceIdentity(
       runId: runId,
       pid: pid,
-      startedAt: DateTime.now(),
+      startedAt: startedAt,
       javaExecutable: java.javaExecutable,
       jarPath: jar.absolute.path,
       rootDir: managedRootDir,
@@ -434,12 +444,13 @@ server.authMode = NONE
         final freed = await _waitPortAndHealthDown(
           const Duration(seconds: 20),
         );
+        if (!freed) {
+          // Keep identity for retry/diagnosis.
+          return 'Órfão Yomu encerrado, mas a porta $port ainda responde. '
+              'Identidade preservada. Aguarde e tente de novo.';
+        }
         await ManagedInstanceIdentity.clear(identityFile);
         _identity = null;
-        if (!freed) {
-          return 'Órfão Yomu encerrado, mas a porta $port ainda responde. '
-              'Aguarde e tente de novo.';
-        }
         return null;
       }
       if (check.verdict == OwnershipVerdict.dead && listenerPid == null && !healthy) {
@@ -605,21 +616,24 @@ server.authMode = NONE
     final down = await _waitPortAndHealthDown(const Duration(seconds: 15));
     await _logSink?.close();
     _logSink = null;
-    await ManagedInstanceIdentity.clear(identityFile);
-    _identity = null;
 
     if (!down && expectPortFree) {
+      // Preserve identity file for retry/diagnosis — do NOT clear.
       _emit(
         SuwayomiStatus(
           state: SuwayomiProcessState.unhealthy,
           message:
               'Stop incompleto: a porta $port ou o health ainda respondem. '
-              'Estado não marcado como stopped.',
+              'Identidade preservada para retry. Estado não marcado como stopped.',
           baseUrl: baseUrl,
+          pid: _identity?.pid,
         ),
       );
       return;
     }
+
+    await ManagedInstanceIdentity.clear(identityFile);
+    _identity = null;
 
     _emit(
       const SuwayomiStatus(

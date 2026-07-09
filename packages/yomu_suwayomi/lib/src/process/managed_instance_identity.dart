@@ -24,7 +24,7 @@ class ManagedInstanceIdentity {
   Map<String, dynamic> toJson() => {
         'runId': runId,
         'pid': pid,
-        'startedAt': startedAt.toIso8601String(),
+        'startedAt': startedAt.toUtc().toIso8601String(),
         'javaExecutable': javaExecutable,
         'jarPath': jarPath,
         'rootDir': rootDir,
@@ -43,9 +43,15 @@ class ManagedInstanceIdentity {
     );
   }
 
+  /// Atomic write: temp file + rename (survives crash mid-write).
   Future<void> save(File file) async {
     await file.parent.create(recursive: true);
-    await file.writeAsString(jsonEncode(toJson()));
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(jsonEncode(toJson()), flush: true);
+    if (file.existsSync()) {
+      await file.delete();
+    }
+    await tmp.rename(file.path);
   }
 
   static Future<ManagedInstanceIdentity?> load(File file) async {
@@ -62,6 +68,10 @@ class ManagedInstanceIdentity {
   static Future<void> clear(File file) async {
     if (file.existsSync()) {
       await file.delete();
+    }
+    final tmp = File('${file.path}.tmp');
+    if (tmp.existsSync()) {
+      await tmp.delete();
     }
   }
 }

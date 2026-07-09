@@ -251,14 +251,19 @@
   document.getElementById('reader-close').addEventListener('click', closeReader);
   document.getElementById('reader-mark-read').addEventListener('click', () => {
     if (!state.reader) return;
-    saveProgress(state.reader.chapterId, state.reader.pageCount - 1, true);
+    const r = state.reader;
+    saveProgress(r.chapterId, r.pageCount - 1, true, r.gen);
   });
 
-  // Phase 2D: limited preload window + blob lifecycle
+  // Phase 2D/2D.1: limited preload + session generation + in-flight map
   const PRELOAD_AHEAD = 2;
   const PRELOAD_BEHIND = 1;
-  const blobByPage = new Map(); // index -> blob URL
+  let readerGen = 0; // incremented on every open/close
+  let blobByPage = new Map(); // index -> blob URL (for active gen only)
+  let inflightPages = new Map(); // index -> Promise
+  let progressTimer = null;
   let progressError = '';
+  let activeScrollHandler = null;
 
   function setToken(token) {
     state.token = token || '';
@@ -424,6 +429,13 @@
     render();
   }
 
+  function clearProgressTimer() {
+    if (progressTimer != null) {
+      clearTimeout(progressTimer);
+      progressTimer = null;
+    }
+  }
+
   function revokeBlob(index) {
     const u = blobByPage.get(index);
     if (u) {
@@ -435,39 +447,56 @@
   function revokeAllBlobs() {
     for (const u of blobByPage.values()) URL.revokeObjectURL(u);
     blobByPage.clear();
+    inflightPages.clear();
   }
 
-  async function ensurePageLoaded(index) {
+  async function ensurePageLoaded(index, gen) {
     const r = state.reader;
-    if (!r || index < 0 || index >= r.pages.length) return;
+    if (!r || r.gen !== gen) return;
+    if (index < 0 || index >= r.pages.length) return;
     if (blobByPage.has(index)) {
       const img = readerPages.querySelector('[data-page="' + index + '"] img');
       if (img && !img.src) img.src = blobByPage.get(index);
       return;
     }
+    if (inflightPages.has(index)) {
+      await inflightPages.get(index);
+      return;
+    }
     const wrap = readerPages.querySelector('[data-page="' + index + '"]');
     if (!wrap) return;
     const img = wrap.querySelector('img');
-    try {
-      const url = await authBlobUrl(r.pages[index].url);
-      blobByPage.set(index, url);
-      if (img) img.src = url;
-    } catch (err) {
-      if (img) {
-        img.alt = 'Falha pág. ' + (index + 1);
-        img.style.minHeight = '80px';
-        img.style.background = '#331';
+    const pageUrl = r.pages[index].url;
+    const work = (async () => {
+      try {
+        const url = await authBlobUrl(pageUrl);
+        if (!state.reader || state.reader.gen !== gen) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        blobByPage.set(index, url);
+        if (img) img.src = url;
+      } catch (err) {
+        if (!state.reader || state.reader.gen !== gen) return;
+        if (img) {
+          img.alt = 'Falha pág. ' + (index + 1);
+          img.style.minHeight = '80px';
+          img.style.background = '#331';
+        }
+      } finally {
+        inflightPages.delete(index);
       }
-    }
+    })();
+    inflightPages.set(index, work);
+    await work;
   }
 
-  function syncPreloadWindow(center) {
+  function syncPreloadWindow(center, gen) {
     const r = state.reader;
-    if (!r) return;
+    if (!r || r.gen !== gen) return;
     const n = r.pages.length;
     const lo = Math.max(0, center - PRELOAD_BEHIND);
     const hi = Math.min(n - 1, center + PRELOAD_AHEAD);
-    // Revoke outside window
     for (const idx of Array.from(blobByPage.keys())) {
       if (idx < lo || idx > hi) {
         const img = readerPages.querySelector('[data-page="' + idx + '"] img');
@@ -476,11 +505,12 @@
       }
     }
     for (let i = lo; i <= hi; i++) {
-      ensurePageLoaded(i);
+      ensurePageLoaded(i, gen);
     }
   }
 
-  function updateProgressUi(current, total) {
+  function updateProgressUi(current, total, chapterId, gen) {
+    if (!state.reader || state.reader.gen !== gen) return;
     let t = 'Pág. ' + (current + 1) + ' / ' + total;
     if (progressError) t += ' · progresso falhou';
     readerProgress.innerHTML = '';
@@ -492,18 +522,21 @@
       btn.style.marginLeft = '8px';
       btn.textContent = 'Retry';
       btn.onclick = () => {
-        if (!state.reader) return;
-        saveProgress(
-          state.reader.chapterId,
-          current,
-          current >= total - 1
-        );
+        saveProgress(chapterId, current, current >= total - 1, gen);
       };
       readerProgress.appendChild(btn);
     }
   }
 
   async function openChapter(chapter) {
+    // Bump generation — invalidates in-flight work from previous chapter.
+    readerGen += 1;
+    const gen = readerGen;
+    clearProgressTimer();
+    if (activeScrollHandler) {
+      readerPages.removeEventListener('scroll', activeScrollHandler);
+      activeScrollHandler = null;
+    }
     state.error = '';
     progressError = '';
     revokeAllBlobs();
@@ -512,11 +545,16 @@
     readerProgress.textContent = 'Carregando…';
     readerEl.classList.add('open');
     readerEl.setAttribute('aria-hidden', 'false');
+
+    const chapterId = chapter.id;
     try {
-      const data = await api('/api/v1/chapters/' + chapter.id + '/pages');
+      const data = await api('/api/v1/chapters/' + chapterId + '/pages');
+      if (gen !== readerGen) return; // superseded
       const pages = data.pages || [];
+      const resolvedChapterId = data.chapterId || chapterId;
       state.reader = {
-        chapterId: data.chapterId || chapter.id,
+        gen: gen,
+        chapterId: resolvedChapterId,
         title: data.chapterName || chapter.name,
         pages,
         pageCount: data.pageCount || pages.length,
@@ -532,7 +570,6 @@
       );
       state.reader.currentPage = start;
 
-      // Placeholders only — fetch limited window around resume page.
       for (let i = 0; i < pages.length; i++) {
         const wrap = document.createElement('div');
         wrap.dataset.page = String(i);
@@ -543,40 +580,48 @@
         readerPages.appendChild(wrap);
       }
 
-      syncPreloadWindow(start);
+      syncPreloadWindow(start, gen);
 
       requestAnimationFrame(() => {
+        if (gen !== readerGen) return;
         const target = readerPages.querySelector('[data-page="' + start + '"]');
         if (target) target.scrollIntoView({ block: 'start' });
       });
 
       let lastSaved = state.reader.lastPageRead || 0;
-      let saveTimer = null;
       const onScroll = () => {
+        if (!state.reader || state.reader.gen !== gen) return;
         const kids = Array.from(readerPages.children);
         let current = 0;
         const top = readerPages.scrollTop + 40;
         for (const el of kids) {
           if (el.offsetTop <= top) current = Number(el.dataset.page || 0);
         }
-        if (state.reader) state.reader.currentPage = current;
-        updateProgressUi(current, pages.length);
-        syncPreloadWindow(current);
+        state.reader.currentPage = current;
+        updateProgressUi(current, pages.length, resolvedChapterId, gen);
+        syncPreloadWindow(current, gen);
         if (current !== lastSaved) {
           lastSaved = current;
-          clearTimeout(saveTimer);
-          saveTimer = setTimeout(() => {
+          clearProgressTimer();
+          const capturedChapterId = resolvedChapterId;
+          const capturedPage = current;
+          const capturedTotal = pages.length;
+          const capturedGen = gen;
+          progressTimer = setTimeout(() => {
             saveProgress(
-              state.reader.chapterId,
-              current,
-              current >= pages.length - 1
+              capturedChapterId,
+              capturedPage,
+              capturedPage >= capturedTotal - 1,
+              capturedGen
             );
           }, 600);
         }
       };
+      activeScrollHandler = onScroll;
       readerPages.onscroll = onScroll;
       onScroll();
     } catch (e) {
+      if (gen !== readerGen) return;
       readerPages.innerHTML =
         '<p class="empty" style="color:var(--danger)">' +
         escapeHtml(String(e.message || e)) +
@@ -585,36 +630,48 @@
     }
   }
 
-  async function saveProgress(chapterId, lastPageRead, isRead) {
+  async function saveProgress(chapterId, lastPageRead, isRead, gen) {
     try {
       await api('/api/v1/chapters/' + chapterId + '/progress', {
         method: 'PUT',
         json: { lastPageRead: lastPageRead, isRead: !!isRead },
       });
+      if (gen != null && gen !== readerGen) return;
       progressError = '';
       const ch = state.chapters.find((c) => c.id === chapterId);
       if (ch) {
         ch.lastPageRead = lastPageRead;
         ch.isRead = !!isRead || ch.isRead;
       }
-      if (state.reader) {
+      if (state.reader && (gen == null || state.reader.gen === gen)) {
         updateProgressUi(
           state.reader.currentPage || lastPageRead,
-          state.reader.pageCount
+          state.reader.pageCount,
+          chapterId,
+          state.reader.gen
         );
       }
     } catch (e) {
+      if (gen != null && gen !== readerGen) return;
       progressError = String(e.message || e);
-      if (state.reader) {
+      if (state.reader && (gen == null || state.reader.gen === gen)) {
         updateProgressUi(
           state.reader.currentPage || lastPageRead,
-          state.reader.pageCount
+          state.reader.pageCount,
+          chapterId,
+          state.reader.gen
         );
       }
     }
   }
 
   function closeReader() {
+    readerGen += 1; // invalidate in-flight
+    clearProgressTimer();
+    if (activeScrollHandler) {
+      readerPages.removeEventListener('scroll', activeScrollHandler);
+      activeScrollHandler = null;
+    }
     revokeAllBlobs();
     readerPages.innerHTML = '';
     readerPages.onscroll = null;

@@ -78,9 +78,9 @@ class DeviceAuthStore {
   PairingCode? _activePairing;
   final _rng = Random.secure();
 
-  /// Failed claim timestamps keyed by client IP (and a global bucket).
+  /// Failed claim timestamps keyed by client IP only (no global lockout).
   final _failTimestamps = <String, List<DateTime>>{};
-  DateTime? _rateLimitedUntil;
+  final _rateLimitedUntilByKey = <String, DateTime>{};
 
   List<DeviceSession> get sessions =>
       _sessions.values.toList()
@@ -91,13 +91,13 @@ class DeviceAuthStore {
           ? _activePairing
           : null;
 
-  bool get isRateLimited {
-    final until = _rateLimitedUntil;
+  bool isRateLimitedFor(String clientKey) {
+    final until = _rateLimitedUntilByKey[clientKey];
     return until != null && DateTime.now().isBefore(until);
   }
 
-  int? get rateLimitRetryAfterSeconds {
-    final until = _rateLimitedUntil;
+  int? rateLimitRetryAfterSecondsFor(String clientKey) {
+    final until = _rateLimitedUntilByKey[clientKey];
     if (until == null) return null;
     final s = until.difference(DateTime.now()).inSeconds;
     return s > 0 ? s : null;
@@ -140,8 +140,9 @@ class DeviceAuthStore {
       code: code,
       expiresAt: DateTime.now().add(ttl),
     );
+    // New code clears all rate-limit state (desktop operator action).
     _failTimestamps.clear();
-    _rateLimitedUntil = null;
+    _rateLimitedUntilByKey.clear();
     return _activePairing!;
   }
 
@@ -151,43 +152,45 @@ class DeviceAuthStore {
 
   /// Claims pairing code and returns a bearer token.
   ///
-  /// Never log [code] or resulting token. Rate-limited by [clientKey] (IP).
+  /// Never log [code] or resulting token. Rate-limited **per clientKey (IP)** only —
+  /// one misbehaving LAN host cannot lock out other devices.
   Future<PairingClaimOutcome> claimPairing({
     required String code,
     required String deviceName,
     String clientKey = 'unknown',
   }) async {
-    if (isRateLimited) {
+    if (isRateLimitedFor(clientKey)) {
       return PairingClaimOutcome(
         result: PairingClaimResult.rateLimited,
-        retryAfterSeconds: rateLimitRetryAfterSeconds,
+        retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey),
       );
     }
 
     final p = _activePairing;
     if (p == null || p.isExpired) {
       await _registerFailure(clientKey);
-      if (isRateLimited) {
+      if (isRateLimitedFor(clientKey)) {
         return PairingClaimOutcome(
           result: PairingClaimResult.rateLimited,
-          retryAfterSeconds: rateLimitRetryAfterSeconds,
+          retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey),
         );
       }
       return const PairingClaimOutcome(result: PairingClaimResult.invalidOrExpired);
     }
     if (p.code != code.trim()) {
       await _registerFailure(clientKey);
-      if (isRateLimited) {
+      if (isRateLimitedFor(clientKey)) {
         return PairingClaimOutcome(
           result: PairingClaimResult.rateLimited,
-          retryAfterSeconds: rateLimitRetryAfterSeconds,
+          retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey),
         );
       }
       return const PairingClaimOutcome(result: PairingClaimResult.invalidOrExpired);
     }
 
     _activePairing = null;
-    _failTimestamps.clear();
+    _failTimestamps.remove(clientKey);
+    _rateLimitedUntilByKey.remove(clientKey);
     final token = _randomToken();
     final session = DeviceSession(
       token: token,
@@ -206,21 +209,13 @@ class DeviceAuthStore {
   Future<void> _registerFailure(String clientKey) async {
     final now = DateTime.now();
     final cutoff = now.subtract(failWindow);
-    void add(String key) {
-      final list = _failTimestamps.putIfAbsent(key, () => <DateTime>[]);
-      list.removeWhere((t) => t.isBefore(cutoff));
-      list.add(now);
-    }
+    final list = _failTimestamps.putIfAbsent(clientKey, () => <DateTime>[]);
+    list.removeWhere((t) => t.isBefore(cutoff));
+    list.add(now);
 
-    add(clientKey);
-    add('__global__');
-
-    final ipFails = _failTimestamps[clientKey]?.length ?? 0;
-    final globalFails = _failTimestamps['__global__']?.length ?? 0;
-    if (ipFails >= maxFailedAttempts || globalFails >= maxFailedAttempts) {
-      _rateLimitedUntil = now.add(failWindow);
-      // Invalidate active pairing — desktop must mint a new code.
-      _activePairing = null;
+    if (list.length >= maxFailedAttempts) {
+      _rateLimitedUntilByKey[clientKey] = now.add(failWindow);
+      // Do not cancel pairing globally — other IPs may still claim.
     }
   }
 
