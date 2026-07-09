@@ -281,14 +281,18 @@ server.authMode = NONE
     if (java == null) {
       final msg =
           'Java ${manifest.suwayomi.minJre}+ não encontrado. '
-          'Instale um JRE ${manifest.suwayomi.minJre}+ ou use o runtime embutido do Yomu.';
+          'Defina YOMU_JAVA_HOME ou JAVA_HOME para um JRE ${manifest.suwayomi.minJre}+, '
+          'ou mantenha packages/yomu_suwayomi/vendor/jre21 no monorepo.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
       return Err(msg);
     }
     if (java.versionMajor < manifest.suwayomi.minJre) {
       final msg =
           'Java ${java.versionMajor} encontrado (${java.source}), '
-          'mas Suwayomi exige ${manifest.suwayomi.minJre}+.';
+          'mas Suwayomi exige ${manifest.suwayomi.minJre}+. '
+          'Seu JAVA_HOME aponta para um JDK antigo; o Yomu tenta o JRE 21 em '
+          'vendor/jre21 (ou YOMU_JAVA_HOME). Feche o app, confira se '
+          r'packages\yomu_suwayomi\vendor\jre21\bin\java.exe existe, e reinicie.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
       return Err(msg);
     }
