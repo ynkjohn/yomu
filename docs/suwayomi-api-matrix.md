@@ -28,8 +28,10 @@ Tools: `tool/smoke_suwayomi.dart`, `tool/probe_store2.dart`, `tool/probe_suwayom
 | Manga details | `supported` | `query manga(id: Int!)` | Confirmed E2E Gate #1 | — |
 | Chapters | `supported` | `mutation fetchMangaAndChapters` then `manga { chapters { nodes { id name … } totalCount } }` | Confirmed: 3 chapters on MangaDex EN work; some titles return "No chapters found" | Skip empty titles; try next search hit |
 | Pages | `supported` | `mutation fetchChapterPages` → list of `/api/v1/manga/{m}/chapter/{c}/page/{i}` | Confirmed: 93 page URLs; GET page/0 → `image/jpeg` ~466KB | — |
-| Progress get/set | `supported` (schema) | `mutation updateChapter(input: { id, patch: { lastPageRead, isRead } })` | Schema confirmed; not required for Gate #1 pages criterion | — |
-| Downloads | `supported` | `query downloadStatus`; mutations `enqueueChapterDownload(s)`, pause/clear family | — | — |
+| Progress get/set | `supported` | `mutation updateChapter(input: { id, patch: { lastPageRead, isRead } })`; `query chapter(id)` | Used in Phase 2C reader resume/save | — |
+| Library list | `supported` | `query mangas(condition: { inLibrary: true })` | Fallback: list all + filter | — |
+| Library add/remove | `supported` | `mutation updateManga(input: { id, patch: { inLibrary } })` | Phase 2C detail screen | — |
+| Downloads | `supported` | `query downloadStatus`; `enqueueChapterDownloads` / dequeue / clear / start / stop | Phase 2C downloads UI | — |
 
 ## Confirmed GraphQL patterns (v2.3.2238)
 

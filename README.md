@@ -84,7 +84,7 @@ Isso roda: `flutter analyze` (raiz), testes (core, suwayomi, local_server, deskt
 | Gate | Estado |
 |------|--------|
 | Gate funcional #1 (páginas reais) | ✅ |
-| Hard gate (biblioteca + salvar/retomar progresso + downloads) | ❌ pendente |
+| Hard gate (biblioteca + salvar/retomar progresso + downloads) | ✅ (Fase 2C) |
 | PWA LAN real | bloqueada (stub loopback-only) |
 | Maya / Source Builder | bloqueados |
 

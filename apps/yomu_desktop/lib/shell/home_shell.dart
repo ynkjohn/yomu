@@ -11,8 +11,10 @@ import 'package:yomu_local_server/yomu_local_server.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
+import '../screens/downloads_screen.dart';
 import '../screens/explore_screen.dart';
 import '../screens/extensions_screen.dart';
+import '../screens/library_screen.dart';
 import '../screens/placeholder_screen.dart';
 import '../screens/server_screen.dart';
 
@@ -320,17 +322,21 @@ class _HomeShellState extends State<HomeShell> {
           api: _api,
           engineReady: _engineReady,
         ),
-      'library' => const PlaceholderScreen(
-          title: 'Biblioteca',
-          message: 'Próxima fase: biblioteca/progresso/downloads do Suwayomi.',
+      'library' => LibraryScreen(
+          api: _api,
+          engineReady: _engineReady,
+        ),
+      'downloads' => DownloadsScreen(
+          api: _api,
+          engineReady: _engineReady,
         ),
       'source_builder' => const PlaceholderScreen(
           title: 'Criador de fontes',
-          message: 'Bloqueado — depois de PWA e Maya na sequência planejada.',
+          message: 'Bloqueado — após hard gate e PWA/Maya na sequência.',
         ),
       'maya' => const PlaceholderScreen(
           title: 'Maya',
-          message: 'Bloqueado — sequência: UI mínima → biblioteca → PWA → Maya.',
+          message: 'Bloqueado — após hard gate (biblioteca + progresso + downloads).',
         ),
       _ => PlaceholderScreen(
           title: _nav.firstWhere((e) => e.id == _selected).label,

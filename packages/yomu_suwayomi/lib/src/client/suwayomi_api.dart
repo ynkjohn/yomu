@@ -247,7 +247,18 @@ class SuwayomiApi {
             fetchChapters: true
           }) {
             manga { id title }
-            chapters { id name chapterNumber pageCount sourceOrder scanlator }
+            chapters {
+              id
+              name
+              chapterNumber
+              pageCount
+              sourceOrder
+              scanlator
+              lastPageRead
+              isRead
+              isDownloaded
+              mangaId
+            }
           }
         }
         ''',
@@ -275,7 +286,18 @@ class SuwayomiApi {
       query($id: Int!) {
         manga(id: $id) {
           chapters {
-            nodes { id name chapterNumber pageCount sourceOrder scanlator }
+            nodes {
+              id
+              name
+              chapterNumber
+              pageCount
+              sourceOrder
+              scanlator
+              lastPageRead
+              isRead
+              isDownloaded
+              mangaId
+            }
             totalCount
           }
         }
@@ -298,7 +320,7 @@ class SuwayomiApi {
       mutation($id: Int!) {
         fetchChapterPages(input: { chapterId: $id }) {
           pages
-          chapter { id name pageCount }
+          chapter { id name pageCount lastPageRead isRead }
         }
       }
       ''',
@@ -328,5 +350,256 @@ class SuwayomiApi {
           : pages.length,
       chapterName: chapter?['name']?.toString(),
     );
+  }
+
+  // --- Library / progress / downloads (Phase 2C) ---
+
+  Future<List<MangaSummary>> listLibrary() async {
+    // Prefer condition filter used by modern Suwayomi GraphQL.
+    try {
+      final body = await client.graphql(r'''
+        query {
+          mangas(condition: { inLibrary: true }) {
+            nodes {
+              id
+              title
+              thumbnailUrl
+              inLibrary
+              unreadCount
+              lastReadChapter {
+                id
+                name
+                lastPageRead
+                isRead
+                pageCount
+                chapterNumber
+              }
+            }
+            totalCount
+          }
+        }
+      ''');
+      final nodes =
+          (((body['data'] as Map?)?['mangas'] as Map?)?['nodes'] as List?) ??
+              [];
+      return nodes
+          .whereType<Map<dynamic, dynamic>>()
+          .map((e) => MangaSummary.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    } catch (_) {
+      // Fallback: list all mangas and filter client-side.
+      final body = await client.graphql(r'''
+        query {
+          mangas {
+            nodes {
+              id
+              title
+              thumbnailUrl
+              inLibrary
+              unreadCount
+              lastReadChapter {
+                id
+                name
+                lastPageRead
+                isRead
+                pageCount
+                chapterNumber
+              }
+            }
+          }
+        }
+      ''');
+      final nodes =
+          (((body['data'] as Map?)?['mangas'] as Map?)?['nodes'] as List?) ??
+              [];
+      return nodes
+          .whereType<Map<dynamic, dynamic>>()
+          .map((e) => MangaSummary.fromJson(Map<String, dynamic>.from(e)))
+          .where((m) => m.inLibrary)
+          .toList();
+    }
+  }
+
+  Future<MangaDetails> setInLibrary(int mangaId, bool inLibrary) async {
+    final body = await client.graphql(
+      r'''
+      mutation($id: Int!, $inLibrary: Boolean!) {
+        updateManga(input: { id: $id, patch: { inLibrary: $inLibrary } }) {
+          manga {
+            id
+            title
+            description
+            author
+            artist
+            status
+            thumbnailUrl
+            sourceId
+            inLibrary
+          }
+        }
+      }
+      ''',
+      variables: {'id': mangaId, 'inLibrary': inLibrary},
+    );
+    final manga =
+        ((body['data'] as Map?)?['updateManga'] as Map?)?['manga'] as Map?;
+    if (manga == null) {
+      throw StateError('updateManga returned null for $mangaId');
+    }
+    return MangaDetails.fromJson(Map<String, dynamic>.from(manga));
+  }
+
+  Future<ChapterInfo> updateChapterProgress({
+    required int chapterId,
+    required int lastPageRead,
+    bool? isRead,
+  }) async {
+    final body = await client.graphql(
+      r'''
+      mutation($id: Int!, $page: Int!, $isRead: Boolean) {
+        updateChapter(input: {
+          id: $id
+          patch: { lastPageRead: $page, isRead: $isRead }
+        }) {
+          chapter {
+            id
+            name
+            lastPageRead
+            isRead
+            isDownloaded
+            pageCount
+            chapterNumber
+            mangaId
+          }
+        }
+      }
+      ''',
+      variables: {
+        'id': chapterId,
+        'page': lastPageRead,
+        'isRead': isRead,
+      },
+    );
+    final ch =
+        ((body['data'] as Map?)?['updateChapter'] as Map?)?['chapter'] as Map?;
+    if (ch == null) {
+      throw StateError('updateChapter returned null for $chapterId');
+    }
+    return ChapterInfo.fromJson(Map<String, dynamic>.from(ch));
+  }
+
+  Future<ChapterInfo?> getChapter(int chapterId) async {
+    final body = await client.graphql(
+      r'''
+      query($id: Int!) {
+        chapter(id: $id) {
+          id
+          name
+          lastPageRead
+          isRead
+          isDownloaded
+          pageCount
+          chapterNumber
+          mangaId
+          scanlator
+          sourceOrder
+        }
+      }
+      ''',
+      variables: {'id': chapterId},
+    );
+    final ch = ((body['data'] as Map?)?['chapter'] as Map?);
+    if (ch == null) return null;
+    return ChapterInfo.fromJson(Map<String, dynamic>.from(ch));
+  }
+
+  Future<DownloadStatusInfo> getDownloadStatus() async {
+    final body = await client.graphql(r'''
+      query {
+        downloadStatus {
+          state
+          queue {
+            state
+            progress
+            chapter {
+              id
+              name
+              mangaId
+              isDownloaded
+              pageCount
+            }
+            manga {
+              id
+              title
+              thumbnailUrl
+              inLibrary
+            }
+          }
+        }
+      }
+    ''');
+    final raw = ((body['data'] as Map?)?['downloadStatus'] as Map?);
+    if (raw == null) {
+      return const DownloadStatusInfo(state: 'UNKNOWN', queue: []);
+    }
+    return DownloadStatusInfo.fromJson(Map<String, dynamic>.from(raw));
+  }
+
+  Future<void> enqueueChapterDownloads(List<int> chapterIds) async {
+    if (chapterIds.isEmpty) return;
+    await client.graphql(
+      r'''
+      mutation($ids: [Int!]!) {
+        enqueueChapterDownloads(input: { ids: $ids }) {
+          downloadStatus { state }
+        }
+      }
+      ''',
+      variables: {'ids': chapterIds},
+    );
+  }
+
+  Future<void> dequeueChapterDownloads(List<int> chapterIds) async {
+    if (chapterIds.isEmpty) return;
+    await client.graphql(
+      r'''
+      mutation($ids: [Int!]!) {
+        dequeueChapterDownloads(input: { ids: $ids }) {
+          downloadStatus { state }
+        }
+      }
+      ''',
+      variables: {'ids': chapterIds},
+    );
+  }
+
+  Future<void> clearDownloader() async {
+    await client.graphql(r'''
+      mutation {
+        clearDownloader {
+          downloadStatus { state }
+        }
+      }
+    ''');
+  }
+
+  Future<void> startDownloader() async {
+    await client.graphql(r'''
+      mutation {
+        startDownloader {
+          downloadStatus { state }
+        }
+      }
+    ''');
+  }
+
+  Future<void> stopDownloader() async {
+    await client.graphql(r'''
+      mutation {
+        stopDownloader {
+          downloadStatus { state }
+        }
+      }
+    ''');
   }
 }

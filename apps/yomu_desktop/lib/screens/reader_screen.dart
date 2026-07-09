@@ -1,9 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
-/// Minimal paged reader — real images from Suwayomi loopback.
+/// Minimal paged reader — real images + progress save/resume via Suwayomi.
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
     super.key,
@@ -31,6 +33,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int _index = 0;
   late ChapterInfo _chapter;
   final _focus = FocusNode();
+  Timer? _saveDebounce;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -41,6 +45,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   void dispose() {
+    _saveDebounce?.cancel();
+    // Best-effort flush progress on leave.
+    unawaited(_saveProgress(force: true));
     _focus.dispose();
     super.dispose();
   }
@@ -49,18 +56,31 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {
       _loading = true;
       _error = null;
-      _index = 0;
     });
     try {
+      // Refresh chapter progress from server for resume.
+      final remote = await widget.api.getChapter(_chapter.id);
+      if (remote != null) {
+        _chapter = remote;
+      }
       final result = await widget.api.fetchChapterPages(_chapter.id);
       if (!mounted) return;
+      var start = 0;
+      final last = _chapter.lastPageRead ?? 0;
+      if (result.pages.isNotEmpty && last > 0) {
+        start = last.clamp(0, result.pages.length - 1);
+      }
       setState(() {
         _pages = result.pages;
+        _index = start;
         _loading = false;
         if (_pages.isEmpty) {
           _error = 'Nenhuma página retornada para o capítulo ${_chapter.id}.';
         }
       });
+      if (_pages.isNotEmpty) {
+        unawaited(_saveProgress(force: true));
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -70,10 +90,44 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 400), () {
+      unawaited(_saveProgress());
+    });
+  }
+
+  Future<void> _saveProgress({bool force = false}) async {
+    if (_pages.isEmpty) return;
+    if (_saving && !force) return;
+    _saving = true;
+    try {
+      final lastPage = _index;
+      final isRead = _index >= _pages.length - 1;
+      final updated = await widget.api.updateChapterProgress(
+        chapterId: _chapter.id,
+        lastPageRead: lastPage,
+        isRead: isRead,
+      );
+      _chapter = updated;
+    } catch (e) {
+      // Non-fatal: show subtle error only if forced (leave/chapter end).
+      if (force && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Progresso não salvo: $e')),
+        );
+      }
+    } finally {
+      _saving = false;
+    }
+  }
+
   void _next() {
     if (_index < _pages.length - 1) {
       setState(() => _index++);
+      _scheduleSave();
     } else {
+      unawaited(_saveProgress(force: true));
       _openAdjacentChapter(1);
     }
   }
@@ -81,7 +135,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _prev() {
     if (_index > 0) {
       setState(() => _index--);
+      _scheduleSave();
     } else {
+      unawaited(_saveProgress(force: true));
       _openAdjacentChapter(-1);
     }
   }
@@ -130,7 +186,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
               Center(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('${_index + 1} / ${_pages.length}'),
+                  child: Text(
+                    '${_index + 1} / ${_pages.length}'
+                    '${(_chapter.lastPageRead ?? 0) > 0 ? ' · salvo' : ''}',
+                  ),
                 ),
               ),
             IconButton(

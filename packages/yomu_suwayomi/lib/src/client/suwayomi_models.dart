@@ -78,19 +78,32 @@ class MangaSummary {
     required this.title,
     this.thumbnailUrl,
     this.inLibrary = false,
+    this.unreadCount,
+    this.lastReadChapter,
   });
 
   final int id;
   final String title;
   final String? thumbnailUrl;
   final bool inLibrary;
+  final int? unreadCount;
+  final ChapterInfo? lastReadChapter;
 
   factory MangaSummary.fromJson(Map<String, dynamic> json) {
+    ChapterInfo? lastRead;
+    final raw = json['lastReadChapter'];
+    if (raw is Map) {
+      lastRead = ChapterInfo.fromJson(Map<String, dynamic>.from(raw));
+    }
     return MangaSummary(
       id: json['id'] is int ? json['id'] as int : int.parse('${json['id']}'),
       title: '${json['title'] ?? ''}',
       thumbnailUrl: json['thumbnailUrl']?.toString(),
       inLibrary: json['inLibrary'] == true,
+      unreadCount: json['unreadCount'] is int
+          ? json['unreadCount'] as int
+          : int.tryParse('${json['unreadCount']}'),
+      lastReadChapter: lastRead,
     );
   }
 }
@@ -141,6 +154,10 @@ class ChapterInfo {
     this.pageCount,
     this.sourceOrder,
     this.scanlator,
+    this.lastPageRead,
+    this.isRead = false,
+    this.isDownloaded = false,
+    this.mangaId,
   });
 
   final int id;
@@ -149,6 +166,18 @@ class ChapterInfo {
   final int? pageCount;
   final int? sourceOrder;
   final String? scanlator;
+  final int? lastPageRead;
+  final bool isRead;
+  final bool isDownloaded;
+  final int? mangaId;
+
+  /// 0-based page index for resume (clamped later by reader).
+  int get resumePageIndex {
+    final p = lastPageRead ?? 0;
+    if (p <= 0) return 0;
+    // Suwayomi lastPageRead is typically 0-based page index of last viewed.
+    return p;
+  }
 
   factory ChapterInfo.fromJson(Map<String, dynamic> json) {
     return ChapterInfo(
@@ -164,6 +193,92 @@ class ChapterInfo {
           ? json['sourceOrder'] as int
           : int.tryParse('${json['sourceOrder']}'),
       scanlator: json['scanlator']?.toString(),
+      lastPageRead: json['lastPageRead'] is int
+          ? json['lastPageRead'] as int
+          : int.tryParse('${json['lastPageRead']}'),
+      isRead: json['isRead'] == true,
+      isDownloaded: json['isDownloaded'] == true,
+      mangaId: json['mangaId'] is int
+          ? json['mangaId'] as int
+          : int.tryParse('${json['mangaId']}'),
+    );
+  }
+
+  ChapterInfo copyWith({
+    int? lastPageRead,
+    bool? isRead,
+    bool? isDownloaded,
+  }) {
+    return ChapterInfo(
+      id: id,
+      name: name,
+      chapterNumber: chapterNumber,
+      pageCount: pageCount,
+      sourceOrder: sourceOrder,
+      scanlator: scanlator,
+      lastPageRead: lastPageRead ?? this.lastPageRead,
+      isRead: isRead ?? this.isRead,
+      isDownloaded: isDownloaded ?? this.isDownloaded,
+      mangaId: mangaId,
+    );
+  }
+}
+
+class DownloadQueueItem {
+  const DownloadQueueItem({
+    required this.state,
+    this.progress,
+    this.chapter,
+    this.manga,
+  });
+
+  final String state;
+  final double? progress;
+  final ChapterInfo? chapter;
+  final MangaSummary? manga;
+
+  factory DownloadQueueItem.fromJson(Map<String, dynamic> json) {
+    ChapterInfo? ch;
+    MangaSummary? manga;
+    final rawCh = json['chapter'];
+    if (rawCh is Map) {
+      ch = ChapterInfo.fromJson(Map<String, dynamic>.from(rawCh));
+    }
+    final rawM = json['manga'];
+    if (rawM is Map) {
+      manga = MangaSummary.fromJson(Map<String, dynamic>.from(rawM));
+    }
+    return DownloadQueueItem(
+      state: '${json['state'] ?? ''}',
+      progress: json['progress'] is num
+          ? (json['progress'] as num).toDouble()
+          : double.tryParse('${json['progress']}'),
+      chapter: ch,
+      manga: manga,
+    );
+  }
+}
+
+class DownloadStatusInfo {
+  const DownloadStatusInfo({
+    required this.state,
+    required this.queue,
+  });
+
+  final String state;
+  final List<DownloadQueueItem> queue;
+
+  factory DownloadStatusInfo.fromJson(Map<String, dynamic> json) {
+    final q = json['queue'];
+    final list = <DownloadQueueItem>[];
+    if (q is List) {
+      for (final item in q.whereType<Map<dynamic, dynamic>>()) {
+        list.add(DownloadQueueItem.fromJson(Map<String, dynamic>.from(item)));
+      }
+    }
+    return DownloadStatusInfo(
+      state: '${json['state'] ?? ''}',
+      queue: list,
     );
   }
 }

@@ -2,56 +2,37 @@
 
 ## Gates
 
-### Gate funcional #1 — leitura ponta a ponta (probe) ✅
+### Gate funcional #1 — extensão → páginas ✅
 
-Extensão → busca → obra → capítulos → **páginas reais**.
+Probe + UI mínima de leitura.
 
-- Script: `tool/gate_functional_1.dart`
-- Evidence: `docs/functional-gate-1.md`
-- UI mínima (2B) cobre o mesmo fluxo no desktop
+### Hard gate — biblioteca + progresso + downloads ✅ (código 2C)
 
-### Hard gate — biblioteca + progresso + downloads ❌ pendente
+- Biblioteca Suwayomi (`inLibrary`)
+- Salvar/retomar `lastPageRead` no leitor
+- Fila de downloads (enqueue / status / clear)
 
-Ainda **não** completo:
-
-- Biblioteca como fonte de verdade de uso diário
-- **Salvar e retomar** progresso de leitura
-- Fila de downloads / offline
-
-O leitor abre páginas reais, mas **sem persistência/retomada de progresso** o hard gate permanece aberto.
+Validação manual: biblioteca → continuar → páginas; download na obra → aba Downloads.
 
 ### Gate 1.5 — isolamento Suwayomi ✅
 
-- Script: `tool/smoke_suwayomi.dart`
-- Loopback `127.0.0.1:14567`, data root gerenciado, sem patch AppData Tachidesk
+`127.0.0.1:14567`, data root gerenciado.
 
-## Phase 2B — UI mínima desktop ✅
+## Phases
 
-- Servidor / Extensões / Explorar / Detalhe / Leitor mínimo
-- Ver `docs/phase-2b-ui-minimum.md`
-
-## Foundation fix (pós-2B auditoria) ✅
-
-- Git base commit
-- Yomu HTTP **loopback-only** (`127.0.0.1:8787`), CORS fechado por padrão
-- Filtro de extensões local (sem re-fetch a cada tecla)
-- `tool/verify_workspace.ps1` + testes ampliados
-- Documentação de gates corrigida
-
-## Bloqueado até hard gate
-
-| Feature | Status |
-|---------|--------|
-| Biblioteca / progresso / downloads UI | Fase 2C+ |
-| PWA iPhone real (pareamento/LAN) | Bloqueada |
-| Maya | Bloqueada |
-| Source Builder | Bloqueado |
-| Design final | Bloqueado |
+| Fase | Estado |
+|------|--------|
+| 2B UI mínima leitura | ✅ |
+| Foundation fix (git, loopback HTTP, testes) | ✅ |
+| **2C biblioteca / progresso / downloads** | ✅ código |
+| PWA iPhone real | bloqueada |
+| Maya | bloqueada |
+| Source Builder | bloqueado |
+| Design final | bloqueado |
 
 ## PWA stub
 
-`apps/yomu_mobile_pwa` é **somente desenvolvimento** (health stub).  
-**Não** empacotar / release. LAN e CORS abertos **não** estão habilitados por padrão.
+Loopback-only dev stub — **não** release. LAN exige opt-in + auth futuros.
 
 ## Validação
 

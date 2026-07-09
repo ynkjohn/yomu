@@ -20,6 +20,7 @@ class MangaDetailScreen extends StatefulWidget {
 
 class _MangaDetailScreenState extends State<MangaDetailScreen> {
   bool _loading = true;
+  bool _busy = false;
   String? _error;
   MangaDetails? _manga;
   List<ChapterInfo> _chapters = [];
@@ -56,6 +57,78 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     }
   }
 
+  Future<void> _toggleLibrary() async {
+    final m = _manga;
+    if (m == null) return;
+    setState(() => _busy = true);
+    try {
+      final updated = await widget.api.setInLibrary(m.id, !m.inLibrary);
+      if (!mounted) return;
+      setState(() {
+        _manga = updated;
+        _busy = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            updated.inLibrary
+                ? 'Adicionado à biblioteca'
+                : 'Removido da biblioteca',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Biblioteca: $e')),
+      );
+    }
+  }
+
+  Future<void> _downloadChapter(ChapterInfo ch) async {
+    setState(() => _busy = true);
+    try {
+      await widget.api.enqueueChapterDownloads([ch.id]);
+      await widget.api.startDownloader();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download enfileirado: ${ch.name}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _downloadAll() async {
+    if (_chapters.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await widget.api.enqueueChapterDownloads(
+        _chapters.map((c) => c.id).toList(),
+      );
+      await widget.api.startDownloader();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${_chapters.length} capítulos enfileirados'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   void _openChapter(ChapterInfo ch) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -67,19 +140,39 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
           chapters: _chapters,
         ),
       ),
-    );
+    ).then((_) => _load());
+  }
+
+  ChapterInfo? get _continueChapter {
+    ChapterInfo? best;
+    for (final ch in _chapters) {
+      final page = ch.lastPageRead ?? 0;
+      if (page > 0 || ch.isRead) {
+        best = ch;
+      }
+    }
+    // Prefer first unread if any progress exists: last with progress
+    if (best != null && !best.isRead) return best;
+    for (final ch in _chapters) {
+      if (!ch.isRead) return ch;
+    }
+    return _chapters.isEmpty ? null : _chapters.first;
   }
 
   @override
   Widget build(BuildContext context) {
     final m = _manga;
     final thumb = m == null ? null : widget.api.absoluteUrl(m.thumbnailUrl);
+    final cont = _continueChapter;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(m?.title ?? 'Obra #${widget.mangaId}'),
         actions: [
-          IconButton(onPressed: _loading ? null : _load, icon: const Icon(Icons.refresh)),
+          IconButton(
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
         ],
       ),
       body: AsyncBody(
@@ -131,20 +224,42 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                               if (m.artist != null) Text('Artista: ${m.artist}'),
                               if (m.status != null) Text('Status: ${m.status}'),
                               Text(
-                                'id=${m.id} sourceId=${m.sourceId ?? "—"}',
+                                'id=${m.id} · inLibrary=${m.inLibrary}',
                                 style: const TextStyle(
                                   color: YomuTokens.textMuted,
                                   fontSize: 12,
                                 ),
                               ),
                               const SizedBox(height: 12),
-                              if (_chapters.isNotEmpty)
-                                FilledButton(
-                                  onPressed: () => _openChapter(_chapters.first),
-                                  child: Text(
-                                    'Abrir primeiro capítulo (${_chapters.first.name})',
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  FilledButton(
+                                    onPressed: _busy ? null : _toggleLibrary,
+                                    child: Text(
+                                      m.inLibrary
+                                          ? 'Remover da biblioteca'
+                                          : 'Adicionar à biblioteca',
+                                    ),
                                   ),
-                                ),
+                                  if (cont != null)
+                                    FilledButton.tonal(
+                                      onPressed: () => _openChapter(cont),
+                                      child: Text(
+                                        cont.lastPageRead != null &&
+                                                (cont.lastPageRead ?? 0) > 0
+                                            ? 'Continuar (${cont.name})'
+                                            : 'Abrir ${cont.name}',
+                                      ),
+                                    ),
+                                  if (_chapters.isNotEmpty)
+                                    OutlinedButton(
+                                      onPressed: _busy ? null : _downloadAll,
+                                      child: const Text('Baixar todos'),
+                                    ),
+                                ],
+                              ),
                             ],
                           ),
                         ),
@@ -174,8 +289,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                       padding: EdgeInsets.all(16),
                       child: Text(
                         'Nenhum capítulo encontrado para esta obra. '
-                        'No MangaDex isso pode ocorrer em alguns títulos; '
-                        'volte e escolha outra obra da busca.',
+                        'Escolha outra obra da busca.',
                         style: TextStyle(color: YomuTokens.warning),
                       ),
                     )
@@ -193,10 +307,29 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                                 if (ch.chapterNumber != null)
                                   'nº ${ch.chapterNumber}',
                                 if (ch.scanlator != null) ch.scanlator!,
+                                if (ch.isRead) 'lido',
+                                if ((ch.lastPageRead ?? 0) > 0)
+                                  'pág ${ch.lastPageRead}',
+                                if (ch.isDownloaded) 'offline',
                                 'id=${ch.id}',
                               ].join(' · '),
                             ),
-                            trailing: const Icon(Icons.menu_book_outlined),
+                            trailing: Wrap(
+                              spacing: 0,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Baixar',
+                                  onPressed:
+                                      _busy ? null : () => _downloadChapter(ch),
+                                  icon: Icon(
+                                    ch.isDownloaded
+                                        ? Icons.download_done
+                                        : Icons.download_outlined,
+                                  ),
+                                ),
+                                const Icon(Icons.menu_book_outlined),
+                              ],
+                            ),
                             onTap: () => _openChapter(ch),
                           );
                         },
