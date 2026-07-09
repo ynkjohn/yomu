@@ -66,3 +66,14 @@ Inclui testes `yomu_ai`, preload e `node apps/yomu_mobile_pwa/test_reader_races.
 
 A PWA em **HTTP** é **somente para LAN confiável** (opt-in + pairing).  
 **HTTPS / Service Worker / A2HS de produção** ficam para a fase PWA final.
+
+## 2D.2
+
+- JRE empacotado: `{exeDir}/jre` + CMake install + `tool/bundle_jre_windows.ps1` (ver `docs/distribution-windows.md`)
+- `YOMU_JAVA_HOME` = override **explícito** (primeiro se válido ≥21)
+- Identidade viva: aguarda health / kill com ownership — nunca 2ª JVM
+- Identity save atômico (tmp → bak → rename; sem apagar live primeiro)
+- SafeHttpFetch: connect no IP validado + recheck DNS
+- Pairing: budget por IP + por código; tokens com TTL + revoke
+- JSON body max 32 KB
+- PWA inflight key `gen:page` + AbortController
