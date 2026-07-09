@@ -530,23 +530,24 @@ class YomuServer {
           return inner(request);
         }
         final origin = request.headers['origin'];
-        final allowed = origin != null &&
-            origin.isNotEmpty &&
-            allowedOrigins.contains(origin);
+        final allowedOrigin =
+            (origin != null && origin.isNotEmpty && allowedOrigins.contains(origin))
+                ? origin
+                : null;
         final headers = <String, String>{
-          if (allowed) 'Access-Control-Allow-Origin': origin!,
-          if (allowed)
+          if (allowedOrigin != null) 'Access-Control-Allow-Origin': allowedOrigin,
+          if (allowedOrigin != null)
             'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          if (allowed)
+          if (allowedOrigin != null)
             'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-          if (allowed) 'Vary': 'Origin',
+          if (allowedOrigin != null) 'Vary': 'Origin',
         };
         if (request.method == 'OPTIONS') {
-          if (!allowed) return Response(403);
+          if (allowedOrigin == null) return Response(403);
           return Response.ok('', headers: headers);
         }
         final response = await inner(request);
-        if (!allowed) return response;
+        if (allowedOrigin == null) return response;
         return response.change(headers: {...response.headers, ...headers});
       };
     };
