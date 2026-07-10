@@ -25,7 +25,27 @@ class JavaResolution {
 /// 4. Monorepo `vendor/jre21` (dev)
 /// 5. JAVA_HOME / PATH (system; never preferred over packaged 21)
 class JavaResolver {
-  const JavaResolver();
+  const JavaResolver({
+    this.resolvedExecutableForTest,
+    this.environmentForTest,
+    this.versionProbeForTest,
+    this.searchRootsForTest,
+  });
+
+  /// Fake [Platform.resolvedExecutable] (isolated bundle tests).
+  final String? resolvedExecutableForTest;
+
+  /// Fake env (must omit [YOMU_JAVA_HOME] when testing packaged-jre win).
+  final Map<String, String>? environmentForTest;
+
+  /// Optional major-version probe override (tests).
+  final Future<int?> Function(String javaExecutable)? versionProbeForTest;
+
+  /// Optional monorepo search roots override (empty = no vendor walk).
+  final List<String>? searchRootsForTest;
+
+  Map<String, String> get _env =>
+      environmentForTest ?? Platform.environment;
 
   Future<JavaResolution?> resolve({
     required SuwayomiPaths paths,
@@ -46,7 +66,7 @@ class JavaResolver {
     }
 
     // 1) Explicit override first (documented as override, not "force").
-    final yomuJava = Platform.environment['YOMU_JAVA_HOME'];
+    final yomuJava = _env['YOMU_JAVA_HOME'];
     if (yomuJava != null && yomuJava.isNotEmpty) {
       add(
         p.join(yomuJava, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
@@ -66,14 +86,16 @@ class JavaResolver {
     }
 
     // 5) System fallbacks.
-    final fromEnv = Platform.environment['JAVA_HOME'];
+    final fromEnv = _env['JAVA_HOME'];
     if (fromEnv != null && fromEnv.isNotEmpty) {
       add(
         p.join(fromEnv, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
         'JAVA_HOME',
       );
     }
-    add(await _whichJava(), 'PATH');
+    if (environmentForTest == null) {
+      add(await _whichJava(), 'PATH');
+    }
 
     JavaResolution? bestTooOld;
     final tried = <String>[];
@@ -137,7 +159,9 @@ class JavaResolver {
   /// `{exeDir}/jre/bin/java(.exe)` for Release bundles.
   String? _packagedBesideExecutable() {
     try {
-      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final exePath =
+          resolvedExecutableForTest ?? Platform.resolvedExecutable;
+      final exeDir = File(exePath).parent.path;
       final java = p.join(
         exeDir,
         'jre',
@@ -196,6 +220,8 @@ class JavaResolver {
   }
 
   List<String> _searchRoots() {
+    if (searchRootsForTest != null) return List<String>.from(searchRootsForTest!);
+
     final roots = <String>[];
     void walk(String start, int maxUp) {
       var dir = Directory(p.normalize(start));
@@ -209,7 +235,9 @@ class JavaResolver {
 
     walk(Directory.current.path, 14);
     try {
-      walk(File(Platform.resolvedExecutable).parent.path, 14);
+      final exe =
+          resolvedExecutableForTest ?? Platform.resolvedExecutable;
+      walk(File(exe).parent.path, 14);
     } catch (_) {}
 
     final seen = <String>{};
@@ -246,6 +274,8 @@ class JavaResolver {
   }
 
   Future<int?> _probeMajor(String javaExecutable) async {
+    final override = versionProbeForTest;
+    if (override != null) return override(javaExecutable);
     try {
       final result = await Process.run(javaExecutable, ['-version']);
       final text = '${result.stderr}\n${result.stdout}';

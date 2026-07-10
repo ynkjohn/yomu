@@ -224,8 +224,21 @@
         <button type="button" class="secondary" id="reader-mark-read">Marcar lido</button>
       </div>
     </div>
-    <script>
-(function () {
+    <script type="module">
+/**
+ * Production PWA — race control comes only from reader_race_logic.mjs
+ * (single source; no parallel “production” implementation).
+ */
+import {
+  createReaderChapterController,
+  inflightKey,
+  loadOnce,
+  attachAbortIfOwner,
+  abortAllInflight,
+  applyBlobIfCurrent,
+  shouldApply,
+} from './reader_race_logic.mjs';
+
   const TOKEN_KEY = 'yomu_token';
   const DEVICE_KEY = 'yomu_device_name';
 
@@ -255,15 +268,27 @@
     saveProgress(r.chapterId, r.pageCount - 1, true, r.gen);
   });
 
-  // Phase 2D/2D.1: limited preload + session generation + in-flight map
+  // Phase 2D/2D.2: shared controller + inflight helpers from reader_race_logic.mjs
   const PRELOAD_AHEAD = 2;
   const PRELOAD_BEHIND = 1;
-  let readerGen = 0; // incremented on every open/close
   let blobByPage = new Map(); // index -> blob URL (for active gen only)
   let inflightPages = new Map(); // `${gen}:${index}` -> Promise
   let progressTimer = null;
   let progressError = '';
   let activeScrollHandler = null;
+
+  /** Shared production controller for chapter open races / abort. */
+  const chapterController = createReaderChapterController({
+    fetchPages: async (chapterId, { signal } = {}) => {
+      const data = await api('/api/v1/chapters/' + chapterId + '/pages', {
+        signal,
+      });
+      return data;
+    },
+  });
+  function readerGen() {
+    return chapterController.gen;
+  }
 
   function setToken(token) {
     state.token = token || '';
@@ -284,6 +309,7 @@
       headers,
       body: opts.json ? JSON.stringify(opts.json) : opts.body,
       cache: 'no-store',
+      signal: opts.signal,
     });
     if (res.status === 401 && !opts.noAuth) {
       setToken('');
@@ -308,6 +334,24 @@
       throw new Error(msg);
     }
     return data;
+  }
+
+  async function logout() {
+    const token = state.token;
+    try {
+      if (token) {
+        await api('/api/v1/session/revoke', { method: 'POST' });
+      }
+    } catch (_) {
+      // still clear local session
+    }
+    setToken('');
+    state.view = 'pair';
+    state.library = [];
+    state.manga = null;
+    state.chapters = [];
+    closeReader();
+    render();
   }
 
   async function authBlobUrl(path, signal) {
@@ -448,9 +492,8 @@
   function revokeAllBlobs() {
     for (const u of blobByPage.values()) URL.revokeObjectURL(u);
     blobByPage.clear();
-    for (const p of inflightPages.values()) {
-      if (p && typeof p._abort === 'function') p._abort();
-    }
+    // Abort owners before clearing; do not replace AbortControllers of existing entries.
+    abortAllInflight(inflightPages);
     inflightPages.clear();
   }
 
@@ -463,7 +506,8 @@
       if (img && !img.src) img.src = blobByPage.get(index);
       return;
     }
-    const key = gen + ':' + index;
+    const key = inflightKey(gen, index);
+    // Existing entry: await owner Promise — never replace its AbortController.
     if (inflightPages.has(key)) {
       await inflightPages.get(key);
       return;
@@ -473,16 +517,20 @@
     const img = wrap.querySelector('img');
     const pageUrl = r.pages[index].url;
     const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const work = (async () => {
+    const work = loadOnce(inflightPages, key, async () => {
       try {
         const url = await authBlobUrl(pageUrl, ac ? ac.signal : undefined);
-        if (!state.reader || state.reader.gen !== gen) {
-          URL.revokeObjectURL(url);
-          return;
+        applyBlobIfCurrent(
+          state.reader ? state.reader.gen : -1,
+          gen,
+          blobByPage,
+          index,
+          url,
+          (u) => URL.revokeObjectURL(u),
+        );
+        if (img && state.reader && state.reader.gen === gen && blobByPage.has(index)) {
+          img.src = blobByPage.get(index);
         }
-        // Never touch another generation's map keys.
-        blobByPage.set(index, url);
-        if (img && state.reader.gen === gen) img.src = url;
       } catch (err) {
         if (err && err.name === 'AbortError') return;
         if (!state.reader || state.reader.gen !== gen) return;
@@ -491,14 +539,10 @@
           img.style.minHeight = '80px';
           img.style.background = '#331';
         }
-      } finally {
-        inflightPages.delete(key);
       }
-    })();
-    work._abort = () => {
-      if (ac) ac.abort();
-    };
-    inflightPages.set(key, work);
+    });
+    // Attach _abort on the owner Promise *before* await (first owner only).
+    if (ac) attachAbortIfOwner(work, () => ac.abort());
     await work;
   }
 
@@ -540,9 +584,7 @@
   }
 
   async function openChapter(chapter) {
-    // Bump generation — invalidates in-flight work from previous chapter.
-    readerGen += 1;
-    const gen = readerGen;
+    // Shared controller bumps gen + aborts previous GET /pages.
     clearProgressTimer();
     if (activeScrollHandler) {
       readerPages.removeEventListener('scroll', activeScrollHandler);
@@ -559,8 +601,11 @@
 
     const chapterId = chapter.id;
     try {
-      const data = await api('/api/v1/chapters/' + chapterId + '/pages');
-      if (gen !== readerGen) return; // superseded
+      const outcome = await chapterController.openChapter(chapterId);
+      const gen = outcome.gen;
+      if (!outcome.applied || !shouldApply(readerGen(), gen)) return;
+      const data = outcome.pages;
+      if (!data || typeof data !== 'object') return;
       const pages = data.pages || [];
       const resolvedChapterId = data.chapterId || chapterId;
       state.reader = {
@@ -594,7 +639,7 @@
       syncPreloadWindow(start, gen);
 
       requestAnimationFrame(() => {
-        if (gen !== readerGen) return;
+        if (!shouldApply(readerGen(), gen)) return;
         const target = readerPages.querySelector('[data-page="' + start + '"]');
         if (target) target.scrollIntoView({ block: 'start' });
       });
@@ -632,7 +677,10 @@
       readerPages.onscroll = onScroll;
       onScroll();
     } catch (e) {
-      if (gen !== readerGen) return;
+      if (e && e.name === 'AbortError') return;
+      if (!shouldApply(readerGen(), chapterController.gen) && e) {
+        /* superseded */
+      }
       readerPages.innerHTML =
         '<p class="empty" style="color:var(--danger)">' +
         escapeHtml(String(e.message || e)) +
@@ -647,7 +695,7 @@
         method: 'PUT',
         json: { lastPageRead: lastPageRead, isRead: !!isRead },
       });
-      if (gen != null && gen !== readerGen) return;
+      if (gen != null && !shouldApply(readerGen(), gen)) return;
       progressError = '';
       const ch = state.chapters.find((c) => c.id === chapterId);
       if (ch) {
@@ -663,7 +711,7 @@
         );
       }
     } catch (e) {
-      if (gen != null && gen !== readerGen) return;
+      if (gen != null && !shouldApply(readerGen(), gen)) return;
       progressError = String(e.message || e);
       if (state.reader && (gen == null || state.reader.gen === gen)) {
         updateProgressUi(
@@ -677,7 +725,7 @@
   }
 
   function closeReader() {
-    readerGen += 1; // invalidate in-flight
+    chapterController.close(); // bumps gen + aborts pages GET
     clearProgressTimer();
     if (activeScrollHandler) {
       readerPages.removeEventListener('scroll', activeScrollHandler);
@@ -774,13 +822,8 @@
 
     const refresh = document.getElementById('btn-refresh');
     if (refresh) refresh.onclick = () => loadLibrary();
-    const logout = document.getElementById('btn-logout');
-    if (logout) logout.onclick = () => {
-      setToken('');
-      state.view = 'pair';
-      state.library = [];
-      render();
-    };
+    const logoutBtn = document.getElementById('btn-logout');
+    if (logoutBtn) logoutBtn.onclick = () => { logout(); };
     document.querySelectorAll('.manga-card').forEach((el) => {
       el.onclick = () => openManga(Number(el.dataset.id));
     });
@@ -858,7 +901,6 @@
   }, 8000);
 
   boot();
-})();
     </script>
   </body>
 </html>

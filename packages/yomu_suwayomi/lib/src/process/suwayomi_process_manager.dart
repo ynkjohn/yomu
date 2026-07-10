@@ -22,6 +22,25 @@ const int kYomuSuwayomiPort = 14567;
 const String kSuwayomiRootDirProperty =
     'suwayomi.tachidesk.config.server.rootDir';
 
+/// Optional injectors for lifecycle unit tests (identity.save / Process.start).
+typedef YomuProcessStarter = Future<Process> Function(
+  String executable,
+  List<String> arguments, {
+  String? workingDirectory,
+  Map<String, String>? environment,
+  bool runInShell,
+});
+
+typedef YomuIdentitySaver = Future<void> Function(
+  ManagedInstanceIdentity identity,
+  File file,
+);
+
+typedef YomuKillConfirm = Future<bool> Function(
+  Process? proc, {
+  required int pid,
+});
+
 /// Starts, monitors and stops a loopback-only Suwayomi-Server process.
 ///
 /// Phase 2D ownership rules:
@@ -38,6 +57,9 @@ class SuwayomiProcessManager {
     this.port = kYomuSuwayomiPort,
     ProcessOwnershipProbe? ownershipProbe,
     http.Client? httpClient,
+    this.processStartForTest,
+    this.identitySaveForTest,
+    this.killAndConfirmExitForTest,
   })  : _http = httpClient ?? http.Client(),
         _ownership = ProcessOwnership(
           ownershipProbe ?? const PlatformProcessOwnershipProbe(),
@@ -50,6 +72,15 @@ class SuwayomiProcessManager {
   final int port;
   final http.Client _http;
   final ProcessOwnership _ownership;
+
+  /// Test-only: intercept [Process.start] (count / fake JVM).
+  final YomuProcessStarter? processStartForTest;
+
+  /// Test-only: intercept identity persistence (force save failure).
+  final YomuIdentitySaver? identitySaveForTest;
+
+  /// Test-only: intercept kill+exit confirmation (force kill=false/timeout).
+  final YomuKillConfirm? killAndConfirmExitForTest;
 
   Process? _process;
   ManagedInstanceIdentity? _identity;
@@ -255,11 +286,27 @@ server.authMode = NONE
       return Ok(_status);
     }
 
-    // Phase 2D.2: if our identity is still alive, never spawn a second JVM.
+    // Phase 2D.2: memory identity / Process handle first — never a 2nd JVM.
     final existing = await _handleExistingOwnedIdentity(
       readyTimeout: readyTimeout,
     );
     if (existing != null) return existing;
+
+    // After handle: still holding process or in-memory identity without a clean
+    // stop → refuse (even if identity file is missing).
+    if (_process != null || _identity != null) {
+      final msg =
+          'Processo/identidade em memória ainda ativa '
+          '(state=${_status.state.name}, pid=${_process?.pid ?? _identity?.pid}). '
+          'Start recusado — não iniciaremos outra JVM.';
+      _emit(SuwayomiStatus(
+        state: SuwayomiProcessState.unhealthy,
+        message: msg,
+        baseUrl: baseUrl,
+        pid: _process?.pid ?? _identity?.pid,
+      ));
+      return Err(msg);
+    }
 
     // Phase 2D: never blind-adopt health-only foreign processes.
     final portIssue = await _resolvePortOccupantBeforeStart();
@@ -328,7 +375,20 @@ server.authMode = NONE
     );
 
     try {
-      _process = await Process.start(
+      final starter = processStartForTest ??
+          (String executable, List<String> arguments, {
+            String? workingDirectory,
+            Map<String, String>? environment,
+            bool runInShell = false,
+          }) =>
+              Process.start(
+                executable,
+                arguments,
+                workingDirectory: workingDirectory,
+                environment: environment,
+                runInShell: runInShell,
+              );
+      _process = await starter(
         java.javaExecutable,
         args,
         workingDirectory: paths.dataDir.path,
@@ -352,19 +412,32 @@ server.authMode = NONE
       port: port,
     );
     try {
-      await identity.save(identityFile);
+      final saver = identitySaveForTest ??
+          (ManagedInstanceIdentity id, File file) => id.save(file);
+      await saver(identity, identityFile);
       _identity = identity;
     } catch (e) {
-      // Must not leave an untracked JVM.
-      try {
-        _process?.kill(ProcessSignal.sigkill);
-        await _process?.exitCode.timeout(const Duration(seconds: 5));
-      } catch (_) {}
+      // Only forget Process after exitCode is confirmed (no silent orphan).
+      final orphaned = await _killAndConfirmExit(_process, pid: pid);
+      if (orphaned) {
+        // Keep Process handle + identity-like state — kill=false / timeout.
+        _identity = identity;
+        final msg =
+            'JVM pid $pid: falha ao salvar identidade e encerramento não confirmado '
+            '(kill=false ou timeout). Handle preservado — possível órfão. Erro: $e';
+        _emit(SuwayomiStatus(
+          state: SuwayomiProcessState.unhealthy,
+          message: msg,
+          baseUrl: baseUrl,
+          pid: pid,
+        ));
+        return Err(msg, e);
+      }
       _process = null;
       _identity = null;
       final msg =
           'JVM iniciada (pid $pid) mas falhou ao salvar identidade: $e. '
-          'Processo encerrado para evitar órfão sem registro.';
+          'Processo encerrado com exitCode confirmado.';
       _emit(SuwayomiStatus(
         state: SuwayomiProcessState.crashed,
         message: msg,
@@ -439,15 +512,27 @@ server.authMode = NONE
     return Ok(ok);
   }
 
-  /// If identity file points at a live Yomu-owned process, wait/reattach or
-  /// stop with ownership — never start a second JVM / overwrite identity.
+  /// If in-memory or on-disk identity points at a live Yomu-owned process,
+  /// wait/reattach or stop with ownership — never start a second JVM.
+  ///
+  /// **In-memory [identity] is preferred** over the identity file.
   ///
   /// Returns a [Result] when handled; null when caller may proceed to start.
   Future<Result<SuwayomiStatus>?> _handleExistingOwnedIdentity({
     required Duration readyTimeout,
   }) async {
-    final stored = await ManagedInstanceIdentity.load(identityFile);
-    if (stored == null) return null;
+    // Memory first — covers save-fail orphan without a durable file.
+    final stored =
+        _identity ?? await ManagedInstanceIdentity.load(identityFile);
+    if (stored == null) {
+      if (_process != null) {
+        return Err(
+          'Handle de Process em memória (pid ${_process!.pid}) sem identidade '
+          'gravada — start recusado.',
+        );
+      }
+      return null;
+    }
 
     final check = await _ownership.verifyIdentity(stored);
     if (check.verdict == OwnershipVerdict.dead) {
@@ -456,12 +541,26 @@ server.authMode = NONE
       if (!healthy && listener == null) {
         await ManagedInstanceIdentity.clear(identityFile);
         _identity = null;
+        _process = null;
+        return null;
       }
-      return null;
+      // Dead PID but port/health still busy — do not spawn another JVM.
+      return Err(
+        check.message ??
+            'Identidade aponta para PID morto, mas porta/health ainda ativos. '
+            'Start recusado.',
+      );
     }
 
     if (check.verdict != OwnershipVerdict.yomuOwned) {
-      // Identity file exists but process is foreign/unverifiable — do not overwrite.
+      // Memory Process/identity without revalidated ownership — never spawn.
+      if (_process != null || _identity != null) {
+        return Err(
+          'Processo/identidade em memória (pid ${stored.pid}) não revalidável '
+          '(${check.message ?? 'foreignOrUnverifiable'}). Start recusado — '
+          'não iniciaremos outra JVM.',
+        );
+      }
       return Err(
         check.message ??
             'Identidade em disco não confere com o processo vivo. '
@@ -527,6 +626,7 @@ server.authMode = NONE
     }
     await ManagedInstanceIdentity.clear(identityFile);
     _identity = null;
+    _process = null;
     return null; // free to start
   }
 
@@ -624,6 +724,62 @@ server.authMode = NONE
     }
     return 'Suwayomi encerrou inesperadamente (code $code). '
         'Veja ${paths.processLog.path}';
+  }
+
+  /// Returns true if process may still be alive (orphan risk).
+  ///
+  /// Treats [Process.kill] == false and exit timeouts as orphan — never
+  /// pretends the process is gone without [exitCode] or dead inspect.
+  Future<bool> _killAndConfirmExit(Process? proc, {required int pid}) async {
+    final override = killAndConfirmExitForTest;
+    if (override != null) return override(proc, pid: pid);
+
+    if (proc != null) {
+      var sent = false;
+      try {
+        sent = proc.kill(ProcessSignal.sigterm);
+      } catch (_) {
+        sent = false;
+      }
+      if (sent) {
+        try {
+          await proc.exitCode.timeout(const Duration(seconds: 5));
+          return false;
+        } on TimeoutException {
+          var forced = false;
+          try {
+            forced = proc.kill(ProcessSignal.sigkill);
+          } catch (_) {
+            forced = false;
+          }
+          if (forced) {
+            try {
+              await proc.exitCode.timeout(const Duration(seconds: 5));
+              return false;
+            } on TimeoutException {
+              return true;
+            } catch (_) {
+              return true;
+            }
+          }
+          // kill=false on force — still try OS below, but prefer not lying.
+        } catch (_) {
+          // fall through to OS kill
+        }
+      }
+    }
+    final killed = await _ownership.probe.killOwnedPid(pid, force: true);
+    if (!killed) return true; // kill=false → orphan risk
+    for (var i = 0; i < 10; i++) {
+      final snap = await _ownership.probe.inspectPid(pid);
+      if (snap == null || !snap.exists) {
+        // Confirmed dead via OS inspect (no Process.exitCode available).
+        return false;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    final snap = await _ownership.probe.inspectPid(pid);
+    return snap != null && snap.exists;
   }
 
   Future<bool> _waitUntilHealthy(Duration timeout) async {

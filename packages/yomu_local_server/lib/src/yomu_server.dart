@@ -11,6 +11,7 @@ import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
 import 'device_auth.dart';
+import 'json_body_errors.dart';
 import 'media_ticket_store.dart';
 import 'safe_http_fetch.dart';
 
@@ -79,44 +80,41 @@ class YomuServer {
     });
 
     router.post('/api/v1/pairing/claim', (Request request) async {
-      Map<String, dynamic> body;
-      try {
-        body = await _readJson(request);
-      } catch (e) {
-        return _json({'error': 'body_too_large'}, status: 413);
-      }
-      final code = '${body['code'] ?? ''}';
-      final name = '${body['deviceName'] ?? 'iPhone'}';
-      final clientKey = _clientKey(request);
-      final outcome = await auth.claimPairing(
-        code: code,
-        deviceName: name,
-        clientKey: clientKey,
-      );
-      switch (outcome.result) {
-        case PairingClaimResult.rateLimited:
-          return Response(
-            429,
-            body: jsonEncode({
-              'error': 'rate_limited',
-              'retryAfter': outcome.retryAfterSeconds,
-            }),
-            headers: {
-              'content-type': 'application/json; charset=utf-8',
-              if (outcome.retryAfterSeconds != null)
-                'retry-after': '${outcome.retryAfterSeconds}',
-            },
-          );
-        case PairingClaimResult.invalidOrExpired:
-          return _json({'error': 'invalid_or_expired_code'}, status: 401);
-        case PairingClaimResult.success:
-          final session = outcome.session!;
-          return _json({
-            'token': session.token,
-            'deviceName': session.deviceName,
-            'createdAt': session.createdAt.toIso8601String(),
-          });
-      }
+      return _readJsonResponse(request, (body) async {
+        final code = '${body['code'] ?? ''}';
+        final name = '${body['deviceName'] ?? 'iPhone'}';
+        final clientKey = _clientKey(request);
+        final outcome = await auth.claimPairing(
+          code: code,
+          deviceName: name,
+          clientKey: clientKey,
+        );
+        switch (outcome.result) {
+          case PairingClaimResult.rateLimited:
+            return Response(
+              429,
+              body: jsonEncode({
+                'error': 'rate_limited',
+                'retryAfter': outcome.retryAfterSeconds,
+              }),
+              headers: {
+                'content-type': 'application/json; charset=utf-8',
+                if (outcome.retryAfterSeconds != null)
+                  'retry-after': '${outcome.retryAfterSeconds}',
+              },
+            );
+          case PairingClaimResult.invalidOrExpired:
+            return _json({'error': 'invalid_or_expired_code'}, status: 401);
+          case PairingClaimResult.success:
+            final session = outcome.session!;
+            return _json({
+              'token': session.token,
+              'deviceName': session.deviceName,
+              'createdAt': session.createdAt.toIso8601String(),
+              'expiresAt': session.expiresAt.toIso8601String(),
+            });
+        }
+      });
     });
 
     // --- Authenticated API ---
@@ -177,11 +175,12 @@ class YomuServer {
 
     router.post('/api/v1/manga/<id|[0-9]+>/library', _auth((req, session) async {
       final id = int.parse(req.params['id']!);
-      final body = await _readJson(req);
-      final inLibrary = body['inLibrary'] == true;
-      final api = _requireApi();
-      final m = await api.setInLibrary(id, inLibrary);
-      return _json({'id': m.id, 'inLibrary': m.inLibrary});
+      return _readJsonResponse(req, (body) async {
+        final inLibrary = body['inLibrary'] == true;
+        final api = _requireApi();
+        final m = await api.setInLibrary(id, inLibrary);
+        return _json({'id': m.id, 'inLibrary': m.inLibrary});
+      });
     }));
 
     router.get('/api/v1/manga/<id|[0-9]+>/chapters', _auth((req, session) async {
@@ -279,20 +278,21 @@ class YomuServer {
 
     router.put('/api/v1/chapters/<id|[0-9]+>/progress', _auth((req, session) async {
       final id = int.parse(req.params['id']!);
-      final body = await _readJson(req);
-      final page = body['lastPageRead'];
-      final lastPageRead = page is int ? page : int.tryParse('$page') ?? 0;
-      final isRead = body['isRead'] == true;
-      final api = _requireApi();
-      final ch = await api.updateChapterProgress(
-        chapterId: id,
-        lastPageRead: lastPageRead,
-        isRead: isRead,
-      );
-      return _json({
-        'id': ch.id,
-        'lastPageRead': ch.lastPageRead,
-        'isRead': ch.isRead,
+      return _readJsonResponse(req, (body) async {
+        final page = body['lastPageRead'];
+        final lastPageRead = page is int ? page : int.tryParse('$page') ?? 0;
+        final isRead = body['isRead'] == true;
+        final api = _requireApi();
+        final ch = await api.updateChapterProgress(
+          chapterId: id,
+          lastPageRead: lastPageRead,
+          isRead: isRead,
+        );
+        return _json({
+          'id': ch.id,
+          'lastPageRead': ch.lastPageRead,
+          'isRead': ch.isRead,
+        });
       });
     }));
 
@@ -520,20 +520,59 @@ class YomuServer {
 
   static const int maxJsonBodyBytes = 32 * 1024;
 
+  /// Throws [JsonBodyTooLarge] or [JsonBodyInvalid].
   Future<Map<String, dynamic>> _readJson(Request request) async {
-    final builder = BytesBuilder(copy: false);
-    await for (final chunk in request.read()) {
-      builder.add(chunk);
-      if (builder.length > maxJsonBodyBytes) {
-        throw StateError('body_too_large');
+    final clHeader = request.headers['content-length'];
+    if (clHeader != null) {
+      final n = int.tryParse(clHeader);
+      if (n != null && n > maxJsonBodyBytes) {
+        // Drain then 413 so the client keeps a clean HTTP response.
+        try {
+          await request.read().drain<void>();
+        } catch (_) {}
+        throw const JsonBodyTooLarge();
       }
     }
-    final raw = utf8.decode(builder.takeBytes());
+    final builder = BytesBuilder(copy: false);
+    final stream = request.read();
+    await for (final chunk in stream) {
+      if (builder.length + chunk.length > maxJsonBodyBytes) {
+        try {
+          await stream.drain<void>();
+        } catch (_) {}
+        throw const JsonBodyTooLarge();
+      }
+      builder.add(chunk);
+    }
+    final String raw;
+    try {
+      raw = utf8.decode(builder.takeBytes());
+    } on FormatException {
+      throw const JsonBodyInvalid('utf8_invalid');
+    }
     if (raw.isEmpty) return {};
-    final decoded = jsonDecode(raw);
-    if (decoded is Map<String, dynamic>) return decoded;
-    if (decoded is Map) return Map<String, dynamic>.from(decoded);
-    return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      throw const JsonBodyInvalid('json_not_object');
+    } on FormatException {
+      throw const JsonBodyInvalid('json_parse_error');
+    }
+  }
+
+  Future<Response> _readJsonResponse(
+    Request request,
+    Future<Response> Function(Map<String, dynamic> body) handle,
+  ) async {
+    try {
+      final body = await _readJson(request);
+      return await handle(body);
+    } on JsonBodyTooLarge {
+      return _json({'error': 'body_too_large'}, status: 413);
+    } on JsonBodyInvalid catch (e) {
+      return _json({'error': e.code}, status: 400);
+    }
   }
 
   Response _json(Object body, {int status = 200}) {

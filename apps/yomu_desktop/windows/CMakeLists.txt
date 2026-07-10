@@ -107,11 +107,12 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
 
-# --- Yomu: ship JRE 21 next to the executable (Release/install layout) ---
-# Monorepo path: packages/yomu_suwayomi/vendor/jre21
-# Runtime layout: {exeDir}/jre/bin/java.exe  (see JavaResolver packaged-jre)
+# --- Yomu: ship JRE 21 + PWA next to the executable (Release/install layout) ---
+# Runtime: {exeDir}/jre/bin/java.exe  and  {exeDir}/pwa/index.html
 # windows/ -> yomu_desktop/ -> apps/ -> monorepo root
 set(YOMU_VENDOR_JRE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../packages/yomu_suwayomi/vendor/jre21")
+set(YOMU_PWA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/yomu_mobile_pwa")
+
 if(EXISTS "${YOMU_VENDOR_JRE_DIR}/bin/java.exe")
   install(DIRECTORY "${YOMU_VENDOR_JRE_DIR}/"
     DESTINATION "${CMAKE_INSTALL_PREFIX}/jre"
@@ -119,6 +120,46 @@ if(EXISTS "${YOMU_VENDOR_JRE_DIR}/bin/java.exe")
     USE_SOURCE_PERMISSIONS)
   message(STATUS "Yomu: bundling JRE from ${YOMU_VENDOR_JRE_DIR}")
 else()
-  message(WARNING "Yomu: vendor JRE not found at ${YOMU_VENDOR_JRE_DIR} — Release will require YOMU_JAVA_HOME or managed download")
+  # Debug may still run with monorepo vendor / YOMU_JAVA_HOME; Release must ship JRE.
+  message(WARNING "Yomu: vendor JRE missing at ${YOMU_VENDOR_JRE_DIR}")
+  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR ("${CMAKE_CONFIGURATION_TYPES}" MATCHES "Release"))
+    # Multi-config generators evaluate install at build time — gate Release install:
+    install(CODE "
+      if(NOT EXISTS \"${YOMU_VENDOR_JRE_DIR}/bin/java.exe\")
+        if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Release\" OR \"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Profile\")
+          message(FATAL_ERROR \"Yomu Release/Profile requires packaged JRE at ${YOMU_VENDOR_JRE_DIR}/bin/java.exe — run tool/fetch_jre21_windows.ps1\")
+        endif()
+      endif()
+      " COMPONENT Runtime)
+  endif()
+endif()
+
+if(EXISTS "${YOMU_PWA_DIR}/index.html")
+  install(DIRECTORY "${YOMU_PWA_DIR}/"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/pwa"
+    COMPONENT Runtime
+    FILES_MATCHING
+      PATTERN "*.html"
+      PATTERN "*.js"
+      PATTERN "*.mjs"
+      PATTERN "*.webmanifest"
+      PATTERN "*.css"
+      PATTERN "*.svg"
+      PATTERN "*.png"
+      PATTERN "*.ico"
+      PATTERN "*.json"
+      PATTERN "*.woff*"
+      PATTERN "*.map"
+    )
+  message(STATUS "Yomu: bundling PWA from ${YOMU_PWA_DIR}")
+else()
+  message(WARNING "Yomu: PWA missing at ${YOMU_PWA_DIR}")
+  install(CODE "
+    if(NOT EXISTS \"${YOMU_PWA_DIR}/index.html\")
+      if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Release\" OR \"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Profile\")
+        message(FATAL_ERROR \"Yomu Release requires PWA at ${YOMU_PWA_DIR}/index.html\")
+      endif()
+    endif()
+    " COMPONENT Runtime)
 endif()
 

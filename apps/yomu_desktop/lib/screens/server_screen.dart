@@ -6,6 +6,20 @@ import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
+class PairedSessionRow {
+  const PairedSessionRow({
+    required this.token,
+    required this.deviceName,
+    required this.createdAt,
+    this.lastSeenAt,
+  });
+
+  final String token;
+  final String deviceName;
+  final DateTime createdAt;
+  final DateTime? lastSeenAt;
+}
+
 class ServerScreen extends StatelessWidget {
   const ServerScreen({
     super.key,
@@ -24,6 +38,9 @@ class ServerScreen extends StatelessWidget {
     required this.onCancelPairing,
     required this.lanAddresses,
     required this.sessionCount,
+    this.sessions = const [],
+    this.onRevokeSession,
+    this.onRevokeAllSessions,
     this.aboutVersion,
     this.busy = false,
   });
@@ -43,6 +60,9 @@ class ServerScreen extends StatelessWidget {
   final VoidCallback onCancelPairing;
   final List<String> lanAddresses;
   final int sessionCount;
+  final List<PairedSessionRow> sessions;
+  final ValueChanged<String>? onRevokeSession;
+  final VoidCallback? onRevokeAllSessions;
   final String? aboutVersion;
   final bool busy;
 
@@ -163,6 +183,42 @@ class ServerScreen extends StatelessWidget {
                 ),
                 _kv('Yomu HTTP', lanEnabled ? '0.0.0.0:$yomuPort' : '127.0.0.1:$yomuPort'),
                 _kv('Sessões pareadas', '$sessionCount'),
+                if (sessions.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Dispositivos pareados',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  ...sessions.map(
+                    (s) => ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: Text(s.deviceName),
+                      subtitle: Text(
+                        'desde ${s.createdAt.toLocal()}'
+                        '${s.lastSeenAt != null ? ' · visto ${s.lastSeenAt!.toLocal()}' : ''}',
+                        style: const TextStyle(
+                          color: YomuTokens.textMuted,
+                          fontSize: 12,
+                        ),
+                      ),
+                      trailing: onRevokeSession == null
+                          ? null
+                          : TextButton(
+                              onPressed: busy
+                                  ? null
+                                  : () => onRevokeSession!(s.token),
+                              child: const Text('Revogar'),
+                            ),
+                    ),
+                  ),
+                  if (onRevokeAllSessions != null)
+                    TextButton(
+                      onPressed: busy ? null : onRevokeAllSessions,
+                      child: const Text('Revogar todas as sessões'),
+                    ),
+                ],
                 if (lanEnabled) ...[
                   const SizedBox(height: 8),
                   const Text('URLs na rede local:', style: TextStyle(fontWeight: FontWeight.w600)),

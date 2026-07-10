@@ -41,9 +41,10 @@ cache/
 *.mv.db
 *.trace.db
 
-# Vendor binaries (manifest.json IS committed)
+# Vendor binaries (jre_manifest.json IS committed; JRE tree is local)
 packages/yomu_suwayomi/vendor/*.jar
 packages/yomu_suwayomi/vendor/jre*/
+packages/yomu_suwayomi/vendor/.jre_cache/
 packages/yomu_suwayomi/vendor/**/bin/
 **/runtime/suwayomi/*.jar
 **/runtime/jre/

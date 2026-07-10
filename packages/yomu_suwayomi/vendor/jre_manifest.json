@@ -1,0 +1,15 @@
+{
+  "notes": "Pinned Temurin JRE 21 for Windows x64. Bump only via PR with new hash.",
+  "jre": {
+    "vendor": "Eclipse Temurin",
+    "version": "21.0.11+10",
+    "os": "windows",
+    "arch": "x64",
+    "downloadUrl": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip",
+    "sha256": "be26677aaa20b39a62edcaab4c8857a8b76673b0f45abc0b6143b142b62717e4",
+    "license": "GPL-2.0-with-classpath-exception",
+    "licenseUrl": "https://openjdk.org/legal/gplv2+ce.html",
+    "extractRootContains": "bin/java.exe",
+    "localVendorPath": "jre21"
+  }
+}

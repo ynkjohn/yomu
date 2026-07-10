@@ -9,7 +9,9 @@ O build **Release/instalador** deve rodar em um PC **sem Java instalado** e **se
 ```
 yomu_desktop.exe
 jre/
-  bin/java.exe    # Temurin/OpenJDK 21+
+  bin/java.exe    # Temurin/OpenJDK 21+  (obrigatório no Release)
+pwa/
+  index.html      # PWA iPhone (resolvida via Platform.resolvedExecutable)
   …
 data/             # Flutter assets
 flutter_windows.dll
@@ -24,7 +26,19 @@ flutter_windows.dll
 4. Monorepo `packages/yomu_suwayomi/vendor/jre21` (dev)
 5. `JAVA_HOME` / PATH (fallback de sistema)
 
+A PWA é resolvida a partir de `{exeDir}/pwa` (via `Platform.resolvedExecutable`), não do cwd/monorepo.
+
 O app **não** pede para o usuário mudar `JAVA_HOME`.
+
+## Aquisição reprodutível do JRE 21
+
+Manifest pinado: `packages/yomu_suwayomi/vendor/jre_manifest.json`
+(campos fixos: version, downloadUrl, sha256, license, licenseUrl)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool/fetch_jre21_windows.ps1
+# primeira vez / bump: -UpdateManifestHash (grava SHA-256 após download)
+```
 
 ## Build Release
 
@@ -34,7 +48,11 @@ cd apps\yomu_desktop
 flutter build windows --release
 ```
 
-O `windows/CMakeLists.txt` instala `vendor/jre21` em `{prefix}/jre` quando o diretório existe.
+O `windows/CMakeLists.txt`:
+
+- instala `vendor/jre21` → `{prefix}/jre`
+- instala `apps/yomu_mobile_pwa` → `{prefix}/pwa`
+- **falha o install Release/Profile** se o JRE obrigatório ou a PWA estiverem ausentes
 
 Cópia manual (Debug ou pasta custom):
 

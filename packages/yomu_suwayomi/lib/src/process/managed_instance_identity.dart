@@ -21,6 +21,16 @@ class ManagedInstanceIdentity {
   final String rootDir;
   final int port;
 
+  /// Reject epoch-zero / unparseable sentinels.
+  bool get hasValidStartedAt {
+    if (startedAt.millisecondsSinceEpoch <= 0) return false;
+    // Reject "now" fallback from corrupt files older than absurd future
+    if (startedAt.isAfter(DateTime.now().toUtc().add(const Duration(days: 1)))) {
+      return false;
+    }
+    return true;
+  }
+
   Map<String, dynamic> toJson() => {
         'runId': runId,
         'pid': pid,
@@ -32,10 +42,15 @@ class ManagedInstanceIdentity {
       };
 
   factory ManagedInstanceIdentity.fromJson(Map<String, dynamic> json) {
+    final startedRaw = json['startedAt'];
+    final started = DateTime.tryParse('${startedRaw ?? ''}');
+    if (started == null) {
+      throw const FormatException('startedAt missing or invalid');
+    }
     return ManagedInstanceIdentity(
       runId: '${json['runId']}',
       pid: json['pid'] is int ? json['pid'] as int : int.parse('${json['pid']}'),
-      startedAt: DateTime.tryParse('${json['startedAt']}') ?? DateTime.now().toUtc(),
+      startedAt: started.toUtc(),
       javaExecutable: '${json['javaExecutable']}',
       jarPath: '${json['jarPath']}',
       rootDir: '${json['rootDir']}',
@@ -43,10 +58,7 @@ class ManagedInstanceIdentity {
     );
   }
 
-  /// Atomic replace: write temp, then swap without deleting the live file first.
-  ///
-  /// Windows: rename live → .bak, rename .tmp → live, delete .bak.
-  /// On failure after moving live away, restore from .bak.
+  /// Crash-safe replace with .bak recovery.
   Future<void> save(File file) async {
     await file.parent.create(recursive: true);
     final tmp = File('${file.path}.tmp');
@@ -58,33 +70,52 @@ class ManagedInstanceIdentity {
       return;
     }
 
-    if (bak.existsSync()) {
-      await bak.delete();
-    }
+    // Move live -> bak only after tmp is durable.
+    if (bak.existsSync()) await bak.delete();
     await file.rename(bak.path);
     try {
       await tmp.rename(file.path);
     } catch (e) {
-      // Restore previous identity if swap failed.
       if (bak.existsSync() && !file.existsSync()) {
         await bak.rename(file.path);
       }
+      if (tmp.existsSync()) {
+        try {
+          await tmp.delete();
+        } catch (_) {}
+      }
       rethrow;
     }
-    if (bak.existsSync()) {
-      await bak.delete();
-    }
+    if (bak.existsSync()) await bak.delete();
   }
 
   static Future<ManagedInstanceIdentity?> load(File file) async {
-    if (!file.existsSync()) return null;
-    try {
-      final raw = jsonDecode(await file.readAsString());
-      if (raw is! Map) return null;
-      return ManagedInstanceIdentity.fromJson(Map<String, dynamic>.from(raw));
-    } catch (_) {
-      return null;
+    Future<ManagedInstanceIdentity?> tryFile(File f) async {
+      if (!f.existsSync()) return null;
+      try {
+        final raw = jsonDecode(await f.readAsString());
+        if (raw is! Map) return null;
+        final id = ManagedInstanceIdentity.fromJson(Map<String, dynamic>.from(raw));
+        if (!id.hasValidStartedAt) return null;
+        return id;
+      } catch (_) {
+        return null;
+      }
     }
+
+    final primary = await tryFile(file);
+    if (primary != null) return primary;
+
+    // Recovery from interrupted atomic write.
+    final bak = File('${file.path}.bak');
+    final recovered = await tryFile(bak);
+    if (recovered != null) {
+      try {
+        await recovered.save(file);
+      } catch (_) {}
+      return recovered;
+    }
+    return null;
   }
 
   static Future<void> clear(File file) async {

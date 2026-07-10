@@ -1,75 +1,158 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
-/// Integration: packaged JRE layout without monorepo on the resolve path,
-/// with JAVA_HOME forced to an old JDK — must still pick packaged 21.
+/// Real out-of-monorepo bundle: copy JRE+PWA beside a fake exe under systemTemp,
+/// resolve with JAVA_HOME=17 and empty YOMU_JAVA_HOME, confirm
+/// `{exeDir}/jre/bin/java.exe`, run that binary, and serve PWA from `{exeDir}/pwa`.
 void main() {
-  test('packaged jre beside fake exe wins over JAVA_HOME 17', () async {
-    final vendorRoot = JavaResolver.findMonorepoVendorJreRootForTest();
-    expect(
-      vendorRoot,
-      isNotNull,
-      reason:
-          'vendor/jre21 must exist for this integration test — do not skip silently',
-    );
+  test(
+    'isolated bundle: {exeDir}/jre/bin/java.exe + PWA (JAVA_HOME 17, no YOMU_JAVA_HOME)',
+    () async {
+      final vendorRoot = JavaResolver.findMonorepoVendorJreRootForTest();
+      expect(
+        vendorRoot,
+        isNotNull,
+        reason: 'vendor/jre21 required — run tool/fetch_jre21_windows.ps1',
+      );
 
-    final stage = Directory.systemTemp.createTempSync('yomu-jre-pack');
-    addTearDown(() {
-      try {
-        stage.deleteSync(recursive: true);
-      } catch (_) {}
-    });
+      final stage = Directory.systemTemp.createTempSync('yomu-bundle-iso-');
+      addTearDown(() {
+        try {
+          stage.deleteSync(recursive: true);
+        } catch (_) {}
+      });
 
-    // Fake distribution: {stage}/app/yomu_desktop.exe + {stage}/app/jre/**
-    final appDir = Directory(p.join(stage.path, 'app'));
-    final jreDest = Directory(p.join(appDir.path, 'jre'));
-    await jreDest.create(recursive: true);
-    await _copyDir(Directory(vendorRoot!), jreDest);
+      // Must not live under the monorepo packages tree.
+      final monorepoPkg = p.normalize(
+        p.join(Directory.current.path, 'packages'),
+      );
+      expect(
+        p.isWithin(monorepoPkg, stage.path),
+        isFalse,
+        reason: 'stage outside monorepo packages: ${stage.path}',
+      );
 
-    final fakeExe = File(p.join(appDir.path, 'yomu_desktop.exe'));
-    await fakeExe.writeAsBytes([0]); // placeholder
+      final appDir = Directory(p.join(stage.path, 'app'));
+      await appDir.create(recursive: true);
+      final fakeExe = File(
+        p.join(appDir.path, Platform.isWindows ? 'yomu_desktop.exe' : 'yomu'),
+      );
+      await fakeExe.writeAsBytes([0]);
 
-    // Isolated managed root (no monorepo paths).
-    final dataRoot = Directory(p.join(stage.path, 'data', 'yomu'));
-    final paths = SuwayomiPaths(dataRoot);
-    await paths.ensureLayout();
+      final jreDest = Directory(p.join(appDir.path, 'jre'));
+      await _copyDir(Directory(vendorRoot!), jreDest);
+      final expectedJava = File(
+        p.join(
+          appDir.path,
+          'jre',
+          'bin',
+          Platform.isWindows ? 'java.exe' : 'java',
+        ),
+      );
+      expect(expectedJava.existsSync(), isTrue);
+      final expectedNorm = p.normalize(expectedJava.absolute.path);
+      if (Platform.isWindows) {
+        expect(
+          expectedNorm.toLowerCase().replaceAll('/', r'\').endsWith(
+                r'jre\bin\java.exe',
+              ),
+          isTrue,
+          reason: 'exact layout {exeDir}/jre/bin/java.exe, got $expectedNorm',
+        );
+      }
 
-    // Point Platform.resolvedExecutable cannot be faked easily — test
-    // packaged path discovery by temporarily changing Directory.current to
-    // appDir and ensuring managed seed + vendor search from copied jre.
-    // Direct API: resolve should find managed after ensureManagedJre copies
-    // from vendor when we also plant packaged jre via ensureManagedJre seed.
-    //
-    // Seed managed jre from our staged packaged tree:
-    await const JavaResolver().ensureManagedJre(paths);
-    // Manually copy staged jre into managed if ensure didn't (no monorepo in path).
-    final managedJava = File(
-      p.join(paths.jreDir.path, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
-    );
-    if (!managedJava.existsSync()) {
-      await _copyDir(jreDest, paths.jreDir);
-    }
-    expect(managedJava.existsSync(), isTrue);
+      final pwaSrc = _findPwaSource();
+      expect(pwaSrc, isNotNull);
+      final pwaDest = Directory(p.join(appDir.path, 'pwa'));
+      await pwaDest.create(recursive: true);
+      await File(p.join(pwaSrc!, 'index.html'))
+          .copy(p.join(pwaDest.path, 'index.html'));
 
-    final prevJavaHome = Platform.environment['JAVA_HOME'];
-    // Note: Platform.environment is unmodifiable on some platforms — we
-    // validate managed-jre is selected when it is first among non-override.
-    final r = await const JavaResolver().resolve(paths: paths, minMajor: 21);
-    expect(r, isNotNull);
-    expect(r!.versionMajor, greaterThanOrEqualTo(21));
-    expect(
-      r.javaExecutable.toLowerCase().contains('runtime') ||
-          r.javaExecutable.toLowerCase().contains('jre'),
-      isTrue,
-      reason: 'must use packaged/managed jre, got ${r.source} ${r.javaExecutable}',
-    );
-    expect(r.source.contains('JAVA_HOME'), isFalse);
-    // ignore unused
-    expect(prevJavaHome == prevJavaHome, isTrue);
-  }, timeout: const Timeout(Duration(minutes: 3)));
+      final jdk17 = Directory(p.join(stage.path, 'jdk17'));
+      final jdk17Java = File(
+        p.join(
+          jdk17.path,
+          'bin',
+          Platform.isWindows ? 'java.exe' : 'java',
+        ),
+      );
+      await jdk17Java.create(recursive: true);
+      await jdk17Java.writeAsBytes([0]);
+
+      final dataRoot = Directory(p.join(stage.path, 'data', 'yomu'));
+      final paths = SuwayomiPaths(dataRoot);
+      await paths.ensureLayout();
+
+      final resolver = JavaResolver(
+        resolvedExecutableForTest: fakeExe.path,
+        searchRootsForTest: const [],
+        environmentForTest: {
+          'JAVA_HOME': jdk17.path,
+          // YOMU_JAVA_HOME intentionally empty/absent
+        },
+        versionProbeForTest: (exe) async {
+          final n = exe.toLowerCase().replaceAll(r'\', '/');
+          if (n.contains('/jre/bin/java')) return 21;
+          if (n.contains('/jdk17/')) return 17;
+          return null;
+        },
+      );
+
+      final r = await resolver.resolve(paths: paths, minMajor: 21);
+      expect(r, isNotNull);
+      expect(r!.versionMajor, greaterThanOrEqualTo(21));
+      expect(r.source, 'packaged-jre');
+      expect(
+        p.normalize(r.javaExecutable).toLowerCase(),
+        expectedNorm.toLowerCase(),
+      );
+      expect(r.javaExecutable.toLowerCase().contains('jdk17'), isFalse);
+
+      // Live binary from the isolated copy.
+      final probe = await Process.run(expectedJava.path, ['-version']);
+      final verText = '${probe.stderr}\n${probe.stdout}';
+      expect(verText, contains(RegExp(r'version "2[1-9]')));
+
+      // Serve PWA from {exeDir}/pwa (same path production uses).
+      final indexFile = File(p.join(pwaDest.path, 'index.html'));
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      server.listen((req) async {
+        if (req.uri.path == '/' || req.uri.path == '/index.html') {
+          req.response.headers.contentType = ContentType.html;
+          await req.response.addStream(indexFile.openRead());
+        } else {
+          req.response.statusCode = 404;
+        }
+        await req.response.close();
+      });
+      final client = HttpClient();
+      addTearDown(client.close);
+      final res = await client
+          .getUrl(Uri.parse('http://127.0.0.1:${server.port}/'))
+          .then((r) => r.close());
+      expect(res.statusCode, 200);
+      final body = await res.transform(utf8.decoder).join();
+      expect(body.toLowerCase(), contains('yomu'));
+    },
+    timeout: const Timeout(Duration(minutes: 5)),
+  );
+}
+
+String? _findPwaSource() {
+  var dir = Directory.current;
+  for (var i = 0; i < 8; i++) {
+    final cand = Directory(p.join(dir.path, 'apps', 'yomu_mobile_pwa'));
+    if (File(p.join(cand.path, 'index.html')).existsSync()) return cand.path;
+    final parent = dir.parent;
+    if (parent.path == dir.path) break;
+    dir = parent;
+  }
+  return null;
 }
 
 Future<void> _copyDir(Directory from, Directory to) async {

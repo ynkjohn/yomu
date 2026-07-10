@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-/// In-memory (+ optional file) device pairing for the local Yomu API.
 class DeviceSession {
   DeviceSession({
     required this.token,
@@ -54,16 +53,11 @@ class PairingCode {
   final String code;
   final DateTime expiresAt;
   final String nonce;
-  int failedAttempts = 0;
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
 }
 
-enum PairingClaimResult {
-  success,
-  invalidOrExpired,
-  rateLimited,
-}
+enum PairingClaimResult { success, invalidOrExpired, rateLimited }
 
 class PairingClaimOutcome {
   const PairingClaimOutcome({
@@ -80,24 +74,22 @@ class PairingClaimOutcome {
 class DeviceAuthStore {
   DeviceAuthStore({
     this.persistFile,
-    this.maxFailedAttemptsPerIp = 8,
-    this.maxFailedAttemptsPerPairing = 5,
+    this.maxFailedAttemptsPerPairingIp = 5,
     this.failWindow = const Duration(minutes: 10),
     this.sessionTtl = const Duration(days: 30),
   });
 
   final File? persistFile;
-  final int maxFailedAttemptsPerIp;
-  final int maxFailedAttemptsPerPairing;
+  final int maxFailedAttemptsPerPairingIp;
   final Duration failWindow;
   final Duration sessionTtl;
   final _sessions = <String, DeviceSession>{};
   PairingCode? _activePairing;
   final _rng = Random.secure();
 
-  /// Per-IP failed claim timestamps (no global lockout).
+  /// Failures keyed by `nonce|ip` only — never cancels pairing for other IPs.
   final _failTimestamps = <String, List<DateTime>>{};
-  final _rateLimitedUntilByKey = <String, DateTime>{};
+  final _rateLimitedUntil = <String, DateTime>{};
 
   List<DeviceSession> get sessions {
     _purgeExpiredSessions();
@@ -110,13 +102,19 @@ class DeviceAuthStore {
           ? _activePairing
           : null;
 
-  bool isRateLimitedFor(String clientKey) {
-    final until = _rateLimitedUntilByKey[clientKey];
+  String _pairIpKey(String nonce, String clientKey) => '$nonce|$clientKey';
+
+  bool isRateLimitedFor(String clientKey, {String? nonce}) {
+    final n = nonce ?? _activePairing?.nonce;
+    if (n == null) return false;
+    final until = _rateLimitedUntil[_pairIpKey(n, clientKey)];
     return until != null && DateTime.now().isBefore(until);
   }
 
-  int? rateLimitRetryAfterSecondsFor(String clientKey) {
-    final until = _rateLimitedUntilByKey[clientKey];
+  int? rateLimitRetryAfterSecondsFor(String clientKey, {String? nonce}) {
+    final n = nonce ?? _activePairing?.nonce;
+    if (n == null) return null;
+    final until = _rateLimitedUntil[_pairIpKey(n, clientKey)];
     if (until == null) return null;
     final s = until.difference(DateTime.now()).inSeconds;
     return s > 0 ? s : null;
@@ -143,9 +141,7 @@ class DeviceAuthStore {
     if (file == null) return;
     await file.parent.create(recursive: true);
     await file.writeAsString(
-      jsonEncode({
-        'sessions': sessions.map((s) => s.toJson()).toList(),
-      }),
+      jsonEncode({'sessions': sessions.map((s) => s.toJson()).toList()}),
     );
   }
 
@@ -161,9 +157,9 @@ class DeviceAuthStore {
       expiresAt: DateTime.now().add(ttl),
       nonce: nonce,
     );
-    // New code clears IP rate limits (operator action).
+    // Clear only limits for previous nonces of this operator action
     _failTimestamps.clear();
-    _rateLimitedUntilByKey.clear();
+    _rateLimitedUntil.clear();
     return _activePairing!;
   }
 
@@ -171,48 +167,33 @@ class DeviceAuthStore {
     _activePairing = null;
   }
 
-  /// Rate-limited per client IP **and** per active pairing code (budget).
   Future<PairingClaimOutcome> claimPairing({
     required String code,
     required String deviceName,
     String clientKey = 'unknown',
   }) async {
-    if (isRateLimitedFor(clientKey)) {
-      return PairingClaimOutcome(
-        result: PairingClaimResult.rateLimited,
-        retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey),
+    final p = _activePairing;
+    if (p == null || p.isExpired) {
+      return const PairingClaimOutcome(
+        result: PairingClaimResult.invalidOrExpired,
       );
     }
 
-    final p = _activePairing;
-    if (p == null || p.isExpired) {
-      await _registerIpFailure(clientKey);
-      if (isRateLimitedFor(clientKey)) {
-        return PairingClaimOutcome(
-          result: PairingClaimResult.rateLimited,
-          retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey),
-        );
-      }
-      return const PairingClaimOutcome(
-        result: PairingClaimResult.invalidOrExpired,
+    final key = _pairIpKey(p.nonce, clientKey);
+    if (isRateLimitedFor(clientKey, nonce: p.nonce)) {
+      return PairingClaimOutcome(
+        result: PairingClaimResult.rateLimited,
+        retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey, nonce: p.nonce),
       );
     }
 
     if (p.code != code.trim()) {
-      p.failedAttempts++;
-      await _registerIpFailure(clientKey);
-      if (p.failedAttempts >= maxFailedAttemptsPerPairing) {
-        // Exhaust pairing budget — cancel this code only (not global DoS).
-        _activePairing = null;
+      await _registerPairIpFailure(key);
+      if (isRateLimitedFor(clientKey, nonce: p.nonce)) {
         return PairingClaimOutcome(
           result: PairingClaimResult.rateLimited,
-          retryAfterSeconds: failWindow.inSeconds,
-        );
-      }
-      if (isRateLimitedFor(clientKey)) {
-        return PairingClaimOutcome(
-          result: PairingClaimResult.rateLimited,
-          retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey),
+          retryAfterSeconds:
+              rateLimitRetryAfterSecondsFor(clientKey, nonce: p.nonce),
         );
       }
       return const PairingClaimOutcome(
@@ -220,9 +201,10 @@ class DeviceAuthStore {
       );
     }
 
+    // Success — do not clear other IPs' rate limits for this nonce.
+    _failTimestamps.remove(key);
+    _rateLimitedUntil.remove(key);
     _activePairing = null;
-    _failTimestamps.remove(clientKey);
-    _rateLimitedUntilByKey.remove(clientKey);
     final now = DateTime.now();
     final token = _randomToken();
     final session = DeviceSession(
@@ -240,14 +222,15 @@ class DeviceAuthStore {
     );
   }
 
-  Future<void> _registerIpFailure(String clientKey) async {
+  Future<void> _registerPairIpFailure(String key) async {
     final now = DateTime.now();
     final cutoff = now.subtract(failWindow);
-    final list = _failTimestamps.putIfAbsent(clientKey, () => <DateTime>[]);
+    final list = _failTimestamps.putIfAbsent(key, () => <DateTime>[]);
     list.removeWhere((t) => t.isBefore(cutoff));
     list.add(now);
-    if (list.length >= maxFailedAttemptsPerIp) {
-      _rateLimitedUntilByKey[clientKey] = now.add(failWindow);
+    if (list.length >= maxFailedAttemptsPerPairingIp) {
+      _rateLimitedUntil[key] = now.add(failWindow);
+      // Never cancel _activePairing here — other IPs may still claim.
     }
   }
 
@@ -261,7 +244,6 @@ class DeviceAuthStore {
     if (s == null) return null;
     if (s.isExpired) {
       _sessions.remove(token);
-      // Fire-and-forget persist
       unawaited(_persist());
       return null;
     }
@@ -275,7 +257,6 @@ class DeviceAuthStore {
     return removed;
   }
 
-  /// Revoke by device name (all sessions with that name).
   Future<int> revokeDevice(String deviceName) async {
     final keys = _sessions.entries
         .where((e) => e.value.deviceName == deviceName)

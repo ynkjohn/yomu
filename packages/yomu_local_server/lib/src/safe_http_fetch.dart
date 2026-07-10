@@ -2,22 +2,44 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
+
 /// Validates absolute URLs for outbound Core fetches (SSRF hardened).
 ///
 /// Resolves DNS, rejects private/special addresses, then **connects only to a
 /// pinned validated IP** while keeping Host/SNI as the original hostname.
+///
+/// **App code:** use [SafeHttpFetch.new] only (exported from the package barrel).
+/// **Tests:** use [safeHttpFetchForTest] from this library file — it is
+/// intentionally **not** re-exported by `package:yomu_local_server`.
 class SafeHttpFetch {
+  /// Production constructor — always enforces private/special IP blocking.
   SafeHttpFetch({
     this.maxRedirects = 3,
     this.timeout = const Duration(seconds: 30),
     this.maxBytes = 25 * 1024 * 1024,
     this.lookup = InternetAddress.lookup,
-  });
+  })  : _blockIp = isBlockedIp,
+        _blockHost = isBlockedHostLiteral;
+
+  /// Internal hooks for [safeHttpFetchForTest] only.
+  SafeHttpFetch._hooks({
+    this.maxRedirects = 3,
+    this.timeout = const Duration(seconds: 30),
+    this.maxBytes = 25 * 1024 * 1024,
+    required this.lookup,
+    required bool Function(InternetAddress ip) blockIp,
+    required bool Function(String host) blockHost,
+  })  : _blockIp = blockIp,
+        _blockHost = blockHost;
 
   final int maxRedirects;
   final Duration timeout;
   final int maxBytes;
   final Future<List<InternetAddress>> Function(String host) lookup;
+
+  final bool Function(InternetAddress ip) _blockIp;
+  final bool Function(String host) _blockHost;
 
   static bool isBlockedIp(InternetAddress ip) {
     if (ip.isLoopback || ip.isLinkLocal) return true;
@@ -34,15 +56,31 @@ class SafeHttpFetch {
       if (_isIpv4Compatible(raw)) {
         return _blockedIpv4(raw[12], raw[13], raw[14], raw[15]);
       }
+      // fc00::/7 unique local
       if ((raw[0] & 0xfe) == 0xfc) return true;
+      // ff00::/8 multicast
       if (raw[0] == 0xff) return true;
+      // 2001:db8::/32 documentation
       if (raw[0] == 0x20 &&
           raw[1] == 0x01 &&
           raw[2] == 0x0d &&
           raw[3] == 0xb8) {
         return true;
       }
+      // 2002::/16 6to4
       if (raw[0] == 0x20 && raw[1] == 0x02) return true;
+      // 100::/64 discard-only (RFC 6666)
+      if (raw[0] == 0x01 &&
+          raw[1] == 0x00 &&
+          raw[2] == 0 &&
+          raw[3] == 0 &&
+          raw[4] == 0 &&
+          raw[5] == 0 &&
+          raw[6] == 0 &&
+          raw[7] == 0) {
+        return true;
+      }
+      // :: unspecified
       if (raw.every((b) => b == 0)) return true;
     }
     return false;
@@ -104,7 +142,7 @@ class SafeHttpFetch {
   }
 
   Future<List<InternetAddress>> resolveSafeAddresses(String host) async {
-    if (isBlockedHostLiteral(host)) {
+    if (_blockHost(host)) {
       throw StateError('blocked_host: $host');
     }
     final literalHost =
@@ -113,7 +151,7 @@ class SafeHttpFetch {
             : host;
     final literal = InternetAddress.tryParse(literalHost);
     if (literal != null) {
-      if (isBlockedIp(literal)) {
+      if (_blockIp(literal)) {
         throw StateError('blocked_ip: ${literal.address}');
       }
       return [literal];
@@ -122,7 +160,7 @@ class SafeHttpFetch {
     if (addrs.isEmpty) throw StateError('dns_empty: $host');
     final safe = <InternetAddress>[];
     for (final a in addrs) {
-      if (isBlockedIp(a)) {
+      if (_blockIp(a)) {
         throw StateError('blocked_ip_in_dns: ${a.address}');
       }
       safe.add(a);
@@ -234,4 +272,28 @@ class SafeHttpFetch {
     ).timeout(timeout);
     return ConnectionTask.fromSocket(Future.value(secure), secure.destroy);
   }
+}
+
+/// Test-only seam: custom DNS/block predicates without a public “disable SSRF”
+/// flag on the production API.
+///
+/// **Not** re-exported from `package:yomu_local_server` — import this file:
+/// `import 'package:yomu_local_server/src/safe_http_fetch.dart' show safeHttpFetchForTest;`
+@visibleForTesting
+SafeHttpFetch safeHttpFetchForTest({
+  int maxRedirects = 3,
+  Duration timeout = const Duration(seconds: 30),
+  int maxBytes = 25 * 1024 * 1024,
+  required Future<List<InternetAddress>> Function(String host) lookup,
+  bool Function(InternetAddress ip)? blockIp,
+  bool Function(String host)? blockHost,
+}) {
+  return SafeHttpFetch._hooks(
+    maxRedirects: maxRedirects,
+    timeout: timeout,
+    maxBytes: maxBytes,
+    lookup: lookup,
+    blockIp: blockIp ?? SafeHttpFetch.isBlockedIp,
+    blockHost: blockHost ?? SafeHttpFetch.isBlockedHostLiteral,
+  );
 }

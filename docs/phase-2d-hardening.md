@@ -67,13 +67,25 @@ Inclui testes `yomu_ai`, preload e `node apps/yomu_mobile_pwa/test_reader_races.
 A PWA em **HTTP** é **somente para LAN confiável** (opt-in + pairing).  
 **HTTPS / Service Worker / A2HS de produção** ficam para a fase PWA final.
 
-## 2D.2
+## 2D.2 (concluída)
 
-- JRE empacotado: `{exeDir}/jre` + CMake install + `tool/bundle_jre_windows.ps1` (ver `docs/distribution-windows.md`)
-- `YOMU_JAVA_HOME` = override **explícito** (primeiro se válido ≥21)
-- Identidade viva: aguarda health / kill com ownership — nunca 2ª JVM
-- Identity save atômico (tmp → bak → rename; sem apagar live primeiro)
-- SafeHttpFetch: connect no IP validado + recheck DNS
-- Pairing: budget por IP + por código; tokens com TTL + revoke
-- JSON body max 32 KB
-- PWA inflight key `gen:page` + AbortController
+### Distribuição
+- JRE empacotado: `{exeDir}/jre/bin/java.exe` + CMake install **obrigatório no Release**
+- PWA no bundle: `{exeDir}/pwa` (resolve via `Platform.resolvedExecutable`)
+- Aquisição pinada: `vendor/jre_manifest.json` + `tool/fetch_jre21_windows.ps1` (versão, URL, SHA-256, licença)
+- Teste de bundle **fora do monorepo** (JAVA_HOME=17, YOMU_JAVA_HOME vazio)
+
+### Lifecycle
+- Após falha ao salvar identidade: só esquece `Process` com `exitCode` confirmado; kill=false/timeout → unhealthy + handle
+- Substituição crash-safe com recuperação `.bak`; rejeita `startedAt` inválido
+- Ownership por tokens **exatos** (java/jar/root/porta/runId/startedAt) — sem fallback basename
+
+### LAN / auth
+- Rate limit por `nonce|IP` (sem cancelar pairing para outros IPs)
+- Logout PWA → `POST /api/v1/session/revoke`; desktop pode revogar sessões
+- JSON: **413** body grande, **400** JSON inválido
+
+### PWA
+- Abort de `GET /chapters/{id}/pages` no switch de capítulo
+- Controlador de race extraído (`reader_race_logic.mjs`) + teste A lento → B rápido
+- Remoção inflight só se a Promise for a mesma identidade

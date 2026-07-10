@@ -307,8 +307,16 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     });
   }
 
+  /// Prefer packaged `{exeDir}/pwa` (Release); fall back to monorepo only in dev.
   Future<Directory?> _resolvePwaDir() async {
-    final candidates = [
+    final candidates = <Directory>[];
+    try {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      candidates.add(Directory(p.join(exeDir, 'pwa')));
+      candidates.add(Directory(p.join(exeDir, 'data', 'pwa')));
+    } catch (_) {}
+    // Dev fallbacks (flutter run from monorepo)
+    candidates.addAll([
       Directory(
         p.normalize(
           p.join(Directory.current.path, 'apps', 'yomu_mobile_pwa', 'dist'),
@@ -331,7 +339,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           ),
         ),
       ),
-    ];
+    ]);
     for (final d in candidates) {
       if (File(p.join(d.path, 'index.html')).existsSync()) return d;
     }
@@ -493,6 +501,24 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           onCancelPairing: _cancelPairing,
           lanAddresses: _lanAddresses,
           sessionCount: _auth?.sessions.length ?? 0,
+          sessions: (_auth?.sessions ?? [])
+              .map(
+                (s) => PairedSessionRow(
+                  token: s.token,
+                  deviceName: s.deviceName,
+                  createdAt: s.createdAt,
+                  lastSeenAt: s.lastSeenAt,
+                ),
+              )
+              .toList(),
+          onRevokeSession: (token) async {
+            await _auth?.revoke(token);
+            if (mounted) setState(() {});
+          },
+          onRevokeAllSessions: () async {
+            await _auth?.revokeAll();
+            if (mounted) setState(() {});
+          },
           onStart: () => unawaited(_startSuwayomi()),
           onStop: () => unawaited(_stopSuwayomi()),
           onRestart: () => unawaited(_restartSuwayomi()),

@@ -32,10 +32,10 @@ void main() {
     expect(store.authenticate(s.session!.token), isNull);
   });
 
-  test('rate limit is per-IP only (does not lock other clients)', () async {
+  test('rate limit is per nonce|IP only (does not cancel pairing for other IPs)',
+      () async {
     final store = DeviceAuthStore(
-      maxFailedAttemptsPerIp: 5,
-      maxFailedAttemptsPerPairing: 50,
+      maxFailedAttemptsPerPairingIp: 5,
       failWindow: const Duration(minutes: 10),
     );
     final pairing = store.startPairing();
@@ -48,7 +48,8 @@ void main() {
       );
     }
     expect(store.isRateLimitedFor('10.0.0.5'), isTrue);
-    expect(store.activePairing?.code, pairing.code);
+    expect(store.activePairing?.code, pairing.code,
+        reason: 'pairing must stay open for other IPs');
 
     final ok = await store.claimPairing(
       code: pairing.code,
@@ -58,11 +59,8 @@ void main() {
     expect(ok.result, PairingClaimResult.success);
   });
 
-  test('pairing budget exhausts code without global lock', () async {
-    final store = DeviceAuthStore(
-      maxFailedAttemptsPerIp: 100,
-      maxFailedAttemptsPerPairing: 3,
-    );
+  test('rate-limited IP does not poison a different IP on same nonce', () async {
+    final store = DeviceAuthStore(maxFailedAttemptsPerPairingIp: 3);
     final pairing = store.startPairing();
     for (var i = 0; i < 3; i++) {
       await store.claimPairing(
@@ -71,12 +69,15 @@ void main() {
         clientKey: '10.0.0.1',
       );
     }
-    expect(store.activePairing, isNull);
-    final blocked = await store.claimPairing(
+    expect(store.activePairing, isNotNull);
+    expect(store.isRateLimitedFor('10.0.0.1'), isTrue);
+    expect(store.isRateLimitedFor('10.0.0.2'), isFalse);
+
+    final ok = await store.claimPairing(
       code: pairing.code,
       deviceName: 'Y',
       clientKey: '10.0.0.2',
     );
-    expect(blocked.result, isNot(PairingClaimResult.success));
+    expect(ok.result, PairingClaimResult.success);
   });
 }

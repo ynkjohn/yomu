@@ -1,17 +1,40 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
+class _FixedJavaResolver extends JavaResolver {
+  _FixedJavaResolver(this.exe);
+  final String exe;
+
+  @override
+  Future<JavaResolution?> resolve({
+    required SuwayomiPaths paths,
+    int minMajor = 21,
+  }) async {
+    return JavaResolution(
+      javaExecutable: exe,
+      versionMajor: 21,
+      source: 'test-fixed',
+    );
+  }
+}
+
 class _FakeProbe implements ProcessOwnershipProbe {
-  _FakeProbe({this.listenerPid, this.snapshots = const {}});
+  _FakeProbe({
+    this.listenerPid,
+    this.snapshots = const {},
+    this.killSucceeds = true,
+  });
 
   int? listenerPid;
   Map<int, ProcessSnapshot> snapshots;
   final killed = <int>[];
   bool keepListenerAfterKill = false;
+  bool killSucceeds;
 
   @override
   Future<ProcessSnapshot?> inspectPid(int pid) async => snapshots[pid];
@@ -22,6 +45,7 @@ class _FakeProbe implements ProcessOwnershipProbe {
   @override
   Future<bool> killOwnedPid(int pid, {bool force = false}) async {
     killed.add(pid);
+    if (!killSucceeds) return false;
     if (!keepListenerAfterKill) {
       listenerPid = null;
       snapshots[pid] = ProcessSnapshot(pid: pid, exists: false);
@@ -282,4 +306,328 @@ void main() {
     expect(probe.killed, isEmpty);
     expect(manager.status.state, SuwayomiProcessState.unhealthy);
   });
+
+  test('healthy reattach reuses owned identity without second start race',
+      () async {
+    final root = Directory.systemTemp.createTempSync('yomu-reattach');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final paths = SuwayomiPaths(root);
+    await paths.ensureLayout();
+
+    const testPort = 24601;
+    final health = await HttpServer.bind(InternetAddress.loopbackIPv4, testPort);
+    addTearDown(health.close);
+    health.listen((req) async {
+      // SuwayomiClient.isHealthy probes root/about-like paths.
+      req.response.statusCode = 200;
+      req.response.headers.contentType = ContentType.json;
+      req.response.write('{"ok":true}');
+      await req.response.close();
+    });
+
+    final javaAbs = File(p.join(root.path, 'java', 'bin', 'java.exe'))
+      ..createSync(recursive: true);
+    final jarAbs = File(
+      p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar'),
+    )..createSync(recursive: true);
+    final rootAbs = paths.dataDir.absolute.path;
+    final started = DateTime.utc(2026, 7, 9, 12);
+    const runId = 'reattach1';
+    final cl = _ownedCmd(
+      javaAbs: javaAbs.absolute.path,
+      jarAbs: jarAbs.absolute.path,
+      rootAbs: rootAbs,
+      runId: runId,
+      started: started,
+      port: testPort,
+    );
+    final id = ManagedInstanceIdentity(
+      runId: runId,
+      pid: 4242,
+      startedAt: started,
+      javaExecutable: javaAbs.absolute.path,
+      jarPath: jarAbs.absolute.path,
+      rootDir: rootAbs,
+      port: testPort,
+    );
+    await id.save(paths.instanceIdentity);
+
+    final probe = _FakeProbe(
+      listenerPid: 4242,
+      snapshots: {
+        4242: ProcessSnapshot(pid: 4242, exists: true, commandLine: cl),
+      },
+    );
+
+    final manager = SuwayomiProcessManager(
+      paths: paths,
+      manifest: _manifest(),
+      ownershipProbe: probe,
+      port: testPort,
+    );
+
+    final result = await manager.start(
+      readyTimeout: const Duration(seconds: 5),
+    );
+    result.when(
+      ok: (s) {
+        expect(s.state, SuwayomiProcessState.running);
+        expect(s.pid, 4242);
+        expect(s.message!.toLowerCase(), contains('reaproveitado'));
+      },
+      err: (m, _) => fail('expected reattach ok: $m'),
+    );
+    expect(probe.killed, isEmpty);
+    expect(manager.identity?.runId, runId);
+  });
+
+  test('kill=false on owned stop keeps identity and unhealthy', () async {
+    final root = Directory.systemTemp.createTempSync('yomu-killfalse');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final paths = SuwayomiPaths(root);
+    await paths.ensureLayout();
+
+    final javaAbs = File(p.join(root.path, 'java', 'bin', 'java.exe'))
+      ..createSync(recursive: true);
+    final jarAbs = File(
+      p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar'),
+    )..createSync(recursive: true);
+    final rootAbs = paths.dataDir.absolute.path;
+    final started = DateTime.utc(2026, 7, 9, 11);
+    const runId = 'killfalse';
+    const testPort = 24602;
+    final cl = _ownedCmd(
+      javaAbs: javaAbs.absolute.path,
+      jarAbs: jarAbs.absolute.path,
+      rootAbs: rootAbs,
+      runId: runId,
+      started: started,
+      port: testPort,
+    );
+    final id = ManagedInstanceIdentity(
+      runId: runId,
+      pid: 8888,
+      startedAt: started,
+      javaExecutable: javaAbs.absolute.path,
+      jarPath: jarAbs.absolute.path,
+      rootDir: rootAbs,
+      port: testPort,
+    );
+    await id.save(paths.instanceIdentity);
+
+    final probe = _FakeProbe(
+      listenerPid: 8888,
+      snapshots: {
+        8888: ProcessSnapshot(pid: 8888, exists: true, commandLine: cl),
+      },
+      killSucceeds: false,
+    )..keepListenerAfterKill = true;
+
+    final manager = SuwayomiProcessManager(
+      paths: paths,
+      manifest: _manifest(),
+      ownershipProbe: probe,
+      port: testPort,
+    );
+
+    await manager.stop();
+    expect(probe.killed, contains(8888));
+    expect(manager.status.state, isNot(SuwayomiProcessState.stopped));
+    expect(paths.instanceIdentity.existsSync(), isTrue);
+  });
+
+  test('identity .bak recovery after primary corruption', () async {
+    final root = Directory.systemTemp.createTempSync('yomu-bak');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final file = File(p.join(root.path, 'id.json'));
+    final id = ManagedInstanceIdentity(
+      runId: 'bakrun',
+      pid: 9,
+      startedAt: DateTime.utc(2026, 3, 1),
+      javaExecutable: r'C:\j\java.exe',
+      jarPath: r'C:\j.jar',
+      rootDir: r'C:\data',
+      port: 14567,
+    );
+    await id.save(file);
+    // Simulate crash mid-replace: primary gone/corrupt, bak holds last good.
+    final bak = File('${file.path}.bak');
+    await file.copy(bak.path);
+    await file.writeAsString('{not-json');
+    final loaded = await ManagedInstanceIdentity.load(file);
+    expect(loaded?.runId, 'bakrun');
+    // Primary should be restored from bak.
+    final again = await ManagedInstanceIdentity.load(file);
+    expect(again?.runId, 'bakrun');
+  });
+
+  test('identity rejects invalid startedAt', () async {
+    final root = Directory.systemTemp.createTempSync('yomu-started');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final file = File(p.join(root.path, 'id.json'));
+    await file.writeAsString(
+      '{"runId":"x","pid":1,"startedAt":"not-a-date",'
+      '"javaExecutable":"j","jarPath":"j","rootDir":"r","port":1}',
+    );
+    expect(await ManagedInstanceIdentity.load(file), isNull);
+
+    await file.writeAsString(
+      '{"runId":"x","pid":1,"startedAt":"1970-01-01T00:00:00.000Z",'
+      '"javaExecutable":"j","jarPath":"j","rootDir":"r","port":1}',
+    );
+    // Epoch zero ms is invalid for our guard.
+    final epoch = ManagedInstanceIdentity(
+      runId: 'e',
+      pid: 1,
+      startedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      javaExecutable: 'j',
+      jarPath: 'j',
+      rootDir: 'r',
+      port: 1,
+    );
+    expect(epoch.hasValidStartedAt, isFalse);
+  });
+
+  test('command line rejects basename-only jar match', () {
+    final started = DateTime.utc(2026, 7, 9, 12);
+    final ok = ProcessOwnership.commandLineMatchesYomu(
+      commandLine:
+          r'C:\wrong\java.exe -Dyomu.runId=aa '
+          r'-Dyomu.startedAt=2026-07-09T12:00:00.000Z '
+          r'-Dsuwayomi.tachidesk.config.server.rootDir=C:/data '
+          r'-Dsuwayomi.tachidesk.config.server.port=14567 '
+          r'-jar Suwayomi-Server-v2.3.2238.jar',
+      runId: 'aa',
+      javaExecutable: r'C:\yomu\jre\bin\java.exe',
+      jarPath: r'C:\yomu\Suwayomi-Server-v2.3.2238.jar',
+      rootDir: r'C:\data',
+      port: 14567,
+      startedAt: started,
+    );
+    expect(ok, isFalse);
+  });
+
+  test(
+    'identity.save fail + kill=false: Process.start once; second start refused',
+    () async {
+      final root = Directory.systemTemp.createTempSync('yomu-savefail');
+      addTearDown(() {
+        try {
+          root.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final paths = SuwayomiPaths(root);
+      await paths.ensureLayout();
+
+      final jarBytes = [1, 2, 3, 4, 5, 9];
+      final hash = sha256.convert(jarBytes).toString();
+      final jar = File(
+        p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar'),
+      );
+      await jar.writeAsBytes(jarBytes);
+
+      final javaStub = File(p.join(root.path, 'java', 'bin', 'java.exe'))
+        ..createSync(recursive: true);
+      await javaStub.writeAsBytes([0]);
+
+      final manifest = VendorManifest(
+        suwayomi: SuwayomiArtifact(
+          version: 'v0',
+          revision: 'r0',
+          jarFile: 'Suwayomi-Server-v2.3.2238.jar',
+          downloadUrl: 'https://example.com/x.jar',
+          sha256: hash,
+          minJre: 21,
+        ),
+      );
+
+      var startCount = 0;
+      final startedProcs = <Process>[];
+      addTearDown(() async {
+        for (final proc in startedProcs) {
+          try {
+            proc.kill(ProcessSignal.sigkill);
+            await proc.exitCode.timeout(const Duration(seconds: 3));
+          } catch (_) {}
+        }
+      });
+
+      const testPort = 24603;
+      final probe = _FakeProbe(killSucceeds: false);
+
+      final manager = SuwayomiProcessManager(
+        paths: paths,
+        manifest: manifest,
+        javaResolver: _FixedJavaResolver(javaStub.absolute.path),
+        ownershipProbe: probe,
+        port: testPort,
+        identitySaveForTest: (id, file) async {
+          throw StateError('disk full — identity save forced fail');
+        },
+        killAndConfirmExitForTest: (proc, {required int pid}) async {
+          // kill=false / timeout → orphan (do not reap).
+          return true;
+        },
+        processStartForTest: (
+          executable,
+          arguments, {
+          String? workingDirectory,
+          Map<String, String>? environment,
+          bool runInShell = false,
+        }) async {
+          startCount++;
+          // Long-lived process so handle stays valid (not Yomu/Java).
+          final proc = await Process.start(
+            'powershell',
+            ['-NoProfile', '-Command', 'Start-Sleep -Seconds 120'],
+            runInShell: false,
+          );
+          startedProcs.add(proc);
+          return proc;
+        },
+      );
+
+      final first = await manager.start(
+        readyTimeout: const Duration(milliseconds: 200),
+      );
+      var firstFailed = false;
+      first.when(
+        ok: (_) => fail('expected save-fail error'),
+        err: (m, _) {
+          firstFailed = true;
+          expect(m.toLowerCase(), contains('identidade'));
+        },
+      );
+      expect(firstFailed, isTrue);
+      expect(startCount, 1);
+      expect(manager.identity, isNotNull);
+      expect(manager.status.state, SuwayomiProcessState.unhealthy);
+
+      // No identity file required — memory blocks second spawn.
+      if (paths.instanceIdentity.existsSync()) {
+        await paths.instanceIdentity.delete();
+      }
+
+      final second = await manager.start(
+        readyTimeout: const Duration(milliseconds: 200),
+      );
+      second.when(
+        ok: (_) => fail('second start must be refused'),
+        err: (m, _) {
+          final low = m.toLowerCase();
+          expect(
+            low.contains('memória') ||
+                low.contains('recusado') ||
+                low.contains('identidade') ||
+                low.contains('inspecionar') ||
+                low.contains('não revalid'),
+            isTrue,
+            reason: 'refuse message: $m',
+          );
+        },
+      );
+      expect(startCount, 1, reason: 'Process.start must run only once');
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+  );
 }

@@ -168,6 +168,81 @@ void main() {
     expect(claim.statusCode, 401);
   });
 
+  test('JSON body: 400 invalid JSON, 413 too large, 400 invalid UTF-8', () async {
+    final auth = DeviceAuthStore();
+    auth.startPairing();
+    final s = YomuServer(
+      host: '127.0.0.1',
+      port: 18796,
+      auth: auth,
+      suwayomiStatus: () => const SuwayomiStatus(
+        state: SuwayomiProcessState.stopped,
+      ),
+    );
+    await s.start();
+    addTearDown(s.stop);
+
+    final bad = await http.post(
+      Uri.parse('http://127.0.0.1:18796/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: '{not-json',
+    );
+    expect(bad.statusCode, 400);
+    expect(jsonDecode(bad.body)['error'], isNotNull);
+
+    final huge = 'x' * (YomuServer.maxJsonBodyBytes + 100);
+    final large = await http.post(
+      Uri.parse('http://127.0.0.1:18796/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: '{"code":"$huge"}',
+    );
+    expect(large.statusCode, 413);
+    expect(jsonDecode(large.body)['error'], 'body_too_large');
+
+    // Invalid UTF-8 sequence (0xFF is never valid in UTF-8).
+    final utf8Bad = await http.post(
+      Uri.parse('http://127.0.0.1:18796/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: [0x7b, 0xff, 0x7d], // `{` + invalid + `}`
+    );
+    expect(utf8Bad.statusCode, 400);
+    expect(jsonDecode(utf8Bad.body)['error'], 'utf8_invalid');
+  });
+  test('session revoke endpoint', () async {
+    final auth = DeviceAuthStore();
+    final pairing = auth.startPairing();
+    final s = YomuServer(
+      host: '127.0.0.1',
+      port: 18797,
+      auth: auth,
+      suwayomiStatus: () => const SuwayomiStatus(
+        state: SuwayomiProcessState.stopped,
+      ),
+    );
+    await s.start();
+    addTearDown(s.stop);
+
+    final claim = await http.post(
+      Uri.parse('http://127.0.0.1:18797/api/v1/pairing/claim'),
+      headers: {'content-type': 'application/json'},
+      body: jsonEncode({'code': pairing.code, 'deviceName': 'Phone'}),
+    );
+    final token = (jsonDecode(claim.body) as Map)['token'] as String;
+
+    final rev = await http.post(
+      Uri.parse('http://127.0.0.1:18797/api/v1/session/revoke'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    expect(rev.statusCode, 200);
+    expect(jsonDecode(rev.body)['revoked'], isTrue);
+
+    final me = await http.get(
+      Uri.parse('http://127.0.0.1:18797/api/v1/me'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    expect(me.statusCode, 401);
+  });
+
   test('raw media u= forbidden; ticket required', () async {
     final auth = DeviceAuthStore();
     final pairing = auth.startPairing();
@@ -213,7 +288,7 @@ void main() {
   });
 
   test('pairing rate limit returns 429 + Retry-After', () async {
-    final auth = DeviceAuthStore(maxFailedAttemptsPerIp: 3);
+    final auth = DeviceAuthStore(maxFailedAttemptsPerPairingIp: 3);
     auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',
