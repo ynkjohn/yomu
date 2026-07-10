@@ -1,5 +1,5 @@
 name: yomu_storage
-description: Yomu SQLite storage (Drift) for extras — not Suwayomi data.
+description: Yomu SQLite storage (Drift) — sessions/settings/history extras (not Suwayomi).
 version: 0.1.0
 publish_to: none
 
@@ -11,9 +11,17 @@ resolution: workspace
 dependencies:
   yomu_core:
     path: ../yomu_core
+  drift: 2.28.0
   meta: ^1.16.0
   path: ^1.9.1
+  # sqlite3 is transitive via drift; must resolve to 2.9.4 on Dart 3.8.1
+  # (do NOT use sqlite3_flutter_libs — desktop uses OS SQLite / winsqlite3.dll)
 
 dev_dependencies:
+  build_runner: ^2.4.13
+  drift_dev: 2.28.0
   lints: ^5.1.1
   test: ^1.25.15
+
+executables:
+  lock_probe: lock_probe

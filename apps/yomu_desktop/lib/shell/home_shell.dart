@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_local_server/yomu_local_server.dart';
+import 'package:yomu_storage/yomu_storage.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
@@ -21,6 +22,7 @@ import '../screens/maya_screen.dart';
 import '../screens/placeholder_screen.dart';
 import '../screens/server_screen.dart';
 import '../services/suwayomi_maya_port.dart';
+import 'desktop_lifecycle.dart';
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -79,6 +81,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   ];
 
   String _selected = 'server';
+  /// Sole P0 storage instance — opened before Auth/Maya/Core/Suwayomi.
+  YomuDatabase? _db;
   SuwayomiProcessManager? _manager;
   SuwayomiApi? _api;
   YomuServer? _yomuServer;
@@ -98,6 +102,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   SuwayomiStatus _suwayomiStatus =
       const SuwayomiStatus(state: SuwayomiProcessState.stopped);
 
+  /// Serializes bootstrap / HTTP restart / shutdown (shared queue).
+  final DesktopLifecycleQueue _lifecycle = DesktopLifecycleQueue();
 
   bool get _engineReady =>
       _manager != null &&
@@ -118,79 +124,193 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _bootstrap() async {
-    try {
-      final support = await getApplicationSupportDirectory();
-      final root = Directory(p.join(support.path, 'yomu'));
-      await root.create(recursive: true);
-      final paths = SuwayomiPaths(root);
-      await paths.ensureLayout();
+  Future<void> _bootstrap() {
+    return _lifecycle.run(() async {
+      if (_lifecycle.shuttingDown) return;
+      await _teardownOwnedResources();
+      YomuDatabase? db;
+      SuwayomiProcessManager? manager;
+      YomuServer? server;
+      StreamSubscription<SuwayomiStatus>? statusSub;
+      try {
+        final support = await getApplicationSupportDirectory();
+        final root = Directory(p.join(support.path, 'yomu'));
+        await root.create(recursive: true);
 
-      final auth = DeviceAuthStore(
-        persistFile: File(p.join(root.path, 'device_sessions.json')),
-      );
-      await auth.load();
-
-      final mayaStore = MayaStore(File(p.join(root.path, 'maya_chat.json')));
-      await mayaStore.load();
-      final maya = MayaService(
-        store: mayaStore,
-        libraryPort: SuwayomiMayaPort(() => _api),
-      );
-
-      final manifestJson =
-          await rootBundle.loadString('assets/vendor/manifest.json');
-      final manifest = VendorManifest.fromJson(
-        jsonDecode(manifestJson) as Map<String, dynamic>,
-      );
-
-      final manager = SuwayomiProcessManager(
-        paths: paths,
-        manifest: manifest,
-        host: '127.0.0.1',
-        port: kYomuSuwayomiPort,
-      );
-
-      final pwaDir = await _resolvePwaDir();
-      final server = _buildYomuServer(
-        manager: manager,
-        auth: auth,
-        pwaDir: pwaDir,
-        lanEnabled: false,
-        lanAddresses: const [],
-      );
-      await server.start();
-
-      _statusSub = manager.statusStream.listen((s) {
-        if (mounted) {
-          setState(() {
-            _suwayomiStatus = s;
-            if (s.isReady) {
-              _api = SuwayomiApi(manager.createClient());
+        // Storage first — Auth/Core/Suwayomi only after open succeeds.
+        await StorageFirstBootstrap.run(
+          openStorage: () async {
+            db = await YomuDatabase.open(root);
+            if (!mounted || _lifecycle.shuttingDown) {
+              await db?.close();
+              db = null;
+              throw _BootstrapAborted();
             }
-          });
-        }
-      });
+            _db = db;
+          },
+          afterStorage: () async {
+            final paths = SuwayomiPaths(root);
+            await paths.ensureLayout();
 
-      if (!mounted) return;
-      setState(() {
-        _manager = manager;
-        _api = SuwayomiApi(manager.createClient());
-        _auth = auth;
-        _maya = maya;
-        _pwaDir = pwaDir;
-        _yomuServer = server;
-        _suwayomiStatus = manager.status;
-        _lanEnabled = false;
-        _bootstrapping = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _bootstrapError = e.toString();
-        _bootstrapping = false;
-      });
-    }
+            final auth = DeviceAuthStore(
+              persistFile: File(p.join(root.path, 'device_sessions.json')),
+            );
+            await auth.load();
+
+            final mayaStore =
+                MayaStore(File(p.join(root.path, 'maya_chat.json')));
+            await mayaStore.load();
+            final maya = MayaService(
+              store: mayaStore,
+              libraryPort: SuwayomiMayaPort(() => _api),
+            );
+
+            final manifestJson =
+                await rootBundle.loadString('assets/vendor/manifest.json');
+            final manifest = VendorManifest.fromJson(
+              jsonDecode(manifestJson) as Map<String, dynamic>,
+            );
+
+            manager = SuwayomiProcessManager(
+              paths: paths,
+              manifest: manifest,
+              host: '127.0.0.1',
+              port: kYomuSuwayomiPort,
+            );
+
+            final pwaDir = await _resolvePwaDir();
+            server = _buildYomuServer(
+              manager: manager!,
+              auth: auth,
+              pwaDir: pwaDir,
+              lanEnabled: false,
+              lanAddresses: const [],
+            );
+            await server!.start();
+
+            statusSub = manager!.statusStream.listen((s) {
+              if (mounted) {
+                setState(() {
+                  _suwayomiStatus = s;
+                  if (s.isReady) {
+                    _api = SuwayomiApi(manager!.createClient());
+                  }
+                });
+              }
+            });
+
+            if (!mounted || _lifecycle.shuttingDown) {
+              await _teardownResources(
+                statusSub: statusSub,
+                server: server,
+                manager: manager,
+                db: db,
+              );
+              db = null;
+              manager = null;
+              server = null;
+              statusSub = null;
+              throw _BootstrapAborted();
+            }
+
+            final liveManager = manager!;
+            final liveServer = server!;
+            final liveSub = statusSub!;
+            final liveDb = db!;
+            _statusSub = liveSub;
+            _manager = liveManager;
+            _yomuServer = liveServer;
+            _db = liveDb;
+            setState(() {
+              _api = SuwayomiApi(liveManager.createClient());
+              _auth = auth;
+              _maya = maya;
+              _pwaDir = pwaDir;
+              _suwayomiStatus = liveManager.status;
+              _lanEnabled = false;
+              _bootstrapping = false;
+              _bootstrapError = null;
+            });
+            db = null;
+            manager = null;
+            server = null;
+            statusSub = null;
+          },
+        );
+      } on _BootstrapAborted {
+        // Clean abort (unmount/shutdown) — resources already handled.
+      } catch (e) {
+        await _teardownResources(
+          statusSub: statusSub ?? _statusSub,
+          server: server ?? _yomuServer,
+          manager: manager ?? _manager,
+          db: db ?? _db ?? YomuDatabase.instance,
+        );
+        _statusSub = null;
+        _yomuServer = null;
+        _manager = null;
+        _db = null;
+        _auth = null;
+        _maya = null;
+        _api = null;
+        if (!mounted) return;
+        final msg = e is YomuAlreadyRunningException
+            ? e.toString()
+            : e.toString();
+        setState(() {
+          _bootstrapError = msg;
+          _bootstrapping = false;
+        });
+      }
+    });
+  }
+
+  /// Core → Suwayomi → DB. [close] runs even if [stop] throws.
+  Future<void> _teardownResources({
+    StreamSubscription<SuwayomiStatus>? statusSub,
+    YomuServer? server,
+    SuwayomiProcessManager? manager,
+    YomuDatabase? db,
+  }) {
+    return ResourceTeardown.run(
+      cancelSubscription: () async {
+        await statusSub?.cancel();
+      },
+      stopServer: () async {
+        await server?.stop();
+      },
+      closeServer: () async {
+        server?.close();
+      },
+      disposeManager: () async {
+        try {
+          await manager?.dispose();
+        } catch (_) {
+          await manager?.shutdown();
+        }
+      },
+      closeDb: () async {
+        if (db != null) await db.close();
+      },
+    );
+  }
+
+  Future<void> _teardownOwnedResources() async {
+    final sub = _statusSub;
+    final server = _yomuServer;
+    final manager = _manager;
+    final db = _db ?? YomuDatabase.instance;
+    _statusSub = null;
+    _yomuServer = null;
+    _manager = null;
+    _db = null;
+    _api = null;
+    await _teardownResources(
+      statusSub: sub,
+      server: server,
+      manager: manager,
+      db: db,
+    );
   }
 
   YomuServer _buildYomuServer({
@@ -222,43 +342,86 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _restartYomuHttp({required bool lanEnabled}) async {
-    final manager = _manager;
-    final auth = _auth;
-    if (manager == null || auth == null) return;
+  Future<void> _restartYomuHttp({required bool lanEnabled}) {
+    // Same lifecycle queue as bootstrap/shutdown — shutdown waits for this.
+    return _lifecycle.run(() async {
+      if (_lifecycle.shuttingDown) return;
+      final manager = _manager;
+      final auth = _auth;
+      if (manager == null || auth == null) return;
 
-    setState(() => _busyHttp = true);
-    try {
-      await _yomuServer?.stop();
-      _yomuServer?.close();
-      final addrs = lanEnabled ? await listLanIpv4Addresses() : <String>[];
-      final server = _buildYomuServer(
-        manager: manager,
-        auth: auth,
-        pwaDir: _pwaDir,
-        lanEnabled: lanEnabled,
-        lanAddresses: addrs,
-      );
-      await server.start();
-      if (!mounted) return;
-      setState(() {
-        _yomuServer = server;
-        _lanEnabled = lanEnabled;
-        _lanAddresses = addrs;
-        if (!lanEnabled) {
-          _pairingCode = null;
-          _pairingExpiresAt = null;
-          auth.cancelPairing();
+      if (mounted) setState(() => _busyHttp = true);
+      try {
+        final addrs = lanEnabled ? await listLanIpv4Addresses() : <String>[];
+        await HttpServerRestartCoordinator.replaceServer<YomuServer>(
+          stopOld: () async {
+            final old = _yomuServer;
+            _yomuServer = null;
+            if (old == null) return;
+            try {
+              await old.stop();
+            } catch (_) {}
+            try {
+              old.close();
+            } catch (_) {}
+          },
+          startNew: () async {
+            final server = _buildYomuServer(
+              manager: manager,
+              auth: auth,
+              pwaDir: _pwaDir,
+              lanEnabled: lanEnabled,
+              lanAddresses: addrs,
+            );
+            try {
+              await server.start();
+            } catch (_) {
+              // start failed — never leave a dangling new server.
+              try {
+                await server.stop();
+              } catch (_) {}
+              try {
+                server.close();
+              } catch (_) {}
+              rethrow;
+            }
+            return server;
+          },
+          disposeServer: (server) async {
+            try {
+              await server.stop();
+            } catch (_) {}
+            try {
+              server.close();
+            } catch (_) {}
+          },
+          shouldAbort: () => !mounted || _lifecycle.shuttingDown,
+          commit: (server) {
+            _yomuServer = server;
+          },
+        );
+        if (!mounted || _lifecycle.shuttingDown) {
+          if (mounted) setState(() => _busyHttp = false);
+          return;
         }
-        _busyHttp = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _busyHttp = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Falha ao reiniciar HTTP Yomu: $e')),
-      );
-    }
+        setState(() {
+          _lanEnabled = lanEnabled;
+          _lanAddresses = addrs;
+          if (!lanEnabled) {
+            _pairingCode = null;
+            _pairingExpiresAt = null;
+            auth.cancelPairing();
+          }
+          _busyHttp = false;
+        });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _busyHttp = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Falha ao reiniciar HTTP Yomu: $e')),
+        );
+      }
+    });
   }
 
   Future<void> _toggleLan(bool enabled) async {
@@ -346,25 +509,19 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     return null;
   }
 
-  Future<void> _coordinatedShutdown() async {
-    await _statusSub?.cancel();
-    _statusSub = null;
-    try {
-      await _yomuServer?.stop();
-      _yomuServer?.close();
-    } catch (_) {}
-    try {
-      await _manager?.shutdown();
-    } catch (_) {
-      // dispose is last-resort fallback only
-      await _manager?.dispose();
-    }
+  /// Idempotent shutdown: waits for in-flight bootstrap/restart, then tears down.
+  Future<void> _coordinatedShutdown() {
+    return _lifecycle.shutdown(() async {
+      await _teardownOwnedResources();
+      _auth = null;
+      _maya = null;
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // Fallback if lifecycle did not run — still attempt async teardown.
+    // Shared Future with detached — no duplicated teardown.
     unawaited(_coordinatedShutdown());
     super.dispose();
   }
@@ -634,3 +791,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 }
+
+/// Clean abort for unmount/shutdown mid-bootstrap (not user-facing).
+class _BootstrapAborted implements Exception {}

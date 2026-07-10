@@ -41,13 +41,15 @@ void main() {
 
   test('LAN health is sanitized (no pid/sessions/pairing)', () async {
     // host 0.0.0.0 → isLoopbackOnly false → sanitized payload
+    // Distinctive pid so substring checks are not poisoned by timestamps.
+    const leakPid = 8675309;
     final lanServer = YomuServer(
       host: '0.0.0.0',
       port: 18794,
       auth: DeviceAuthStore(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.running,
-        pid: 99,
+        pid: leakPid,
         message: 'secret',
         baseUrl: 'http://127.0.0.1:14567',
       ),
@@ -61,9 +63,10 @@ void main() {
     expect(map.containsKey('suwayomi'), isFalse);
     expect(map.containsKey('auth'), isFalse);
     expect(map.containsKey('bind'), isFalse);
+    expect(map.containsKey('pid'), isFalse);
     expect(jsonEncode(map), isNot(contains('secret')));
     expect(jsonEncode(map), isNot(contains('14567')));
-    expect(jsonEncode(map), isNot(contains('99')));
+    expect(jsonEncode(map), isNot(contains('$leakPid')));
   });
 
   test('default CORS is not wildcard', () async {

@@ -1,0 +1,7 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # Explicit; schemaVersion lives only on YomuDatabase.schemaVersion
+          store_date_time_values_as_text: false

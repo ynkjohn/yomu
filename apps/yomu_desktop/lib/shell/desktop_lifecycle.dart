@@ -1,0 +1,132 @@
+import 'dart:async';
+
+/// Serial lifecycle queue used by HomeShell for bootstrap, HTTP restart, and
+/// shutdown (same coordination for all three).
+class DesktopLifecycleQueue {
+  Future<void> _chain = Future<void>.value();
+  Future<void>? _shutdownFuture;
+  bool shuttingDown = false;
+
+  Future<void>? get shutdownFuture => _shutdownFuture;
+
+  /// Run [op] after any prior lifecycle op (including restart/bootstrap).
+  Future<void> run(Future<void> Function() op) {
+    final c = Completer<void>();
+    _chain = _chain.then((_) async {
+      try {
+        await op();
+        if (!c.isCompleted) c.complete();
+      } catch (e, st) {
+        if (!c.isCompleted) c.completeError(e, st);
+      }
+    });
+    return c.future;
+  }
+
+  /// Idempotent shutdown: marks [shuttingDown], waits for in-flight ops via [run].
+  Future<void> shutdown(Future<void> Function() teardown) {
+    if (_shutdownFuture != null) return _shutdownFuture!;
+    shuttingDown = true;
+    final c = Completer<void>();
+    _shutdownFuture = c.future;
+    unawaited(run(() async {
+      try {
+        await teardown();
+        if (!c.isCompleted) c.complete();
+      } catch (e, st) {
+        if (!c.isCompleted) c.completeError(e, st);
+      }
+    }));
+    return _shutdownFuture!;
+  }
+}
+
+/// Replace HTTP server under lifecycle rules.
+///
+/// - Stops/clears old server first.
+/// - On start failure, unmount, or shutdown: disposes the replacement if created.
+/// - Never leaves a dangling replacement server reference.
+class HttpServerRestartCoordinator {
+  /// [stopOld] should stop+close and null the stored reference.
+  /// [startNew] creates and starts a server (may throw).
+  /// [disposeServer] stop+close independently (close even if stop throws).
+  /// [shouldAbort] true when !mounted or shuttingDown.
+  /// [commit] stores the replacement server as the live reference.
+  static Future<T?> replaceServer<T>({
+    required Future<void> Function() stopOld,
+    required Future<T> Function() startNew,
+    required Future<void> Function(T server) disposeServer,
+    required bool Function() shouldAbort,
+    required void Function(T server) commit,
+  }) async {
+    T? created;
+    try {
+      await stopOld();
+      if (shouldAbort()) return null;
+      final started = await startNew();
+      created = started;
+      if (shouldAbort()) {
+        created = null;
+        await disposeServer(started);
+        return null;
+      }
+      commit(started);
+      created = null; // ownership transferred
+      return started;
+    } catch (e) {
+      final orphan = created;
+      created = null;
+      if (orphan != null) {
+        try {
+          await disposeServer(orphan);
+        } catch (_) {}
+      }
+      rethrow;
+    }
+  }
+}
+
+/// Resource teardown order: subscription → Core HTTP → Suwayomi → DB.
+///
+/// [closeServer] always runs even if [stopServer] throws.
+class ResourceTeardown {
+  static Future<void> run({
+    Future<void> Function()? cancelSubscription,
+    Future<void> Function()? stopServer,
+    Future<void> Function()? closeServer,
+    Future<void> Function()? disposeManager,
+    Future<void> Function()? closeDb,
+  }) async {
+    try {
+      await cancelSubscription?.call();
+    } catch (_) {}
+    try {
+      await stopServer?.call();
+    } catch (_) {}
+    try {
+      await closeServer?.call();
+    } catch (_) {}
+    try {
+      await disposeManager?.call();
+    } catch (_) {}
+    try {
+      await closeDb?.call();
+    } catch (_) {}
+  }
+}
+
+/// Bootstrap steps after storage open — used by HomeShell and unit tests.
+///
+/// Ensures Auth/Core/Suwayomi factories are **not** invoked if [openStorage]
+/// throws (second instance / lock failure).
+class StorageFirstBootstrap {
+  /// [openStorage] must acquire lock + open DB (or throw).
+  /// [afterStorage] creates Auth, Maya, Suwayomi manager, Core HTTP.
+  static Future<void> run({
+    required Future<void> Function() openStorage,
+    required Future<void> Function() afterStorage,
+  }) async {
+    await openStorage();
+    await afterStorage();
+  }
+}
