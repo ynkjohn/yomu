@@ -1,188 +1,235 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yomu_desktop/shell/desktop_lifecycle.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
 void main() {
-  test('StorageFirstBootstrap does not call afterStorage when open fails',
-      () async {
-    var after = false;
-    await expectLater(
-      StorageFirstBootstrap.run(
+  test(
+    'desktop exit waits for teardown and repeated requests share shutdown',
+    () async {
+      final queue = DesktopLifecycleQueue();
+      final teardownStarted = Completer<void>();
+      final allowTeardown = Completer<void>();
+      var teardownCalls = 0;
+      final exit = DesktopExitCoordinator(
+        shutdown: () => queue.shutdown(() async {
+          teardownCalls++;
+          teardownStarted.complete();
+          await allowTeardown.future;
+        }),
+      );
+
+      final first = exit.requestExit();
+      final second = exit.requestExit();
+      expect(identical(first, second), isTrue);
+
+      var responseCompleted = false;
+      unawaited(first.then((_) => responseCompleted = true));
+      await teardownStarted.future;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(responseCompleted, isFalse);
+      expect(teardownCalls, 1);
+
+      allowTeardown.complete();
+      expect(await first, ui.AppExitResponse.exit);
+      expect(await second, ui.AppExitResponse.exit);
+      expect(teardownCalls, 1);
+    },
+  );
+
+  test(
+    'StorageFirstBootstrap does not call afterStorage when open fails',
+    () async {
+      var after = false;
+      await expectLater(
+        StorageFirstBootstrap.run(
+          openStorage: () async {
+            throw StateError('lock held');
+          },
+          afterStorage: () async {
+            after = true;
+          },
+        ),
+        throwsStateError,
+      );
+      expect(after, isFalse);
+    },
+  );
+
+  test(
+    'StorageFirstBootstrap runs afterStorage only after openStorage',
+    () async {
+      final order = <String>[];
+      await StorageFirstBootstrap.run(
         openStorage: () async {
-          throw StateError('lock held');
+          order.add('open');
         },
         afterStorage: () async {
-          after = true;
+          order.add('after');
         },
-      ),
-      throwsStateError,
-    );
-    expect(after, isFalse);
-  });
+      );
+      expect(order, ['open', 'after']);
+    },
+  );
 
-  test('StorageFirstBootstrap runs afterStorage only after openStorage',
-      () async {
-    final order = <String>[];
-    await StorageFirstBootstrap.run(
-      openStorage: () async {
-        order.add('open');
-      },
-      afterStorage: () async {
-        order.add('after');
-      },
-    );
-    expect(order, ['open', 'after']);
-  });
+  test(
+    'HttpServerRestartCoordinator disposes new server on abort after start',
+    () async {
+      final events = <String>[];
+      final result = await HttpServerRestartCoordinator.replaceServer<String>(
+        stopOld: () async {
+          events.add('stopOld');
+        },
+        startNew: () async {
+          events.add('startNew');
+          return 'server-new';
+        },
+        disposeServer: (s) async {
+          events.add('dispose:$s');
+        },
+        shouldAbort: () {
+          // Abort after start would be checked post-start; first check before start.
+          return events.contains('startNew');
+        },
+        commit: (s) {
+          events.add('commit:$s');
+        },
+      );
+      expect(result, isNull);
+      expect(events, contains('stopOld'));
+      expect(events, contains('startNew'));
+      expect(events, contains('dispose:server-new'));
+      expect(events, isNot(contains('commit:server-new')));
+    },
+  );
 
-  test('HttpServerRestartCoordinator disposes new server on abort after start',
-      () async {
-    final events = <String>[];
-    final result = await HttpServerRestartCoordinator.replaceServer<String>(
-      stopOld: () async {
-        events.add('stopOld');
-      },
-      startNew: () async {
-        events.add('startNew');
-        return 'server-new';
-      },
-      disposeServer: (s) async {
-        events.add('dispose:$s');
-      },
-      shouldAbort: () {
-        // Abort after start would be checked post-start; first check before start.
-        return events.contains('startNew');
-      },
-      commit: (s) {
-        events.add('commit:$s');
-      },
-    );
-    expect(result, isNull);
-    expect(events, contains('stopOld'));
-    expect(events, contains('startNew'));
-    expect(events, contains('dispose:server-new'));
-    expect(events, isNot(contains('commit:server-new')));
-  });
+  test(
+    'HttpServerRestartCoordinator: start failure cleans server before rethrow',
+    () async {
+      final events = <String>[];
+      // Mirrors HomeShell: build server, start throws → dispose inline, rethrow.
+      // Coordinator must not commit; no live reference left.
+      Object? live;
+      await expectLater(
+        HttpServerRestartCoordinator.replaceServer<String>(
+          stopOld: () async {
+            events.add('stopOld');
+            live = null;
+          },
+          startNew: () async {
+            events.add('startNew');
+            const created = 'server-new';
+            try {
+              throw StateError('bind failed');
+            } catch (_) {
+              events.add('dispose-inline:$created');
+              rethrow;
+            }
+          },
+          disposeServer: (s) async {
+            events.add('dispose:$s');
+          },
+          shouldAbort: () => false,
+          commit: (s) {
+            live = s;
+            events.add('commit:$s');
+          },
+        ),
+        throwsStateError,
+      );
+      expect(live, isNull);
+      expect(events, contains('stopOld'));
+      expect(events, contains('startNew'));
+      expect(events, contains('dispose-inline:server-new'));
+      expect(events, isNot(contains('commit:server-new')));
+    },
+  );
 
-  test('HttpServerRestartCoordinator: start failure cleans server before rethrow',
-      () async {
-    final events = <String>[];
-    // Mirrors HomeShell: build server, start throws → dispose inline, rethrow.
-    // Coordinator must not commit; no live reference left.
-    Object? live;
-    await expectLater(
-      HttpServerRestartCoordinator.replaceServer<String>(
+  test(
+    'HttpServerRestartCoordinator: unmount mid-restart disposes new server',
+    () async {
+      final events = <String>[];
+      var mounted = true;
+      Object? live;
+      final result = await HttpServerRestartCoordinator.replaceServer<String>(
         stopOld: () async {
           events.add('stopOld');
           live = null;
         },
         startNew: () async {
           events.add('startNew');
-          const created = 'server-new';
-          try {
-            throw StateError('bind failed');
-          } catch (_) {
-            events.add('dispose-inline:$created');
-            rethrow;
-          }
+          mounted = false; // unmount while start completes
+          return 'server-new';
         },
         disposeServer: (s) async {
           events.add('dispose:$s');
         },
-        shouldAbort: () => false,
-        commit: (s) {
-          live = s;
-          events.add('commit:$s');
-        },
-      ),
-      throwsStateError,
-    );
-    expect(live, isNull);
-    expect(events, contains('stopOld'));
-    expect(events, contains('startNew'));
-    expect(events, contains('dispose-inline:server-new'));
-    expect(events, isNot(contains('commit:server-new')));
-  });
-
-  test('HttpServerRestartCoordinator: unmount mid-restart disposes new server',
-      () async {
-    final events = <String>[];
-    var mounted = true;
-    Object? live;
-    final result = await HttpServerRestartCoordinator.replaceServer<String>(
-      stopOld: () async {
-        events.add('stopOld');
-        live = null;
-      },
-      startNew: () async {
-        events.add('startNew');
-        mounted = false; // unmount while start completes
-        return 'server-new';
-      },
-      disposeServer: (s) async {
-        events.add('dispose:$s');
-      },
-      shouldAbort: () => !mounted,
-      commit: (s) {
-        live = s;
-        events.add('commit');
-      },
-    );
-    expect(result, isNull);
-    expect(live, isNull);
-    expect(events, ['stopOld', 'startNew', 'dispose:server-new']);
-  });
-
-  test('HttpServerRestartCoordinator: shutdown during restart aborts commit',
-      () async {
-    final queue = DesktopLifecycleQueue();
-    final events = <String>[];
-    Object? live;
-    // Gate: restart enters stopOld, then we mark shutdown, then stopOld continues.
-    final enteredStop = Completer<void>();
-    final allowStopContinue = Completer<void>();
-
-    final restart = queue.run(() async {
-      await HttpServerRestartCoordinator.replaceServer<String>(
-        stopOld: () async {
-          events.add('stopOld');
-          if (!enteredStop.isCompleted) enteredStop.complete();
-          await allowStopContinue.future;
-        },
-        startNew: () async {
-          events.add('startNew');
-          return 'S';
-        },
-        disposeServer: (s) async {
-          events.add('dispose:$s');
-        },
-        shouldAbort: () => queue.shuttingDown,
+        shouldAbort: () => !mounted,
         commit: (s) {
           live = s;
           events.add('commit');
         },
       );
-    });
+      expect(result, isNull);
+      expect(live, isNull);
+      expect(events, ['stopOld', 'startNew', 'dispose:server-new']);
+    },
+  );
 
-    await enteredStop.future;
-    final shutdown = queue.shutdown(() async {
-      events.add('shutdown');
-      live = null;
-    });
-    // shuttingDown is true; release stopOld so shouldAbort aborts before startNew.
-    allowStopContinue.complete();
+  test(
+    'HttpServerRestartCoordinator: shutdown during restart aborts commit',
+    () async {
+      final queue = DesktopLifecycleQueue();
+      final events = <String>[];
+      Object? live;
+      // Gate: restart enters stopOld, then we mark shutdown, then stopOld continues.
+      final enteredStop = Completer<void>();
+      final allowStopContinue = Completer<void>();
 
-    await restart;
-    await shutdown;
-    expect(events, contains('stopOld'));
-    expect(events, contains('shutdown'));
-    expect(events, isNot(contains('commit')));
-    // Aborted after stopOld (before start) — no replacement server to dispose.
-    expect(events, isNot(contains('startNew')));
-    expect(live, isNull);
-  });
+      final restart = queue.run(() async {
+        await HttpServerRestartCoordinator.replaceServer<String>(
+          stopOld: () async {
+            events.add('stopOld');
+            if (!enteredStop.isCompleted) enteredStop.complete();
+            await allowStopContinue.future;
+          },
+          startNew: () async {
+            events.add('startNew');
+            return 'S';
+          },
+          disposeServer: (s) async {
+            events.add('dispose:$s');
+          },
+          shouldAbort: () => queue.shuttingDown,
+          commit: (s) {
+            live = s;
+            events.add('commit');
+          },
+        );
+      });
+
+      await enteredStop.future;
+      final shutdown = queue.shutdown(() async {
+        events.add('shutdown');
+        live = null;
+      });
+      // shuttingDown is true; release stopOld so shouldAbort aborts before startNew.
+      allowStopContinue.complete();
+
+      await restart;
+      await shutdown;
+      expect(events, contains('stopOld'));
+      expect(events, contains('shutdown'));
+      expect(events, isNot(contains('commit')));
+      // Aborted after stopOld (before start) — no replacement server to dispose.
+      expect(events, isNot(contains('startNew')));
+      expect(live, isNull);
+    },
+  );
 
   test('ResourceTeardown closes server even if stop throws', () async {
     final events = <String>[];

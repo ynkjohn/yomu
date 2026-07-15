@@ -68,7 +68,12 @@ void main() {
           'data': {
             'fetchSourceManga': {
               'mangas': [
-                {'id': 1, 'title': 'Berserk', 'thumbnailUrl': '/t/1', 'inLibrary': false},
+                {
+                  'id': 1,
+                  'title': 'Berserk',
+                  'thumbnailUrl': '/t/1',
+                  'inLibrary': false,
+                },
               ],
               'hasNextPage': false,
             },
@@ -87,10 +92,50 @@ void main() {
     expect(results.single.id, 1);
   });
 
-  test('absoluteUrl prefixes loopback base', () {
+  test('fetchSourceManga maps catalog type, page, and hasNextPage', () async {
+    final mock = MockClient((request) async {
+      final payload = jsonDecode(request.body) as Map<String, dynamic>;
+      final variables = payload['variables'] as Map<String, dynamic>;
+      expect(variables['type'], 'POPULAR');
+      expect(variables['page'], 2);
+      expect(variables['q'], isNull);
+      return http.Response(
+        jsonEncode({
+          'data': {
+            'fetchSourceManga': {
+              'mangas': [
+                {
+                  'id': 41,
+                  'title': 'Catálogo real',
+                  'thumbnailUrl': '/thumb/41',
+                  'inLibrary': true,
+                },
+              ],
+              'hasNextPage': true,
+            },
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
     final api = SuwayomiApi(
-      SuwayomiClient(baseUrl: 'http://127.0.0.1:14567'),
+      SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
     );
+
+    final result = await api.fetchSourceManga(
+      sourceId: '5123733616022476906',
+      type: SourceMangaFetchType.popular,
+      page: 2,
+    );
+
+    expect(result.page, 2);
+    expect(result.hasNextPage, isTrue);
+    expect(result.items.single.title, 'Catálogo real');
+    expect(result.items.single.inLibrary, isTrue);
+  });
+  test('absoluteUrl prefixes loopback base', () {
+    final api = SuwayomiApi(SuwayomiClient(baseUrl: 'http://127.0.0.1:14567'));
     expect(
       api.absoluteUrl('/api/v1/manga/1/page/0'),
       'http://127.0.0.1:14567/api/v1/manga/1/page/0',
@@ -189,6 +234,94 @@ void main() {
     );
     expect(ch.lastPageRead, 7);
     expect(ch.mangaId, 9);
+  });
+
+  test('isTrustedKeiyoushiStore aceita URLs oficiais e rejeita substring', () {
+    expect(
+      SuwayomiApi.isTrustedKeiyoushiStore(
+        const ExtensionStoreInfo(
+          name: 'Keiyoushi',
+          indexUrl: SuwayomiApi.keiyoushiIndexUrl,
+          isLegacy: false,
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      SuwayomiApi.isTrustedKeiyoushiStore(
+        const ExtensionStoreInfo(
+          name: 'Keiyoushi Impersonator',
+          indexUrl: 'https://evil.example/keiyoushi/index.json',
+          isLegacy: false,
+        ),
+      ),
+      isFalse,
+    );
+  });
+
+  test('ensureKeiyoushiStore falha quando add retorna null', () async {
+    final mock = MockClient((request) async {
+      final body = request.body;
+      if (body.contains('extensionStores')) {
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'extensionStores': {
+                'nodes': <Map<String, Object?>>[],
+                'totalCount': 0,
+              },
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      // addExtensionStore returns null store
+      return http.Response(
+        jsonEncode({
+          'data': {
+            'addExtensionStore': {'extensionStore': null},
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    final api = SuwayomiApi(
+      SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
+    );
+    await expectLater(api.ensureKeiyoushiStore(), throwsA(isA<StateError>()));
+  });
+
+  test('ensureKeiyoushiStore reutiliza store confiável existente', () async {
+    var calls = 0;
+    final mock = MockClient((request) async {
+      calls++;
+      return http.Response(
+        jsonEncode({
+          'data': {
+            'extensionStores': {
+              'nodes': [
+                {
+                  'name': 'Keiyoushi',
+                  'indexUrl': SuwayomiApi.keiyoushiIndexUrl,
+                  'isLegacy': false,
+                },
+              ],
+              'totalCount': 1,
+            },
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    final api = SuwayomiApi(
+      SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
+    );
+    final store = await api.ensureKeiyoushiStore();
+    expect(store?.name, 'Keiyoushi');
+    expect(calls, 1); // list only, no add
   });
 
   test('getDownloadStatus parses queue', () async {

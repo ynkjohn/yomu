@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_local_server/yomu_local_server.dart';
@@ -15,7 +15,7 @@ import 'package:yomu_ui/yomu_ui.dart';
 
 import '../screens/downloads_screen.dart';
 import '../screens/explore_screen.dart';
-import '../screens/extensions_screen.dart';
+import '../screens/home_screen.dart';
 import '../screens/library_screen.dart';
 import '../screens/manga_detail_screen.dart';
 import '../screens/maya_screen.dart';
@@ -23,6 +23,35 @@ import '../screens/placeholder_screen.dart';
 import '../screens/server_screen.dart';
 import '../services/suwayomi_maya_port.dart';
 import 'desktop_lifecycle.dart';
+
+Color _motorStateColor(SuwayomiProcessState state) => switch (state) {
+  SuwayomiProcessState.running => YomuTokens.success,
+  SuwayomiProcessState.starting ||
+  SuwayomiProcessState.stopping => YomuTokens.warning,
+  SuwayomiProcessState.unhealthy ||
+  SuwayomiProcessState.crashed => YomuTokens.danger,
+  SuwayomiProcessState.stopped => YomuTokens.textMuted,
+};
+
+@visibleForTesting
+({String label, Color color}) deriveYomuCoreStatus({
+  required int? boundPort,
+  required SuwayomiProcessState motorState,
+}) {
+  if (boundPort == null) {
+    return (
+      label: 'Yomu Core indisponível · Motor ${motorState.name}',
+      color: YomuTokens.danger,
+    );
+  }
+  if (motorState == SuwayomiProcessState.running) {
+    return (label: 'Yomu Core ativo · :$boundPort', color: YomuTokens.success);
+  }
+  return (
+    label: 'Yomu Core ativo · :$boundPort · Motor ${motorState.name}',
+    color: _motorStateColor(motorState),
+  );
+}
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
@@ -33,54 +62,41 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   static const _nav = <YomuNavItem>[
-    YomuNavItem(
-      id: 'server',
-      label: 'Servidor',
-      icon: Icons.dns_outlined,
-    ),
-    YomuNavItem(
-      id: 'extensions',
-      label: 'Extensões',
-      icon: Icons.extension_outlined,
-    ),
-    YomuNavItem(
-      id: 'explore',
-      label: 'Explorar',
-      icon: Icons.explore_outlined,
-    ),
-    YomuNavItem(
-      id: 'library',
-      label: 'Biblioteca',
-      icon: Icons.collections_bookmark_outlined,
-    ),
-    YomuNavItem(
-      id: 'downloads',
-      label: 'Downloads',
-      icon: Icons.download_outlined,
-    ),
-    YomuNavItem(
-      id: 'history',
-      label: 'Histórico',
-      icon: Icons.history,
-    ),
-    YomuNavItem(
-      id: 'maya',
-      label: 'Maya',
-      icon: Icons.smart_toy_outlined,
-    ),
-    YomuNavItem(
-      id: 'source_builder',
-      label: 'Criador de fontes',
-      icon: Icons.construction_outlined,
-    ),
+    YomuNavItem(id: 'home', label: 'Home', icon: YomuIcons.home),
+    YomuNavItem(id: 'library', label: 'Biblioteca', icon: YomuIcons.library),
+    YomuNavItem(id: 'updates', label: 'Novidades', icon: YomuIcons.updates),
+    YomuNavItem(id: 'history', label: 'Histórico', icon: YomuIcons.history),
+    YomuNavItem(id: 'explore', label: 'Explorar', icon: YomuIcons.explore),
+    YomuNavItem(id: 'maya', label: 'Maya', icon: YomuIcons.maya),
+    YomuNavItem(id: 'downloads', label: 'Downloads', icon: YomuIcons.download),
     YomuNavItem(
       id: 'settings',
       label: 'Configurações',
-      icon: Icons.settings_outlined,
+      icon: YomuIcons.settings,
+      group: YomuNavGroup.system,
+    ),
+    YomuNavItem(
+      id: 'server',
+      label: 'Servidor e Motor',
+      icon: YomuIcons.server,
+      group: YomuNavGroup.system,
+    ),
+    YomuNavItem(
+      id: 'backup',
+      label: 'Backup',
+      icon: YomuIcons.backup,
+      group: YomuNavGroup.system,
+    ),
+    YomuNavItem(
+      id: 'diag',
+      label: 'Diagnóstico',
+      icon: YomuIcons.diagnostics,
+      group: YomuNavGroup.system,
     ),
   ];
 
-  String _selected = 'server';
+  String _selected = 'home';
+
   /// Sole P0 storage instance — opened before Auth/Maya/Core/Suwayomi.
   YomuDatabase? _db;
   SuwayomiProcessManager? _manager;
@@ -99,11 +115,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   DateTime? _pairingExpiresAt;
   List<String> _lanAddresses = const [];
   StreamSubscription<SuwayomiStatus>? _statusSub;
-  SuwayomiStatus _suwayomiStatus =
-      const SuwayomiStatus(state: SuwayomiProcessState.stopped);
+  SuwayomiStatus _suwayomiStatus = const SuwayomiStatus(
+    state: SuwayomiProcessState.stopped,
+  );
 
   /// Serializes bootstrap / HTTP restart / shutdown (shared queue).
   final DesktopLifecycleQueue _lifecycle = DesktopLifecycleQueue();
+  late final DesktopExitCoordinator _exitCoordinator;
 
   bool get _engineReady =>
       _manager != null &&
@@ -113,8 +131,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _exitCoordinator = DesktopExitCoordinator(shutdown: _coordinatedShutdown);
     WidgetsBinding.instance.addObserver(this);
     unawaited(_bootstrap());
+  }
+
+  @override
+  Future<ui.AppExitResponse> didRequestAppExit() {
+    return _exitCoordinator.requestExit();
   }
 
   @override
@@ -133,7 +157,11 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       YomuServer? server;
       StreamSubscription<SuwayomiStatus>? statusSub;
       try {
-        final support = await getApplicationSupportDirectory();
+        final appData = Platform.environment['APPDATA'];
+        if (appData == null || appData.trim().isEmpty) {
+          throw StateError('APPDATA não está disponível neste Windows.');
+        }
+        final support = Directory(p.join(appData, 'app.yomu', 'yomu_desktop'));
         final root = Directory(p.join(support.path, 'yomu'));
         await root.create(recursive: true);
 
@@ -157,16 +185,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             );
             await auth.load();
 
-            final mayaStore =
-                MayaStore(File(p.join(root.path, 'maya_chat.json')));
+            final mayaStore = MayaStore(
+              File(p.join(root.path, 'maya_chat.json')),
+            );
             await mayaStore.load();
             final maya = MayaService(
               store: mayaStore,
               libraryPort: SuwayomiMayaPort(() => _api),
             );
 
-            final manifestJson =
-                await rootBundle.loadString('assets/vendor/manifest.json');
+            final manifestJson = await rootBundle.loadString(
+              'assets/vendor/manifest.json',
+            );
             final manifest = VendorManifest.fromJson(
               jsonDecode(manifestJson) as Map<String, dynamic>,
             );
@@ -188,15 +218,19 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             );
             await server!.start();
 
-            statusSub = manager!.statusStream.listen((s) {
-              if (mounted) {
-                setState(() {
-                  _suwayomiStatus = s;
-                  if (s.isReady) {
-                    _api = SuwayomiApi(manager!.createClient());
-                  }
-                });
-              }
+            // Capture a non-null manager for the stream listener. The bootstrap
+            // locals are nulled after transfer; the listener must not close over
+            // those locals or a later running status will null-check-crash.
+            final listenedManager = manager!;
+            statusSub = listenedManager.statusStream.listen((s) {
+              if (!mounted) return;
+              setState(() {
+                _suwayomiStatus = s;
+                if (s.isReady) {
+                  final live = _manager ?? listenedManager;
+                  _api = SuwayomiApi(live.createClient());
+                }
+              });
             });
 
             if (!mounted || _lifecycle.shuttingDown) {
@@ -493,13 +527,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       ),
       Directory(
         p.normalize(
-          p.join(
-            Directory.current.path,
-            '..',
-            '..',
-            'apps',
-            'yomu_mobile_pwa',
-          ),
+          p.join(Directory.current.path, '..', '..', 'apps', 'yomu_mobile_pwa'),
         ),
       ),
     ]);
@@ -547,8 +575,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         }
       },
       err: (msg, _) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
         setState(() {
           _suwayomiStatus = m.status;
           _busyEngine = false;
@@ -599,8 +628,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         }
       },
       err: (msg, _) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(msg)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
         setState(() {
           _suwayomiStatus = m.status;
           _busyEngine = false;
@@ -644,149 +674,117 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     }
 
     return switch (_selected) {
+      'home' => HomeScreen(
+        api: _api,
+        engineReady: _engineReady,
+        onNavigate: (id) => setState(() => _selected = id),
+      ),
       'server' => ServerScreen(
-          status: _suwayomiStatus,
-          yomuPort: _yomuServer?.boundPort ?? 8787,
-          managedRootDir: _manager?.managedRootDir ?? '—',
-          aboutVersion: _aboutVersion,
-          busy: _busyEngine || _busyHttp,
-          lanEnabled: _lanEnabled,
-          onToggleLan: (v) => unawaited(_toggleLan(v)),
-          pairingCode: displayCode,
-          pairingExpiresAt: displayExpiry,
-          onStartPairing: _startPairing,
-          onCancelPairing: _cancelPairing,
-          lanAddresses: _lanAddresses,
-          sessionCount: _auth?.sessions.length ?? 0,
-          sessions: (_auth?.sessions ?? [])
-              .map(
-                (s) => PairedSessionRow(
-                  token: s.token,
-                  deviceName: s.deviceName,
-                  createdAt: s.createdAt,
-                  lastSeenAt: s.lastSeenAt,
-                ),
-              )
-              .toList(),
-          onRevokeSession: (token) async {
-            await _auth?.revoke(token);
-            if (mounted) setState(() {});
-          },
-          onRevokeAllSessions: () async {
-            await _auth?.revokeAll();
-            if (mounted) setState(() {});
-          },
-          onStart: () => unawaited(_startSuwayomi()),
-          onStop: () => unawaited(_stopSuwayomi()),
-          onRestart: () => unawaited(_restartSuwayomi()),
-          onHealthCheck: () async {
-            await _manager?.checkHealth();
-            if (_engineReady) {
-              final about = await _api?.about();
-              if (mounted) {
-                setState(() {
-                  _suwayomiStatus = _manager!.status;
-                  _aboutVersion = about == null
-                      ? _aboutVersion
-                      : '${about['version']} / ${about['revision']}';
-                });
-              }
-            } else if (mounted) {
-              setState(() => _suwayomiStatus = _manager!.status);
-            }
-          },
-        ),
-      'extensions' => ExtensionsScreen(
-          api: _api,
-          engineReady: _engineReady,
-        ),
-      'explore' => ExploreScreen(
-          api: _api,
-          engineReady: _engineReady,
-        ),
-      'library' => LibraryScreen(
-          api: _api,
-          engineReady: _engineReady,
-        ),
-      'downloads' => DownloadsScreen(
-          api: _api,
-          engineReady: _engineReady,
-        ),
-      'source_builder' => const PlaceholderScreen(
-          title: 'Criador de fontes',
-          message: 'Bloqueado — fase posterior (após Maya estável).',
-        ),
-      'maya' => MayaScreen(
-          service: _maya,
-          engineReady: _engineReady,
-          onOpenManga: (id, title) {
-            final api = _api;
-            if (api == null) return;
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => MangaDetailScreen(api: api, mangaId: id),
+        status: _suwayomiStatus,
+        yomuPort: _yomuServer?.boundPort ?? 8787,
+        managedRootDir: _manager?.managedRootDir ?? '—',
+        aboutVersion: _aboutVersion,
+        busy: _busyEngine || _busyHttp,
+        lanEnabled: _lanEnabled,
+        onToggleLan: (v) => unawaited(_toggleLan(v)),
+        pairingCode: displayCode,
+        pairingExpiresAt: displayExpiry,
+        onStartPairing: _startPairing,
+        onCancelPairing: _cancelPairing,
+        lanAddresses: _lanAddresses,
+        sessionCount: _auth?.sessions.length ?? 0,
+        sessions: (_auth?.sessions ?? [])
+            .map(
+              (s) => PairedSessionRow(
+                token: s.token,
+                deviceName: s.deviceName,
+                createdAt: s.createdAt,
+                lastSeenAt: s.lastSeenAt,
               ),
-            );
-          },
-        ),
+            )
+            .toList(),
+        onRevokeSession: (token) async {
+          await _auth?.revoke(token);
+          if (mounted) setState(() {});
+        },
+        onRevokeAllSessions: () async {
+          await _auth?.revokeAll();
+          if (mounted) setState(() {});
+        },
+        onStart: () => unawaited(_startSuwayomi()),
+        onStop: () => unawaited(_stopSuwayomi()),
+        onRestart: () => unawaited(_restartSuwayomi()),
+        onHealthCheck: () async {
+          final manager = _manager;
+          if (manager == null || _lifecycle.shuttingDown) return;
+          await manager.checkHealth();
+          if (!mounted ||
+              _lifecycle.shuttingDown ||
+              !identical(_manager, manager)) {
+            return;
+          }
+          if (_engineReady) {
+            final about = await _api?.about();
+            if (!mounted ||
+                _lifecycle.shuttingDown ||
+                !identical(_manager, manager)) {
+              return;
+            }
+            setState(() {
+              _suwayomiStatus = manager.status;
+              _aboutVersion = about == null
+                  ? _aboutVersion
+                  : '${about['version']} / ${about['revision']}';
+            });
+          } else {
+            setState(() => _suwayomiStatus = manager.status);
+          }
+        },
+      ),
+      'explore' => ExploreScreen(api: _api, engineReady: _engineReady),
+      'library' => LibraryScreen(api: _api, engineReady: _engineReady),
+      'downloads' => DownloadsScreen(api: _api, engineReady: _engineReady),
+      'maya' => MayaScreen(
+        service: _maya,
+        engineReady: _engineReady,
+        onOpenManga: (id, title) {
+          final api = _api;
+          if (api == null) return;
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => MangaDetailScreen(api: api, mangaId: id),
+            ),
+          );
+        },
+      ),
       _ => PlaceholderScreen(
-          title: _nav.firstWhere((e) => e.id == _selected).label,
-          message: 'Ainda não implementado nesta fase.',
-        ),
+        title: _nav.firstWhere((e) => e.id == _selected).label,
+        phase: _selected == 'updates'
+            ? 'A verificacao real de novidades sera conectada em uma fase posterior.'
+            : _selected == 'history'
+            ? 'O historico persistente sera conectado em uma fase posterior.'
+            : _selected == 'backup'
+            ? 'Backup e restauracao serao conectados em uma fase posterior.'
+            : _selected == 'diag'
+            ? 'A coleta e exportacao de diagnostico serao conectadas em uma fase posterior.'
+            : 'Destino preservado conforme o design_prod.',
+      ),
     };
   }
 
-  Color _stateColor(SuwayomiProcessState s) => switch (s) {
-        SuwayomiProcessState.running => YomuTokens.success,
-        SuwayomiProcessState.starting ||
-        SuwayomiProcessState.stopping =>
-          YomuTokens.warning,
-        SuwayomiProcessState.unhealthy ||
-        SuwayomiProcessState.crashed =>
-          YomuTokens.danger,
-        SuwayomiProcessState.stopped => YomuTokens.textMuted,
-      };
-
   @override
   Widget build(BuildContext context) {
+    final coreStatus = deriveYomuCoreStatus(
+      boundPort: _yomuServer?.boundPort,
+      motorState: _suwayomiStatus.state,
+    );
     return YomuAppShell(
       items: _nav,
       selectedId: _selected,
       onSelect: (id) => setState(() => _selected = id),
-      statusBar: Row(
-        children: [
-          StatusPill(
-            label: 'Suwayomi: ${_suwayomiStatus.state.name}',
-            color: _stateColor(_suwayomiStatus.state),
-          ),
-          const SizedBox(width: 12),
-          StatusPill(
-            label: 'loopback :$kYomuSuwayomiPort',
-            color: YomuTokens.accent,
-          ),
-          const SizedBox(width: 12),
-          StatusPill(
-            label: _lanEnabled
-                ? 'Yomu LAN :${_yomuServer?.boundPort ?? 8787}'
-                : 'Yomu local :${_yomuServer?.boundPort ?? 8787}',
-            color: _lanEnabled ? YomuTokens.warning : YomuTokens.textMuted,
-          ),
-          if (_suwayomiStatus.message != null) ...[
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                _suwayomiStatus.message!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: YomuTokens.textMuted,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
+      serverLabel: coreStatus.label,
+      serverColor: coreStatus.color,
+      onServerTap: () => setState(() => _selected = 'server'),
       body: _body(),
     );
   }

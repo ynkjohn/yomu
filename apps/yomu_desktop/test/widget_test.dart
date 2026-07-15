@@ -1,14 +1,37 @@
+import 'dart:ui' show SemanticsAction, SemanticsFlag;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_desktop/screens/extensions_screen.dart';
 import 'package:yomu_desktop/screens/server_screen.dart';
+import 'package:yomu_desktop/shell/home_shell.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 void main() {
+  test('core status never reports active without a bound server', () {
+    final unavailable = deriveYomuCoreStatus(
+      boundPort: null,
+      motorState: SuwayomiProcessState.running,
+    );
+
+    expect(unavailable.label, 'Yomu Core indisponível · Motor running');
+    expect(unavailable.color, YomuTokens.danger);
+
+    final available = deriveYomuCoreStatus(
+      boundPort: 8787,
+      motorState: SuwayomiProcessState.running,
+    );
+    expect(available.label, 'Yomu Core ativo · :8787');
+    expect(available.color, YomuTokens.success);
+  });
+
   testWidgets('ServerScreen shows stopped motor state', (tester) async {
+    final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    bool? requestedLanState;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -27,7 +50,7 @@ void main() {
           onRestart: () {},
           onHealthCheck: () {},
           lanEnabled: false,
-          onToggleLan: (_) {},
+          onToggleLan: (value) => requestedLanState = value,
           pairingCode: null,
           pairingExpiresAt: null,
           onStartPairing: () {},
@@ -37,16 +60,28 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(find.text('stopped'), findsOneWidget);
     expect(find.textContaining('127.0.0.1:14567'), findsWidgets);
     expect(find.text('Iniciar'), findsOneWidget);
     expect(find.textContaining('Yomu HTTP'), findsOneWidget);
     expect(find.textContaining('Permitir acesso na LAN'), findsOneWidget);
+    final lanToggle = find.bySemanticsLabel('Permitir acesso na LAN (Wi-Fi)');
+    expect(lanToggle, findsOneWidget);
+    final lanNode = tester.getSemantics(lanToggle);
+    expect(lanNode.hasFlag(SemanticsFlag.hasToggledState), isTrue);
+    expect(lanNode.hasFlag(SemanticsFlag.isToggled), isFalse);
+    expect(lanNode.hasFlag(SemanticsFlag.isEnabled), isTrue);
+    expect(lanNode.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+
+    await tester.tap(lanToggle);
+    expect(requestedLanState, isTrue);
+    semantics.dispose();
   });
 
   testWidgets('ServerScreen shows running motor state', (tester) async {
+    final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -76,16 +111,25 @@ void main() {
           onCancelPairing: () {},
           lanAddresses: const ['192.168.1.10'],
           sessionCount: 1,
+          busy: true,
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(find.text('running'), findsOneWidget);
     expect(find.textContaining('Suwayomi pronto'), findsOneWidget);
     expect(find.text('Parar'), findsOneWidget);
     expect(find.textContaining('Código: 123456'), findsOneWidget);
     expect(find.textContaining('http://192.168.1.10:8787/'), findsOneWidget);
+    final lanNode = tester.getSemantics(
+      find.bySemanticsLabel('Permitir acesso na LAN (Wi-Fi)'),
+    );
+    expect(lanNode.hasFlag(SemanticsFlag.isToggled), isTrue);
+    expect(lanNode.hasFlag(SemanticsFlag.isEnabled), isFalse);
+    expect(lanNode.hasFlag(SemanticsFlag.isLiveRegion), isTrue);
+    expect(lanNode.value, contains('Alteração em andamento'));
+    semantics.dispose();
   });
 
   testWidgets('ExtensionsScreen empty when motor not ready', (tester) async {
@@ -99,5 +143,161 @@ void main() {
     );
 
     expect(find.textContaining('Inicie o Suwayomi'), findsOneWidget);
+  });
+
+  testWidgets('YomuAppShell preserves navigation callback at narrow width', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.binding.setSurfaceSize(const Size(640, 480));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    String? selected;
+    var serverTaps = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: YomuAppShell(
+          title: 'Yomu',
+          items: const [
+            YomuNavItem(
+              id: 'server',
+              label: 'Servidor',
+              icon: YomuIcons.server,
+            ),
+            YomuNavItem(
+              id: 'library',
+              label: 'Biblioteca',
+              icon: YomuIcons.library,
+            ),
+          ],
+          selectedId: 'server',
+          onSelect: (id) => selected = id,
+          serverLabel: 'Motor running',
+          onServerTap: () => serverTaps++,
+          body: const Center(child: Text('Conteúdo')),
+        ),
+      ),
+    );
+
+    expect(
+      tester
+          .getSemantics(find.text('Servidor'))
+          .hasFlag(SemanticsFlag.isSelected),
+      isTrue,
+    );
+    await tester.tap(find.text('Biblioteca'));
+    await tester.pump();
+
+    expect(selected, 'library');
+    final navContainer = find.ancestor(
+      of: find.text('Biblioteca'),
+      matching: find.byType(AnimatedContainer),
+    );
+    expect(tester.getSize(navContainer.first).height, greaterThanOrEqualTo(44));
+    expect(find.text('Perfil local'), findsOneWidget);
+    expect(find.textContaining('João'), findsNothing);
+    expect(find.text('JP'), findsNothing);
+    final serverStatus = find.bySemanticsLabel('Abrir Servidor. Motor running');
+    final statusNode = tester.getSemantics(serverStatus);
+    expect(statusNode.hasFlag(SemanticsFlag.isButton), isTrue);
+    expect(
+      statusNode.getSemanticsData().hasAction(SemanticsAction.tap),
+      isTrue,
+    );
+    expect(tester.getSize(serverStatus).height, greaterThanOrEqualTo(44));
+
+    await tester.tap(serverStatus);
+    expect(serverTaps, 1);
+    final focusDetector = tester.widget<FocusableActionDetector>(
+      find.byKey(const ValueKey('yomu-server-status-focus')),
+    );
+    focusDetector.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    expect(serverTaps, 2);
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
+  });
+
+  testWidgets('AsyncBody keeps loading, empty, and error states distinct', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    Future<void> pump(Widget child) => tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(body: child),
+      ),
+    );
+
+    await pump(
+      const AsyncBody(
+        isLoading: true,
+        isEmpty: false,
+        emptyMessage: '',
+        child: SizedBox(),
+      ),
+    );
+    expect(find.text('Preparando conteúdo'), findsOneWidget);
+    final loadingSemantics = tester.getSemantics(
+      find.text('Preparando conteúdo'),
+    );
+    expect(loadingSemantics.label, contains('Preparando conteúdo'));
+    expect(loadingSemantics.hasFlag(SemanticsFlag.isLiveRegion), isTrue);
+
+    await pump(
+      const AsyncBody(
+        isLoading: false,
+        isEmpty: true,
+        emptyMessage: 'Sem itens',
+        child: SizedBox(),
+      ),
+    );
+    expect(find.text('Sem itens'), findsOneWidget);
+
+    await pump(
+      const AsyncBody(
+        isLoading: false,
+        isEmpty: false,
+        error: 'Falha controlada',
+        emptyMessage: '',
+        child: SizedBox(),
+      ),
+    );
+    expect(find.text('Falha controlada'), findsOneWidget);
+    semantics.dispose();
+  });
+
+  testWidgets('YomuIconButton exposes an actionable 44px semantics target', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    var taps = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(
+          body: Center(
+            child: YomuIconButton(
+              icon: YomuIcons.refresh,
+              tooltip: 'Atualizar conteúdo',
+              size: 30,
+              onTap: () => taps++,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final target = find.bySemanticsLabel('Atualizar conteúdo');
+    final node = tester.getSemantics(target);
+    expect(node.hasFlag(SemanticsFlag.isButton), isTrue);
+    expect(node.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    expect(tester.getSize(target).height, greaterThanOrEqualTo(44));
+
+    await tester.tap(target);
+    expect(taps, 1);
+    semantics.dispose();
   });
 }

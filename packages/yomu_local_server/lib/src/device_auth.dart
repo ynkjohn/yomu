@@ -21,17 +21,17 @@ class DeviceSession {
   bool get isExpired => DateTime.now().isAfter(expiresAt);
 
   Map<String, dynamic> toJson() => {
-        'token': token,
-        'deviceName': deviceName,
-        'createdAt': createdAt.toIso8601String(),
-        'expiresAt': expiresAt.toIso8601String(),
-        'lastSeenAt': lastSeenAt?.toIso8601String(),
-      };
+    'token': token,
+    'deviceName': deviceName,
+    'createdAt': createdAt.toIso8601String(),
+    'expiresAt': expiresAt.toIso8601String(),
+    'lastSeenAt': lastSeenAt?.toIso8601String(),
+  };
 
   factory DeviceSession.fromJson(Map<String, dynamic> json) {
-    final created =
-        DateTime.tryParse('${json['createdAt']}') ?? DateTime.now();
-    final expires = DateTime.tryParse('${json['expiresAt']}') ??
+    final created = DateTime.tryParse('${json['createdAt']}') ?? DateTime.now();
+    final expires =
+        DateTime.tryParse('${json['expiresAt']}') ??
         created.add(const Duration(days: 30));
     return DeviceSession(
       token: '${json['token']}',
@@ -71,19 +71,25 @@ class PairingClaimOutcome {
   final int? retryAfterSeconds;
 }
 
+typedef DeviceAuthPersistWriter =
+    Future<void> Function(File file, String contents);
+
 class DeviceAuthStore {
   DeviceAuthStore({
     this.persistFile,
     this.maxFailedAttemptsPerPairingIp = 5,
     this.failWindow = const Duration(minutes: 10),
     this.sessionTtl = const Duration(days: 30),
+    this.persistWriterForTest,
   });
 
   final File? persistFile;
   final int maxFailedAttemptsPerPairingIp;
   final Duration failWindow;
   final Duration sessionTtl;
+  final DeviceAuthPersistWriter? persistWriterForTest;
   final _sessions = <String, DeviceSession>{};
+  Future<void> _persistChain = Future<void>.value();
   PairingCode? _activePairing;
   final _rng = Random.secure();
 
@@ -99,8 +105,8 @@ class DeviceAuthStore {
 
   PairingCode? get activePairing =>
       (_activePairing != null && !_activePairing!.isExpired)
-          ? _activePairing
-          : null;
+      ? _activePairing
+      : null;
 
   String _pairIpKey(String nonce, String clientKey) => '$nonce|$clientKey';
 
@@ -136,13 +142,28 @@ class DeviceAuthStore {
     } catch (_) {}
   }
 
-  Future<void> _persist() async {
+  Future<void> _persist() {
     final file = persistFile;
-    if (file == null) return;
-    await file.parent.create(recursive: true);
-    await file.writeAsString(
-      jsonEncode({'sessions': sessions.map((s) => s.toJson()).toList()}),
-    );
+    if (file == null) return Future<void>.value();
+    // Serialize the *snapshot + write* as one operation. Capturing JSON before
+    // entering the chain lets an older delayed write land after revokeAll and
+    // resurrect revoked sessions on restart.
+    final operation = _persistChain.then((_) async {
+      await file.parent.create(recursive: true);
+      final contents = jsonEncode({
+        'sessions': sessions.map((s) => s.toJson()).toList(),
+      });
+      final writer = persistWriterForTest;
+      if (writer != null) {
+        await writer(file, contents);
+      } else {
+        await file.writeAsString(contents, flush: true);
+      }
+    });
+    // Keep the queue usable after a write failure while returning the original
+    // failure to the caller that initiated this persistence operation.
+    _persistChain = operation.catchError((_) {});
+    return operation;
   }
 
   void _purgeExpiredSessions() {
@@ -183,7 +204,10 @@ class DeviceAuthStore {
     if (isRateLimitedFor(clientKey, nonce: p.nonce)) {
       return PairingClaimOutcome(
         result: PairingClaimResult.rateLimited,
-        retryAfterSeconds: rateLimitRetryAfterSecondsFor(clientKey, nonce: p.nonce),
+        retryAfterSeconds: rateLimitRetryAfterSecondsFor(
+          clientKey,
+          nonce: p.nonce,
+        ),
       );
     }
 
@@ -192,8 +216,10 @@ class DeviceAuthStore {
       if (isRateLimitedFor(clientKey, nonce: p.nonce)) {
         return PairingClaimOutcome(
           result: PairingClaimResult.rateLimited,
-          retryAfterSeconds:
-              rateLimitRetryAfterSecondsFor(clientKey, nonce: p.nonce),
+          retryAfterSeconds: rateLimitRetryAfterSecondsFor(
+            clientKey,
+            nonce: p.nonce,
+          ),
         );
       }
       return const PairingClaimOutcome(

@@ -30,6 +30,12 @@ constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme"
 static int g_active_window_count = 0;
 
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
+using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(
+    LPRECT rect,
+    DWORD style,
+    BOOL has_menu,
+    DWORD ex_style,
+    UINT dpi);
 
 // Scale helper to convert logical scaler values to physical using passed in
 // scale factor
@@ -134,10 +140,33 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
+  // |size| is a logical client-area contract. Convert it to physical client
+  // pixels, then let Windows calculate the matching non-client frame for the
+  // target monitor/DPI. This keeps a 1240x800 Flutter viewport independent of
+  // title-bar metrics, borders, theme, and DPI scaling.
+  constexpr DWORD window_style = WS_OVERLAPPEDWINDOW;
+  constexpr DWORD extended_style = 0;
+  RECT frame = {0, 0, Scale(size.width, scale_factor),
+                Scale(size.height, scale_factor)};
+  bool adjusted_for_dpi = false;
+  if (HMODULE user32_module = GetModuleHandleA("User32.dll")) {
+    auto adjust_for_dpi = reinterpret_cast<AdjustWindowRectExForDpiFn>(
+        GetProcAddress(user32_module, "AdjustWindowRectExForDpi"));
+    if (adjust_for_dpi != nullptr) {
+      adjusted_for_dpi = adjust_for_dpi(
+          &frame, window_style, FALSE, extended_style, dpi) != FALSE;
+    }
+  }
+  if (!adjusted_for_dpi) {
+    AdjustWindowRectEx(&frame, window_style, FALSE, extended_style);
+  }
+  const int outer_width = frame.right - frame.left;
+  const int outer_height = frame.bottom - frame.top;
+
   HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+      window_class, title.c_str(), window_style,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+      outer_width, outer_height,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {

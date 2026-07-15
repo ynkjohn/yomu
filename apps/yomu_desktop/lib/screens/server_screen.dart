@@ -69,233 +69,333 @@ class ServerScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final running = status.state == SuwayomiProcessState.running;
-    final starting = status.state == SuwayomiProcessState.starting ||
+    final starting =
+        status.state == SuwayomiProcessState.starting ||
         status.state == SuwayomiProcessState.stopping;
 
-    return ListView(
-      padding: const EdgeInsets.all(YomuTokens.space5),
-      children: [
-        Text(
-          'Motor Suwayomi',
-          style: Theme.of(context).textTheme.headlineSmall,
-        ),
-        const SizedBox(height: YomuTokens.space2),
-        const Text(
-          'Sempre em 127.0.0.1:14567 (nunca na LAN). Isolado do AppData Tachidesk.',
-          style: TextStyle(color: YomuTokens.textMuted),
-        ),
-        const SizedBox(height: YomuTokens.space4),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(YomuTokens.space4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    StatusPill(
-                      label: status.state.name,
-                      color: _color(status.state),
-                    ),
-                    if (busy) ...[
-                      const SizedBox(width: 12),
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: YomuTokens.space3),
-                _kv('URL', status.baseUrl ?? 'http://127.0.0.1:$kYomuSuwayomiPort'),
-                _kv('Versão pinada', status.version ?? '—'),
-                if (aboutVersion != null) _kv('About runtime', aboutVersion!),
-                _kv('PID', status.pid?.toString() ?? '—'),
-                _kv('Data root', managedRootDir),
-                if (status.message != null) ...[
-                  const SizedBox(height: YomuTokens.space2),
-                  SelectableText(
-                    status.message!,
-                    style: TextStyle(
-                      color: status.state == SuwayomiProcessState.crashed ||
-                              status.state == SuwayomiProcessState.unhealthy
-                          ? YomuTokens.danger
-                          : YomuTokens.warning,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: YomuTokens.space3),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    FilledButton(
-                      onPressed: (running || starting || busy) ? null : onStart,
-                      child: const Text('Iniciar'),
-                    ),
-                    OutlinedButton(
-                      onPressed: (!running && !starting) || busy ? null : onStop,
-                      child: const Text('Parar'),
-                    ),
-                    OutlinedButton(
-                      onPressed: busy ? null : onRestart,
-                      child: const Text('Reiniciar'),
-                    ),
-                    OutlinedButton(
-                      onPressed: busy ? null : onHealthCheck,
-                      child: const Text('Health check'),
-                    ),
-                  ],
-                ),
-              ],
+    return Material(
+      color: Colors.transparent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(28, 20, 28, 10),
+            child: Text(
+              'Servidor e Motor',
+              style: const TextStyle(
+                color: YomuTokens.text,
+                fontSize: 23,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.46,
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: YomuTokens.space3),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(YomuTokens.space4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Acesso iPhone (PWA mínima)',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: YomuTokens.space2),
-                const Text(
-                  'O iPhone fala só com o Yomu Core (nunca com a porta do Suwayomi). '
-                  'LAN exige opt-in explícito + código de pareamento.',
-                  style: TextStyle(color: YomuTokens.textMuted),
-                ),
-                const SizedBox(height: YomuTokens.space3),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Permitir acesso na LAN (Wi‑Fi)'),
-                  subtitle: Text(
-                    lanEnabled
-                        ? 'Yomu escuta em 0.0.0.0:$yomuPort (API autenticada)'
-                        : 'Yomu só em 127.0.0.1:$yomuPort (sem iPhone na rede)',
-                  ),
-                  value: lanEnabled,
-                  onChanged: busy ? null : onToggleLan,
-                ),
-                _kv('Yomu HTTP', lanEnabled ? '0.0.0.0:$yomuPort' : '127.0.0.1:$yomuPort'),
-                _kv('Sessões pareadas', '$sessionCount'),
-                if (sessions.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Dispositivos pareados',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 4),
-                  ...sessions.map(
-                    (s) => ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      title: Text(s.deviceName),
-                      subtitle: Text(
-                        'desde ${s.createdAt.toLocal()}'
-                        '${s.lastSeenAt != null ? ' · visto ${s.lastSeenAt!.toLocal()}' : ''}',
-                        style: const TextStyle(
-                          color: YomuTokens.textMuted,
-                          fontSize: 12,
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(28, 6, 28, 28),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      flex: 6,
+                      child: YomuSectionCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Servidor do iPhone · ${lanEnabled ? 'ativo' : 'local'}',
+                                    style: const TextStyle(
+                                      color: YomuTokens.text,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                Semantics(
+                                  container: true,
+                                  label: 'Permitir acesso na LAN (Wi-Fi)',
+                                  value: busy
+                                      ? '${lanEnabled ? 'Ativado' : 'Desativado'}. Alteração em andamento'
+                                      : lanEnabled
+                                      ? 'Ativado'
+                                      : 'Desativado',
+                                  toggled: lanEnabled,
+                                  enabled: !busy,
+                                  liveRegion: busy,
+                                  onTap: busy
+                                      ? null
+                                      : () => onToggleLan(!lanEnabled),
+                                  child: ExcludeSemantics(
+                                    child: Switch(
+                                      value: lanEnabled,
+                                      onChanged: busy ? null : onToggleLan,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            ExcludeSemantics(
+                              child: Text(
+                                lanEnabled
+                                    ? 'Permitir acesso na LAN (Wi-Fi) · ativado'
+                                    : 'Permitir acesso na LAN (Wi-Fi) · desativado',
+                                style: const TextStyle(
+                                  color: YomuTokens.textSubtle,
+                                  fontSize: 10.5,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.all(13),
+                              decoration: BoxDecoration(
+                                color: YomuTokens.surface2,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 76,
+                                    height: 76,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: YomuTokens.bg,
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: YomuTokens.border,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      pairingCode == null
+                                          ? 'QR\nindisponível'
+                                          : 'Código: $pairingCode',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        color: pairingCode == null
+                                            ? YomuTokens.textSubtle
+                                            : YomuTokens.accent,
+                                        fontFamily: 'Consolas',
+                                        fontSize: pairingCode == null ? 10 : 16,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 13),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        _lanUrls(context),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          lanEnabled
+                                              ? 'mesma rede Wi-Fi · API autenticada por pareamento'
+                                              : 'LAN desativada · somente este computador',
+                                          style: const TextStyle(
+                                            color: YomuTokens.textSubtle,
+                                            fontSize: 10.5,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        pairingCode == null
+                                            ? FilledButton(
+                                                onPressed: lanEnabled && !busy
+                                                    ? onStartPairing
+                                                    : null,
+                                                child: const Text(
+                                                  'Gerar código de pareamento',
+                                                ),
+                                              )
+                                            : OutlinedButton(
+                                                onPressed: onCancelPairing,
+                                                child: Text(
+                                                  pairingExpiresAt == null
+                                                      ? 'Cancelar código'
+                                                      : 'Cancelar · expira ${pairingExpiresAt!.toLocal()}',
+                                                ),
+                                              ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            _kv(
+                              'Yomu HTTP',
+                              lanEnabled
+                                  ? '0.0.0.0:$yomuPort'
+                                  : '127.0.0.1:$yomuPort',
+                            ),
+                            _kv('Sessões pareadas', '$sessionCount'),
+                            const SizedBox(height: 8),
+                            const YomuSectionLabel('Dispositivos conectados'),
+                            const SizedBox(height: 6),
+                            if (sessions.isEmpty)
+                              const Text(
+                                'Nenhum dispositivo pareado.',
+                                style: TextStyle(color: YomuTokens.textMuted),
+                              )
+                            else
+                              ...sessions.map(
+                                (session) => ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  title: Text(session.deviceName),
+                                  subtitle: Text(
+                                    'ultimo acesso: ${session.lastSeenAt?.toLocal() ?? session.createdAt.toLocal()}',
+                                    style: const TextStyle(
+                                      color: YomuTokens.textSubtle,
+                                      fontSize: 10.5,
+                                    ),
+                                  ),
+                                  trailing: onRevokeSession == null
+                                      ? null
+                                      : TextButton(
+                                          onPressed: busy
+                                              ? null
+                                              : () => onRevokeSession!(
+                                                  session.token,
+                                                ),
+                                          child: const Text('Revogar'),
+                                        ),
+                                ),
+                              ),
+                            if (sessions.isNotEmpty &&
+                                onRevokeAllSessions != null)
+                              TextButton(
+                                onPressed: busy ? null : onRevokeAllSessions,
+                                child: const Text('Revogar todas as sessões'),
+                              ),
+                          ],
                         ),
                       ),
-                      trailing: onRevokeSession == null
-                          ? null
-                          : TextButton(
-                              onPressed: busy
-                                  ? null
-                                  : () => onRevokeSession!(s.token),
-                              child: const Text('Revogar'),
-                            ),
                     ),
-                  ),
-                  if (onRevokeAllSessions != null)
-                    TextButton(
-                      onPressed: busy ? null : onRevokeAllSessions,
-                      child: const Text('Revogar todas as sessões'),
-                    ),
-                ],
-                if (lanEnabled) ...[
-                  const SizedBox(height: 8),
-                  const Text('URLs na rede local:', style: TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  if (lanAddresses.isEmpty)
-                    const Text(
-                      'Não foi possível listar IPs. Confira o Wi‑Fi do PC.',
-                      style: TextStyle(color: YomuTokens.warning),
-                    )
-                  else
-                    ...lanAddresses.map(
-                      (ip) => Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Row(
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 5,
+                      child: YomuSectionCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(child: SelectableText('http://$ip:$yomuPort/')),
-                            IconButton(
-                              icon: const Icon(Icons.copy, size: 18),
-                              onPressed: () {
-                                Clipboard.setData(
-                                  ClipboardData(text: 'http://$ip:$yomuPort/'),
-                                );
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('URL copiada')),
-                                );
-                              },
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Motor de extensões · ${status.state.name}',
+                                    style: const TextStyle(
+                                      color: YomuTokens.text,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                StatusPill(
+                                  label: status.state.name,
+                                  color: _color(status.state),
+                                ),
+                                if (busy) ...[
+                                  const SizedBox(width: 8),
+                                  const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            _kv(
+                              'Serviço',
+                              status.version ?? 'Suwayomi gerenciado',
+                            ),
+                            if (aboutVersion != null)
+                              _kv('Runtime', aboutVersion!),
+                            _kv(
+                              'Porta (somente loopback)',
+                              '127.0.0.1:$kYomuSuwayomiPort',
+                            ),
+                            _kv('PID', status.pid?.toString() ?? '—'),
+                            _kv('Pasta de dados', managedRootDir),
+                            _kv('Java/JRE', 'OpenJDK 21 gerenciado'),
+                            if (status.message != null) ...[
+                              const SizedBox(height: 8),
+                              SelectableText(
+                                status.message!,
+                                style: TextStyle(
+                                  color: running
+                                      ? YomuTokens.success
+                                      : YomuTokens.warning,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 14),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                FilledButton(
+                                  onPressed: (running || starting || busy)
+                                      ? null
+                                      : onStart,
+                                  child: const Text('Iniciar'),
+                                ),
+                                OutlinedButton(
+                                  onPressed: (!running && !starting) || busy
+                                      ? null
+                                      : onStop,
+                                  child: const Text('Parar'),
+                                ),
+                                OutlinedButton(
+                                  onPressed: busy ? null : onRestart,
+                                  child: const Text('Reiniciar'),
+                                ),
+                                OutlinedButton(
+                                  onPressed: busy ? null : onHealthCheck,
+                                  child: const Text('Health check'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'O motor executa as extensões e nunca é exposto na rede — só o Yomu fala com ele.',
+                              style: TextStyle(
+                                color: YomuTokens.textSubtle,
+                                fontSize: 10.5,
+                                height: 1.5,
+                              ),
                             ),
                           ],
                         ),
                       ),
                     ),
-                  const SizedBox(height: 12),
-                  if (pairingCode == null)
-                    FilledButton(
-                      onPressed: onStartPairing,
-                      child: const Text('Gerar código de pareamento'),
-                    )
-                  else ...[
-                    Text(
-                      'Código: $pairingCode',
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    if (pairingExpiresAt != null)
-                      Text(
-                        'Expira: ${pairingExpiresAt!.toLocal()}',
-                        style: const TextStyle(color: YomuTokens.textMuted),
-                      ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'No iPhone: abra a URL acima → digite o código → use a biblioteca.',
-                      style: TextStyle(color: YomuTokens.textMuted),
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton(
-                      onPressed: onCancelPairing,
-                      child: const Text('Cancelar código'),
-                    ),
                   ],
-                ],
-              ],
+                ),
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
   static Color _color(SuwayomiProcessState s) => switch (s) {
-        SuwayomiProcessState.running => YomuTokens.success,
-        SuwayomiProcessState.starting ||
-        SuwayomiProcessState.stopping =>
-          YomuTokens.warning,
-        SuwayomiProcessState.unhealthy ||
-        SuwayomiProcessState.crashed =>
-          YomuTokens.danger,
-        SuwayomiProcessState.stopped => YomuTokens.textMuted,
-      };
+    SuwayomiProcessState.running => YomuTokens.success,
+    SuwayomiProcessState.starting ||
+    SuwayomiProcessState.stopping => YomuTokens.warning,
+    SuwayomiProcessState.unhealthy ||
+    SuwayomiProcessState.crashed => YomuTokens.danger,
+    SuwayomiProcessState.stopped => YomuTokens.textMuted,
+  };
 
   Widget _kv(String k, String v) {
     return Padding(
@@ -305,11 +405,68 @@ class ServerScreen extends StatelessWidget {
         children: [
           SizedBox(
             width: 140,
-            child: Text(k, style: const TextStyle(color: YomuTokens.textMuted)),
+            child: Text(
+              k,
+              style: const TextStyle(
+                color: YomuTokens.textSubtle,
+                fontSize: 12,
+              ),
+            ),
           ),
-          Expanded(child: SelectableText(v)),
+          Expanded(
+            child: SelectableText(
+              v,
+              style: const TextStyle(color: YomuTokens.text, fontSize: 13),
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _lanUrls(BuildContext context) {
+    final urls = lanEnabled
+        ? lanAddresses
+              .map((address) => 'http://$address:$yomuPort/')
+              .toList(growable: false)
+        : <String>['http://127.0.0.1:$yomuPort/'];
+    if (urls.isEmpty) {
+      return const Text(
+        'Não foi possível listar endereços LAN. Confira a conexão deste PC.',
+        style: TextStyle(color: YomuTokens.warning, fontSize: 11.5),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final url in urls)
+          Row(
+            children: [
+              Expanded(
+                child: SelectableText(
+                  url,
+                  style: const TextStyle(
+                    color: YomuTokens.text,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              YomuIconButton(
+                tooltip: 'Copiar $url',
+                icon: YomuIcons.copy,
+                iconSize: 16,
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: url));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(const SnackBar(content: Text('URL copiada')));
+                },
+              ),
+            ],
+          ),
+      ],
     );
   }
 }

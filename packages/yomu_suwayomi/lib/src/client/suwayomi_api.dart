@@ -10,7 +10,23 @@ class SuwayomiApi {
   static const keiyoushiIndexUrl =
       'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json';
 
+  /// jsDelivr rewrite used by some Suwayomi builds after add/sync.
+  static const keiyoushiJsDelivrIndexUrl =
+      'https://cdn.jsdelivr.net/gh/keiyoushi/extensions@repo/index.min.json';
+
   static const mangaDexPkg = 'eu.kanade.tachiyomi.extension.all.mangadex';
+
+  /// Trusted Keiyoushi store URLs only (exact, not substring name match).
+  static bool isTrustedKeiyoushiStore(ExtensionStoreInfo store) {
+    final url = store.indexUrl.trim();
+    return url == keiyoushiIndexUrl ||
+        url == keiyoushiJsDelivrIndexUrl ||
+        // Server may rewrite to protobuf index while keeping the same host path.
+        url ==
+            'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb' ||
+        url ==
+            'https://cdn.jsdelivr.net/gh/keiyoushi/extensions@repo/index.pb';
+  }
 
   String absoluteUrl(String? pathOrUrl) {
     if (pathOrUrl == null || pathOrUrl.isEmpty) return '';
@@ -36,8 +52,8 @@ class SuwayomiApi {
     ''');
     final nodes =
         (((body['data'] as Map?)?['extensionStores'] as Map?)?['nodes']
-                as List?) ??
-            [];
+            as List?) ??
+        [];
     return nodes
         .whereType<Map<dynamic, dynamic>>()
         .map((e) => ExtensionStoreInfo.fromJson(Map<String, dynamic>.from(e)))
@@ -55,37 +71,49 @@ class SuwayomiApi {
       ''',
       variables: {'url': indexUrl},
     );
-    final store = ((body['data'] as Map?)?['addExtensionStore']
-        as Map?)?['extensionStore'] as Map?;
+    final store =
+        ((body['data'] as Map?)?['addExtensionStore']
+                as Map?)?['extensionStore']
+            as Map?;
     if (store == null) return null;
     return ExtensionStoreInfo.fromJson(Map<String, dynamic>.from(store));
   }
 
-  Future<void> ensureKeiyoushiStore() async {
+  Future<ExtensionStoreInfo?> ensureKeiyoushiStore() async {
     final stores = await listExtensionStores();
-    final has = stores.any(
-      (s) =>
-          s.name.toLowerCase().contains('keiyoushi') ||
-          s.indexUrl.contains('keiyoushi'),
-    );
-    if (!has) {
-      await addExtensionStore(keiyoushiIndexUrl);
+    final existing = stores.where(isTrustedKeiyoushiStore).toList();
+    if (existing.isNotEmpty) return existing.first;
+    final added = await addExtensionStore(keiyoushiIndexUrl);
+    if (added == null) {
+      throw StateError(
+        'Falha ao adicionar o repositório Keiyoushi (resposta vazia).',
+      );
     }
+    if (!isTrustedKeiyoushiStore(added)) {
+      // Server may rewrite URL; re-list and accept only trusted hosts.
+      final refreshed = await listExtensionStores();
+      final trusted = refreshed.where(isTrustedKeiyoushiStore).toList();
+      if (trusted.isEmpty) {
+        throw StateError(
+          'Repositório adicionado, mas URL Keiyoushi confiável não encontrada.',
+        );
+      }
+      return trusted.first;
+    }
+    return added;
   }
 
   Future<int> fetchExtensions() async {
-    final body = await client.graphql(
-      r'''
+    final body = await client.graphql(r'''
       mutation {
         fetchExtensions(input: {}) {
           extensions { pkgName }
         }
       }
-      ''',
-      timeout: const Duration(minutes: 2),
-    );
-    final list = (((body['data'] as Map?)?['fetchExtensions']
-            as Map?)?['extensions'] as List?) ??
+      ''', timeout: const Duration(minutes: 2));
+    final list =
+        (((body['data'] as Map?)?['fetchExtensions'] as Map?)?['extensions']
+            as List?) ??
         [];
     return list.length;
   }
@@ -101,7 +129,7 @@ class SuwayomiApi {
     ''');
     final nodes =
         (((body['data'] as Map?)?['extensions'] as Map?)?['nodes'] as List?) ??
-            [];
+        [];
     var list = nodes
         .whereType<Map<dynamic, dynamic>>()
         .map((e) => ExtensionInfo.fromJson(Map<String, dynamic>.from(e)))
@@ -131,8 +159,9 @@ class SuwayomiApi {
       variables: {'id': pkgName},
       timeout: const Duration(minutes: 2),
     );
-    final ext = ((body['data'] as Map?)?['updateExtension']
-        as Map?)?['extension'] as Map?;
+    final ext =
+        ((body['data'] as Map?)?['updateExtension'] as Map?)?['extension']
+            as Map?;
     if (ext == null) {
       throw StateError('Install returned no extension for $pkgName');
     }
@@ -150,8 +179,9 @@ class SuwayomiApi {
       ''',
       variables: {'id': pkgName},
     );
-    final ext = ((body['data'] as Map?)?['updateExtension']
-        as Map?)?['extension'] as Map?;
+    final ext =
+        ((body['data'] as Map?)?['updateExtension'] as Map?)?['extension']
+            as Map?;
     if (ext == null) {
       throw StateError('Uninstall returned no extension for $pkgName');
     }
@@ -168,25 +198,34 @@ class SuwayomiApi {
       }
     ''');
     final nodes =
-        (((body['data'] as Map?)?['sources'] as Map?)?['nodes'] as List?) ??
-            [];
+        (((body['data'] as Map?)?['sources'] as Map?)?['nodes'] as List?) ?? [];
     return nodes
         .whereType<Map<dynamic, dynamic>>()
         .map((e) => SourceInfo.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
 
-  Future<List<MangaSummary>> searchManga({
+  Future<SourceMangaPage> fetchSourceManga({
     required String sourceId,
-    required String query,
+    required SourceMangaFetchType type,
+    String? query,
     int page = 1,
   }) async {
+    if (type == SourceMangaFetchType.search &&
+        (query == null || query.trim().isEmpty)) {
+      throw ArgumentError.value(query, 'query', 'Search query is required');
+    }
+    final typeName = switch (type) {
+      SourceMangaFetchType.search => 'SEARCH',
+      SourceMangaFetchType.popular => 'POPULAR',
+      SourceMangaFetchType.latest => 'LATEST',
+    };
     final body = await client.graphql(
       r'''
-      mutation($source: LongString!, $q: String!, $page: Int!) {
+      mutation($source: LongString!, $type: FetchSourceMangaType!, $q: String, $page: Int!) {
         fetchSourceManga(input: {
           source: $source
-          type: SEARCH
+          type: $type
           query: $q
           page: $page
         }) {
@@ -197,18 +236,37 @@ class SuwayomiApi {
       ''',
       variables: {
         'source': sourceId,
-        'q': query,
+        'type': typeName,
+        'q': query?.trim(),
         'page': page,
       },
       timeout: const Duration(seconds: 60),
     );
-    final mangas = (((body['data'] as Map?)?['fetchSourceManga']
-            as Map?)?['mangas'] as List?) ??
-        [];
-    return mangas
-        .whereType<Map<dynamic, dynamic>>()
-        .map((e) => MangaSummary.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    final payload =
+        ((body['data'] as Map?)?['fetchSourceManga'] as Map?) ?? const {};
+    final mangas = (payload['mangas'] as List?) ?? const [];
+    return SourceMangaPage(
+      items: mangas
+          .whereType<Map<dynamic, dynamic>>()
+          .map((item) => MangaSummary.fromJson(Map<String, dynamic>.from(item)))
+          .toList(),
+      hasNextPage: payload['hasNextPage'] == true,
+      page: page,
+    );
+  }
+
+  Future<List<MangaSummary>> searchManga({
+    required String sourceId,
+    required String query,
+    int page = 1,
+  }) async {
+    final result = await fetchSourceManga(
+      sourceId: sourceId,
+      type: SourceMangaFetchType.search,
+      query: query,
+      page: page,
+    );
+    return result.items;
   }
 
   Future<MangaDetails> getManga(int id) async {
@@ -265,8 +323,10 @@ class SuwayomiApi {
         variables: {'id': mangaId},
         timeout: const Duration(seconds: 90),
       );
-      final chapters = (((body['data'] as Map?)?['fetchMangaAndChapters']
-              as Map?)?['chapters'] as List?) ??
+      final chapters =
+          (((body['data'] as Map?)?['fetchMangaAndChapters']
+                  as Map?)?['chapters']
+              as List?) ??
           [];
       return chapters
           .whereType<Map<dynamic, dynamic>>()
@@ -305,8 +365,10 @@ class SuwayomiApi {
       ''',
       variables: {'id': mangaId},
     );
-    final nodes = ((((body['data'] as Map?)?['manga'] as Map?)?['chapters']
-            as Map?)?['nodes'] as List?) ??
+    final nodes =
+        ((((body['data'] as Map?)?['manga'] as Map?)?['chapters']
+                as Map?)?['nodes']
+            as List?) ??
         [];
     return nodes
         .whereType<Map<dynamic, dynamic>>()
@@ -381,7 +443,7 @@ class SuwayomiApi {
       ''');
       final nodes =
           (((body['data'] as Map?)?['mangas'] as Map?)?['nodes'] as List?) ??
-              [];
+          [];
       return nodes
           .whereType<Map<dynamic, dynamic>>()
           .map((e) => MangaSummary.fromJson(Map<String, dynamic>.from(e)))
@@ -411,7 +473,7 @@ class SuwayomiApi {
       ''');
       final nodes =
           (((body['data'] as Map?)?['mangas'] as Map?)?['nodes'] as List?) ??
-              [];
+          [];
       return nodes
           .whereType<Map<dynamic, dynamic>>()
           .map((e) => MangaSummary.fromJson(Map<String, dynamic>.from(e)))
@@ -474,11 +536,7 @@ class SuwayomiApi {
         }
       }
       ''',
-      variables: {
-        'id': chapterId,
-        'page': lastPageRead,
-        'isRead': isRead,
-      },
+      variables: {'id': chapterId, 'page': lastPageRead, 'isRead': isRead},
     );
     final ch =
         ((body['data'] as Map?)?['updateChapter'] as Map?)?['chapter'] as Map?;

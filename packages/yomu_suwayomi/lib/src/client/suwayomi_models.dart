@@ -108,6 +108,20 @@ class MangaSummary {
   }
 }
 
+enum SourceMangaFetchType { search, popular, latest }
+
+class SourceMangaPage {
+  const SourceMangaPage({
+    required this.items,
+    required this.hasNextPage,
+    required this.page,
+  });
+
+  final List<MangaSummary> items;
+  final bool hasNextPage;
+  final int page;
+}
+
 class MangaDetails {
   const MangaDetails({
     required this.id,
@@ -204,11 +218,7 @@ class ChapterInfo {
     );
   }
 
-  ChapterInfo copyWith({
-    int? lastPageRead,
-    bool? isRead,
-    bool? isDownloaded,
-  }) {
+  ChapterInfo copyWith({int? lastPageRead, bool? isRead, bool? isDownloaded}) {
     return ChapterInfo(
       id: id,
       name: name,
@@ -260,10 +270,7 @@ class DownloadQueueItem {
 }
 
 class DownloadStatusInfo {
-  const DownloadStatusInfo({
-    required this.state,
-    required this.queue,
-  });
+  const DownloadStatusInfo({required this.state, required this.queue});
 
   final String state;
   final List<DownloadQueueItem> queue;
@@ -276,10 +283,7 @@ class DownloadStatusInfo {
         list.add(DownloadQueueItem.fromJson(Map<String, dynamic>.from(item)));
       }
     }
-    return DownloadStatusInfo(
-      state: '${json['state'] ?? ''}',
-      queue: list,
-    );
+    return DownloadStatusInfo(state: '${json['state'] ?? ''}', queue: list);
   }
 }
 

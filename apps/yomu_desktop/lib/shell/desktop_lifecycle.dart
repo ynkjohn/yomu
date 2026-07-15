@@ -1,4 +1,21 @@
 import 'dart:async';
+import 'dart:ui' as ui;
+
+/// Holds the native desktop exit response until owned resources are torn down.
+///
+/// Windows waits for this response before completing a close request. Repeated
+/// requests share the same future so teardown remains idempotent.
+class DesktopExitCoordinator {
+  DesktopExitCoordinator({required Future<void> Function() shutdown})
+    : _shutdown = shutdown;
+
+  final Future<void> Function() _shutdown;
+  Future<ui.AppExitResponse>? _response;
+
+  Future<ui.AppExitResponse> requestExit() {
+    return _response ??= _shutdown().then((_) => ui.AppExitResponse.exit);
+  }
+}
 
 /// Serial lifecycle queue used by HomeShell for bootstrap, HTTP restart, and
 /// shutdown (same coordination for all three).
@@ -29,14 +46,16 @@ class DesktopLifecycleQueue {
     shuttingDown = true;
     final c = Completer<void>();
     _shutdownFuture = c.future;
-    unawaited(run(() async {
-      try {
-        await teardown();
-        if (!c.isCompleted) c.complete();
-      } catch (e, st) {
-        if (!c.isCompleted) c.completeError(e, st);
-      }
-    }));
+    unawaited(
+      run(() async {
+        try {
+          await teardown();
+          if (!c.isCompleted) c.complete();
+        } catch (e, st) {
+          if (!c.isCompleted) c.completeError(e, st);
+        }
+      }),
+    );
     return _shutdownFuture!;
   }
 }

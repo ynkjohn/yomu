@@ -24,7 +24,6 @@ dependencies:
   yomu_ai:
     path: ../../packages/yomu_ai
   path: ^1.9.1
-  path_provider: ^2.1.5
 
 dev_dependencies:
   flutter_test:

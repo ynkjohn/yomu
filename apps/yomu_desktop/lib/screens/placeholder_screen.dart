@@ -5,27 +5,76 @@ class PlaceholderScreen extends StatelessWidget {
   const PlaceholderScreen({
     super.key,
     required this.title,
-    required this.message,
+    this.message = 'Esta função ainda não foi implementada.',
+    this.phase,
   });
 
   final String title;
   final String message;
+  final String? phase;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(YomuTokens.space5),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: Theme.of(context).textTheme.headlineSmall),
-          const SizedBox(height: YomuTokens.space3),
-          Text(
-            message,
-            style: const TextStyle(color: YomuTokens.textMuted, height: 1.4),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        YomuScreenHeader(title: title),
+        Expanded(
+          child: Center(
+            child: Container(
+              width: 460,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: YomuTokens.surface.withValues(alpha: 0.82),
+                border: Border.all(color: YomuTokens.border),
+                borderRadius: BorderRadius.circular(YomuTokens.radiusLg),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: YomuTokens.accent.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Center(
+                      child: YomuIcon(
+                        YomuIcons.sliders,
+                        color: YomuTokens.accent,
+                        size: 21,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: YomuTokens.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (phase != null) ...[
+                    const SizedBox(height: 7),
+                    Text(
+                      phase!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: YomuTokens.textSubtle,
+                        fontSize: 11.5,
+                        height: 1.5,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

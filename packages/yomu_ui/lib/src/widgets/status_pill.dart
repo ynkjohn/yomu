@@ -3,11 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme/yomu_tokens.dart';
 
 class StatusPill extends StatelessWidget {
-  const StatusPill({
-    super.key,
-    required this.label,
-    required this.color,
-  });
+  const StatusPill({super.key, required this.label, required this.color});
 
   final String label;
   final Color color;
@@ -20,16 +16,16 @@ class StatusPill extends StatelessWidget {
         vertical: YomuTokens.space1,
       ),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
+        color: color.withValues(alpha: 0.11),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
+        border: Border.all(color: color.withValues(alpha: 0.34)),
       ),
       child: Text(
         label,
         style: TextStyle(
           color: color,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
+          fontSize: 10.5,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
