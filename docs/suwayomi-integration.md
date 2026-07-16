@@ -65,7 +65,12 @@ See `packages/yomu_suwayomi/vendor/manifest.json`. Bump only with hash verificat
 | Service | Bind | LAN |
 |---------|------|-----|
 | Suwayomi | `127.0.0.1:14567` | No |
-| Yomu Core | `0.0.0.0:8787` | Yes (auth later) |
+| Yomu Core default | `127.0.0.1:8787` | No |
+| Yomu Core com opt-in LAN | `0.0.0.0:8787` | Yes, Auth obrigatória |
+
+As sessões do Yomu Core já são persistidas no SQLite Yomu schema v2; o bearer
+é persistido apenas como hash SHA-256. O iPhone nunca acessa a porta 14567
+diretamente.
 
 ## Gate Suwayomi + 1.5
 

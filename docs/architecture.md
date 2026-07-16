@@ -12,7 +12,8 @@
 
 1. **Yomu Desktop** (Flutter native executable)
 2. **Suwayomi-Server** (Java), spawned by Yomu, bound to **127.0.0.1 only**
-3. **Yomu Core HTTP** (Shelf), bound for LAN, authenticates devices, proxies to Suwayomi
+3. **Yomu Core HTTP** (Shelf), loopback por padrão; bind LAN somente após
+   opt-in, com autenticação e proxy para o Suwayomi
 
 iPhone Safari/PWA talks **only** to Yomu Core.
 
@@ -51,7 +52,15 @@ não confiáveis e só podem resultar em `ActionProposal` local pendente, ainda
 sujeito à confirmação explícita e à barreira at-most-once da P2A.
 
 Não há streaming, memória nova, autonomia, endpoint customizável ou integração
-PWA. O contrato detalhado está em `docs/p2b-maya-providers.md`.
+PWA no schema/código v4. O contrato detalhado está em
+`docs/p2b-maya-providers.md`.
+
+O próximo requisito de produto é um provider personalizado OpenAI-compatible,
+isolado como P2C. Ele ainda não está implementado. Persistir endpoint ou perfil
+exigirá plano próprio, um único bump `4 → 5`, HTTPS para remoto, HTTP restrito a
+loopback literal, redirects desativados, proteção SSRF/DNS e credencial
+opcional somente no WinCred. Essas são guardas preliminares; o formato final
+de schema e protocolo depende de auditoria e aprovação explícita.
 
 ## Hard gates (done)
 
@@ -60,7 +69,7 @@ PWA. O contrato detalhado está em `docs/p2b-maya-providers.md`.
 3. Desktop reader + progress save/resume
 4. Library / downloads (hard gate)
 5. PWA mínima (LAN opt-in + pairing + library/reader)
-6. Maya mínima (local chat + ActionProposal) — **done at code level**
+6. Maya persistente + providers opcionais + ActionProposal — **done**
 
 P2B concluída no código: schema v4 e providers compostos no bootstrap desktop.
 O controlador usa a factory real, é injetado no
@@ -70,4 +79,5 @@ indisponível mantém local/Ollama e bloqueia credenciais cloud sem fallback
 inseguro. A prova live de compatibilidade com cada serviço externo não faz
 parte dos gates certificados desta fase.
 
-Still blocked: Source Builder product and final design.
+Próxima subfase solicitada: P2C custom OpenAI-compatible. Source Builder
+permanece reservado para a última fase.

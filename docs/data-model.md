@@ -30,6 +30,12 @@ ou logs genéricos. Os demais nomes continuam candidatos históricos, não
 autorização de persistência, e exigem nova subfase com schema bump separado.
 Consulte `docs/p2b-maya-providers.md` para o contrato completo da P2B.
 
+O provider personalizado solicitado para P2C não possui coluna ou tabela no
+schema v4. Se endpoint/perfil precisar ser persistido, a mudança deve ocorrer
+somente em uma migração explícita `4 → 5`, após definir ownership, protocolo,
+restrições de rede e política de credencial. Nenhum nome de tabela ou formato
+está autorizado antes desse plano.
+
 ## Personal status reconciliation — modelo conceitual candidato
 
 Esta seção não autoriza persistência nem ownership novo. Depende de auditoria,

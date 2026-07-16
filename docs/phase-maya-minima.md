@@ -1,8 +1,10 @@
 # Fase Maya mínima
 
-> Estado histórico: esta fase introduziu a Maya com persistência JSON. A P2A
-> substitui esse placeholder pelo SQLite Yomu schema v3; consulte
-> `docs/p2a-maya-persistence.md`.
+> Estado histórico: esta fase introduziu a Maya com persistência JSON e engine
+> heurístico local. A P2A migrou o histórico para o SQLite Yomu schema v3 e a
+> P2B adicionou providers opcionais no schema v4. Consulte
+> `docs/p2a-maya-persistence.md`, `docs/p2b-maya-providers.md` e
+> `docs/current-handoff.md`.
 
 ## Objetivo
 
@@ -17,10 +19,12 @@ Assistente **local-first** no desktop que consulta a biblioteca Suwayomi e só e
   P2A para o SQLite Yomu
 - Port `MayaLibraryPort` → Suwayomi loopback (nunca LAN)
 
-## Fora de escopo (agora)
+## Fora do escopo daquela fase
 
-- LLM cloud obrigatório (hook `MayaLlmProvider` existe, sem provider default)
-- Múltiplas conversas, memória e configurações de provider
+- Providers eram posteriores; OpenAI, Anthropic, Gemini e Ollama foram
+  implementados na P2B, sempre opcionais
+- Múltiplas conversas e memória continuam não implementadas
+- Provider OpenAI-compatible personalizado está planejado para P2C
 - Maya no PWA iPhone
 - Source Builder
 

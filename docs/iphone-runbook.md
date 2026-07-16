@@ -33,7 +33,8 @@
 ## Security
 
 - iPhone talks **only** to Yomu Core, never to port 14567
-- Bearer session after pairing; revoke by clearing site data or future desktop session list
+- Bearer session after pairing; a tela **Servidor** lista e revoga sessões
+  individualmente ou em conjunto
 - Use trusted Wi‑Fi only; LAN is opt-in
 
 ## Notes

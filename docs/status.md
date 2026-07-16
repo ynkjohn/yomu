@@ -1,5 +1,16 @@
 # Status
 
+## Baseline atual
+
+- Branch `master`, HEAD local/remoto
+  `7a35094b80b9359327c49e198258fc3c3d255571` em 2026-07-16.
+- P0, checkpoint pós-P0, P1, P2A e P2B estão commitados separadamente.
+- Schema SQLite Yomu atual: v4.
+- Próxima necessidade registrada: P2C, provider personalizado
+  OpenAI-compatible. Ainda não implementada; exige auditoria, plano, bump
+  `4 → 5` aprovado e commit próprio.
+- Handoff operacional: `docs/current-handoff.md`.
+
 ## Gates
 
 | Gate | Estado |
@@ -8,15 +19,16 @@
 | Hard — biblioteca / progresso / downloads | ✅ |
 | 1.5 — isolamento Suwayomi | ✅ |
 | PWA iPhone mínima | ✅ |
-| Maya mínima | ✅ |
+| Maya local-first + ActionProposal | ✅ |
 | 2D — hardening lifecycle / LAN / Maya | ✅ |
 | 2D.1 — reliability | ✅ |
 | **2D.2 — JRE bundle + lifecycle/LAN/PWA edges** | ✅ código |
-| **P0 — storage foundation (schema v1 `app_meta`)** | ✅ HEAD `941c4e8` |
-| **Pós-P0 — promoção visual desktop + correções funcionais** | ✅ conteúdo deste checkpoint |
+| **P0 — storage foundation (schema v1 `app_meta`)** | ✅ commit `941c4e8` |
+| **Pós-P0 — promoção visual desktop + correções funcionais** | ✅ commit `3615126` |
 | **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
 | **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ commit `d200521` |
-| **P2B — providers Maya (schema v4)** | ✅ gates aprovados |
+| **P2B — providers Maya (schema v4)** | ✅ commit `7a35094` |
+| **P2C — provider personalizado OpenAI-compatible** | planejado; não iniciado |
 
 ## Phases
 
@@ -26,18 +38,22 @@
 | PWA + Maya | ✅ |
 | 2D / 2D.1 hardening | ✅ |
 | P0 storage foundation | ✅ |
-| Pós-P0 desktop visual + reader/explore/repos fixes | ✅ conteúdo deste checkpoint |
+| Pós-P0 desktop visual + reader/explore/repos fixes | ✅ commit `3615126` |
 | P1 sessions/auth schema bump | ✅ commit `c9d51d3` |
 | P2A Maya persistence schema bump | ✅ commit `d200521` |
-| P2B Maya providers schema bump | ✅ validada |
-| Source Builder | bloqueado |
-| Histórico / settings / backup completos | placeholders |
+| P2B Maya providers schema bump | ✅ commit `7a35094` |
+| P2C provider personalizado | planejada; implementação não autorizada neste checkpoint |
+| Source Builder | reservado para a última fase |
+| Histórico da Maya | ✅ persistido na P2A |
+| Settings gerais / backup / demais extras | candidatos; ownership não auditado |
 
 ## P2B — providers da Maya (2026-07-16, validada)
 
 - Baseline separado: `master` / `d200521aa2735c9c245fe53123afe66208fc7404`
   (`feat(maya): persist history in SQLite`). A P2B contém somente o bump
   `3 → 4` e não mistura outra área de persistência.
+- Commit final: `7a35094b80b9359327c49e198258fc3c3d255571`
+  (`feat(maya): add provider integrations`), sincronizado com `origin/master`.
 - Drift migra explicitamente `3 → 4` e adiciona somente o singleton
   `maya_provider_settings`. A row contém modo, provider, modelo, flags e
   consentimento; nenhuma credencial entra no SQLite.
@@ -125,9 +141,9 @@
   migração bloqueada com mensagem sanitizada.
 - A referência desktop permaneceu imutável, SHA-256
   `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
-- P2A não transforma o engine heurístico em LLM nem adiciona providers. Essa
-  capacidade permanece em subfase posterior própria, com plano e aprovação
-  separados.
+- Naquele fechamento, a P2A não transformava o engine heurístico em LLM nem
+  adicionava providers; essa capacidade ainda permanecia para uma subfase
+  posterior própria, com plano e aprovação separados.
 
 ## P1 — sessões e autenticação (2026-07-15)
 
@@ -164,7 +180,7 @@
 ## Checkpoint pós-P0 (2026-07-14)
 
 - Baseline de origem: `master` / `941c4e84efc78f5e082abd817d9790b8694dd12a` (`feat: complete p0 persistent storage foundation`). Este commit encerra separadamente o checkpoint pós-P0; P1 não integra este conteúdo.
-- P0 permanece o baseline committed: bootstrap storage-first, schema Drift v1 somente com `app_meta`, lock exclusivo e fronteira dual-DB intacta. P1, P2+, Android, redesign PWA e Source Builder não foram iniciados.
+- P0 permanece o baseline committed: bootstrap storage-first, schema Drift v1 somente com `app_meta`, lock exclusivo e fronteira dual-DB intacta. Naquele checkpoint, P1, P2+, Android, redesign PWA e Source Builder ainda não haviam sido iniciados.
 - Leitor: a fila de progresso separa pendências por capítulo e mantém high-water monotônico, inclusive em A→B→A com save lento; snapshots capturam `chapterId`, página, total e estado lido; a ordem usa `sourceOrder`; transições duplicadas são bloqueadas; double-page usa spreads sobrepostos e página seguinte à esquerda; vertical/webtoon determinam a página visível por posições reais de `RenderBox`.
 - Explore/extensões: fontes, catálogo, busca e paginação têm ownership/gates independentes; respostas antigas e load-more duplicado são rejeitados; fontes são recarregadas após instalação; stores e catálogo carregam de forma independente; confiança Keiyoushi usa URLs oficiais.
 - Lifecycle/Auth/Suwayomi: callbacks de health/teardown rejeitam estado obsoleto; persistência de sessões é serializada; `stop()` preserva identidade/handle até saída confirmada e sinaliza estado não saudável quando a saída não é comprovada.
@@ -192,3 +208,5 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 - Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
   correto, com custo de write a observar em uso LAN intenso.
 - Source Builder permanece fora de escopo e na última fase.
+- Provider personalizado ainda não existe no código/schema v4. A necessidade
+  foi registrada como P2C separada; consulte `docs/current-handoff.md`.
