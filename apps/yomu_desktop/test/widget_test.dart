@@ -132,6 +132,59 @@ void main() {
     semantics.dispose();
   });
 
+  testWidgets(
+    'ServerScreen revokes by session id without rendering the identifier',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const sessionId = 'session-id-must-remain-private';
+      String? revokedSessionId;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildYomuTheme(),
+          home: ServerScreen(
+            status: const SuwayomiStatus(
+              state: SuwayomiProcessState.stopped,
+              baseUrl: 'http://127.0.0.1:14567',
+            ),
+            yomuPort: 8787,
+            managedRootDir: r'C:\tmp\yomu\data\suwayomi',
+            onStart: () {},
+            onStop: () {},
+            onRestart: () {},
+            onHealthCheck: () {},
+            lanEnabled: false,
+            onToggleLan: (_) {},
+            pairingCode: null,
+            pairingExpiresAt: null,
+            onStartPairing: () {},
+            onCancelPairing: () {},
+            lanAddresses: const [],
+            sessionCount: 1,
+            sessions: [
+              PairedSessionRow(
+                sessionId: sessionId,
+                deviceName: 'iPhone de teste',
+                createdAt: DateTime(2026, 7, 15),
+              ),
+            ],
+            onRevokeSession: (value) async => revokedSessionId = value,
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('iPhone de teste'), findsOneWidget);
+      expect(find.textContaining(sessionId), findsNothing);
+
+      await tester.tap(find.text('Revogar'));
+
+      expect(revokedSessionId, sessionId);
+      expect(find.textContaining(sessionId), findsNothing);
+    },
+  );
+
   testWidgets('ExtensionsScreen empty when motor not ready', (tester) async {
     await tester.pumpWidget(
       MaterialApp(

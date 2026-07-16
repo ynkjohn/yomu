@@ -40,6 +40,12 @@
 ## Security notes
 
 1. Pairing codes: 6 digits, ~5 minutes TTL, single use.
-2. Sessions persisted under app support `yomu/device_sessions.json`.
+2. Sessions are persisted in Yomu SQLite schema v2. Only the lowercase SHA-256
+   token hash is stored; the bearer plaintext is returned only by a successful
+   pairing claim.
 3. Phone never receives Suwayomi host/port; all media goes through Yomu proxy.
 4. LAN bind requires confirmation dialog on desktop.
+
+Legacy `yomu/device_sessions.json` is imported transactionally once and removed
+only after the SQLite transaction and migration marker are confirmed. See
+[`p1-session-persistence.md`](p1-session-persistence.md).

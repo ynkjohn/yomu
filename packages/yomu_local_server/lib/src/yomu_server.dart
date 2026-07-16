@@ -84,11 +84,16 @@ class YomuServer {
         final code = '${body['code'] ?? ''}';
         final name = '${body['deviceName'] ?? 'iPhone'}';
         final clientKey = _clientKey(request);
-        final outcome = await auth.claimPairing(
-          code: code,
-          deviceName: name,
-          clientKey: clientKey,
-        );
+        final PairingClaimOutcome outcome;
+        try {
+          outcome = await auth.claimPairing(
+            code: code,
+            deviceName: name,
+            clientKey: clientKey,
+          );
+        } on DeviceAuthException {
+          return _json({'error': 'auth_unavailable'}, status: 503);
+        }
         switch (outcome.result) {
           case PairingClaimResult.rateLimited:
             return Response(
@@ -108,7 +113,7 @@ class YomuServer {
           case PairingClaimResult.success:
             final session = outcome.session!;
             return _json({
-              'token': session.token,
+              'token': outcome.bearerToken!,
               'deviceName': session.deviceName,
               'createdAt': session.createdAt.toIso8601String(),
               'expiresAt': session.expiresAt.toIso8601String(),
@@ -127,7 +132,7 @@ class YomuServer {
     }));
 
     router.post('/api/v1/session/revoke', _auth((req, session) async {
-      await auth.revoke(session.token);
+      await auth.revoke(session.sessionId);
       return _json({'revoked': true});
     }));
 
@@ -140,7 +145,10 @@ class YomuServer {
               (m) => {
                 'id': m.id,
                 'title': m.title,
-                'thumbnailUrl': _ticketMediaUrl(session.token, m.thumbnailUrl),
+                'thumbnailUrl': _ticketMediaUrl(
+                  session.sessionId,
+                  m.thumbnailUrl,
+                ),
                 'inLibrary': m.inLibrary,
                 'unreadCount': m.unreadCount,
                 'lastReadChapter': m.lastReadChapter == null
@@ -167,7 +175,7 @@ class YomuServer {
         'author': m.author,
         'artist': m.artist,
         'status': m.status,
-        'thumbnailUrl': _ticketMediaUrl(session.token, m.thumbnailUrl),
+        'thumbnailUrl': _ticketMediaUrl(session.sessionId, m.thumbnailUrl),
         'sourceId': m.sourceId,
         'inLibrary': m.inLibrary,
       });
@@ -228,7 +236,7 @@ class YomuServer {
               .map(
                 (e) => {
                   'index': e.key,
-                  'url': _issueTicketUrl(session.token, e.value),
+                  'url': _issueTicketUrl(session.sessionId, e.value),
                 },
               )
               .toList(),
@@ -248,7 +256,7 @@ class YomuServer {
       }
       final ticket = mediaTickets.resolve(
         ticketId: ticketId,
-        sessionToken: session.token,
+        sessionId: session.sessionId,
       );
       if (ticket == null) {
         return _json({'error': 'invalid_or_expired_ticket'}, status: 404);
@@ -327,7 +335,10 @@ class YomuServer {
               (m) => {
                 'id': m.id,
                 'title': m.title,
-                'thumbnailUrl': _ticketMediaUrl(session.token, m.thumbnailUrl),
+                'thumbnailUrl': _ticketMediaUrl(
+                  session.sessionId,
+                  m.thumbnailUrl,
+                ),
                 'inLibrary': m.inLibrary,
               },
             )
@@ -395,14 +406,19 @@ class YomuServer {
     Future<Response> Function(Request req, DeviceSession session) inner,
   ) {
     return (Request request) async {
-      final session = auth.authenticate(
-        request.headers['authorization'],
-      );
+      final DeviceSession? session;
+      try {
+        session = await auth.authenticate(request.headers['authorization']);
+      } on DeviceAuthException {
+        return _json({'error': 'auth_unavailable'}, status: 503);
+      }
       if (session == null) {
         return _json({'error': 'unauthorized'}, status: 401);
       }
       try {
         return await inner(request, session);
+      } on DeviceAuthException {
+        return _json({'error': 'auth_unavailable'}, status: 503);
       } catch (e) {
         return _json(
           {'error': 'upstream_error', 'message': e.toString()},
@@ -420,18 +436,18 @@ class YomuServer {
     return api;
   }
 
-  String? _ticketMediaUrl(String sessionToken, String? path) {
+  String? _ticketMediaUrl(String sessionId, String? path) {
     if (path == null || path.isEmpty) return null;
     final m = RegExp(r'/api/v1/manga/(\d+)/thumbnail').firstMatch(path);
     if (m != null) {
       return '/api/v1/manga/${m.group(1)}/thumbnail';
     }
-    return _issueTicketUrl(sessionToken, path);
+    return _issueTicketUrl(sessionId, path);
   }
 
-  String _issueTicketUrl(String sessionToken, String target) {
+  String _issueTicketUrl(String sessionId, String target) {
     final id = mediaTickets.issue(
-      sessionToken: sessionToken,
+      sessionId: sessionId,
       target: target,
     );
     return '/api/v1/media?t=$id';

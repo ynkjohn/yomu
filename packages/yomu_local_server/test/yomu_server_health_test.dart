@@ -11,7 +11,7 @@ void main() {
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
       ),
-      auth: DeviceAuthStore(),
+      auth: DeviceAuthStore.inMemory(),
     );
     expect(s.host, '127.0.0.1');
     expect(s.isLoopbackOnly, isTrue);
@@ -22,7 +22,7 @@ void main() {
     final s = YomuServer(
       host: '127.0.0.1',
       port: 18787,
-      auth: DeviceAuthStore(),
+      auth: DeviceAuthStore.inMemory(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
         message: 'test',
@@ -46,7 +46,7 @@ void main() {
     final lanServer = YomuServer(
       host: '0.0.0.0',
       port: 18794,
-      auth: DeviceAuthStore(),
+      auth: DeviceAuthStore.inMemory(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.running,
         pid: leakPid,
@@ -74,7 +74,7 @@ void main() {
       host: '127.0.0.1',
       port: 18788,
       allowLanCors: false,
-      auth: DeviceAuthStore(),
+      auth: DeviceAuthStore.inMemory(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
       ),
@@ -93,7 +93,7 @@ void main() {
       port: 18789,
       allowLanCors: true,
       allowedOrigins: const ['http://192.168.1.10:8787'],
-      auth: DeviceAuthStore(),
+      auth: DeviceAuthStore.inMemory(),
       suwayomiStatus: () => const SuwayomiStatus(
         state: SuwayomiProcessState.stopped,
       ),
@@ -116,7 +116,7 @@ void main() {
   });
 
   test('pairing claim issues token; API requires auth', () async {
-    final auth = DeviceAuthStore();
+    final auth = DeviceAuthStore.inMemory();
     final pairing = auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',
@@ -149,8 +149,37 @@ void main() {
     expect((jsonDecode(me.body) as Map)['deviceName'], 'TestPhone');
   });
 
+  test('closed auth returns sanitized 503 without echoing bearer', () async {
+    final auth = DeviceAuthStore.inMemory();
+    final pairing = auth.startPairing();
+    final outcome = await auth.claimPairing(
+      code: pairing.code,
+      deviceName: 'Phone',
+    );
+    final token = outcome.bearerToken!;
+    await auth.close();
+    final s = YomuServer(
+      host: '127.0.0.1',
+      port: 18798,
+      auth: auth,
+      suwayomiStatus: () => const SuwayomiStatus(
+        state: SuwayomiProcessState.stopped,
+      ),
+    );
+    await s.start();
+    addTearDown(s.stop);
+
+    final response = await http.get(
+      Uri.parse('http://127.0.0.1:18798/api/v1/me'),
+      headers: {'authorization': 'Bearer $token'},
+    );
+    expect(response.statusCode, 503);
+    expect((jsonDecode(response.body) as Map)['error'], 'auth_unavailable');
+    expect(response.body.contains(token), isFalse);
+  });
+
   test('invalid pairing code rejected', () async {
-    final auth = DeviceAuthStore();
+    final auth = DeviceAuthStore.inMemory();
     auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',
@@ -172,7 +201,7 @@ void main() {
   });
 
   test('JSON body: 400 invalid JSON, 413 too large, 400 invalid UTF-8', () async {
-    final auth = DeviceAuthStore();
+    final auth = DeviceAuthStore.inMemory();
     auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',
@@ -212,7 +241,7 @@ void main() {
     expect(jsonDecode(utf8Bad.body)['error'], 'utf8_invalid');
   });
   test('session revoke endpoint', () async {
-    final auth = DeviceAuthStore();
+    final auth = DeviceAuthStore.inMemory();
     final pairing = auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',
@@ -247,7 +276,7 @@ void main() {
   });
 
   test('raw media u= forbidden; ticket required', () async {
-    final auth = DeviceAuthStore();
+    final auth = DeviceAuthStore.inMemory();
     final pairing = auth.startPairing();
     final tickets = MediaTicketStore();
     final s = YomuServer(
@@ -279,7 +308,7 @@ void main() {
     expect((jsonDecode(raw.body) as Map)['error'], 'raw_url_forbidden');
 
     final tid = tickets.issue(
-      sessionToken: token,
+      sessionId: (await auth.authenticate(token))!.sessionId,
       target: '/api/v1/manga/1/thumbnail',
     );
     final missingApi = await http.get(
@@ -291,7 +320,9 @@ void main() {
   });
 
   test('pairing rate limit returns 429 + Retry-After', () async {
-    final auth = DeviceAuthStore(maxFailedAttemptsPerPairingIp: 3);
+    final auth = DeviceAuthStore.inMemory(
+      maxFailedAttemptsPerPairingIp: 3,
+    );
     auth.startPairing();
     final s = YomuServer(
       host: '127.0.0.1',

@@ -8,13 +8,13 @@ import 'package:yomu_ui/yomu_ui.dart';
 
 class PairedSessionRow {
   const PairedSessionRow({
-    required this.token,
+    required this.sessionId,
     required this.deviceName,
     required this.createdAt,
     this.lastSeenAt,
   });
 
-  final String token;
+  final String sessionId;
   final String deviceName;
   final DateTime createdAt;
   final DateTime? lastSeenAt;
@@ -61,8 +61,8 @@ class ServerScreen extends StatelessWidget {
   final List<String> lanAddresses;
   final int sessionCount;
   final List<PairedSessionRow> sessions;
-  final ValueChanged<String>? onRevokeSession;
-  final VoidCallback? onRevokeAllSessions;
+  final Future<void> Function(String sessionId)? onRevokeSession;
+  final Future<void> Function()? onRevokeAllSessions;
   final String? aboutVersion;
   final bool busy;
 
@@ -260,9 +260,11 @@ class ServerScreen extends StatelessWidget {
                                       : TextButton(
                                           onPressed: busy
                                               ? null
-                                              : () => onRevokeSession!(
-                                                  session.token,
-                                                ),
+                                              : () async {
+                                                  await onRevokeSession!(
+                                                    session.sessionId,
+                                                  );
+                                                },
                                           child: const Text('Revogar'),
                                         ),
                                 ),
@@ -270,7 +272,11 @@ class ServerScreen extends StatelessWidget {
                             if (sessions.isNotEmpty &&
                                 onRevokeAllSessions != null)
                               TextButton(
-                                onPressed: busy ? null : onRevokeAllSessions,
+                                onPressed: busy
+                                    ? null
+                                    : () async {
+                                        await onRevokeAllSessions!();
+                                      },
                                 child: const Text('Revogar todas as sessões'),
                               ),
                           ],

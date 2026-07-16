@@ -1,7 +1,7 @@
 /// Yomu SQLite storage (Drift).
 ///
-/// **P0:** foundation only — process lock, schemaVersion **1**, [AppMeta] flags.
-/// **P1:** sessions will require **schemaVersion 2** (not implemented here).
+/// **P0:** process lock and [AppMeta] flags (schemaVersion **1**).
+/// **P1:** hashed device sessions (schemaVersion **2**).
 ///
 /// Suwayomi keeps its own database for library/progress/downloads.
 ///

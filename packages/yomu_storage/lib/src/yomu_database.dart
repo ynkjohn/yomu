@@ -13,10 +13,12 @@ import 'yomu_process_lock.dart';
 
 part 'yomu_database.g.dart';
 
+final RegExp _lowercaseSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
+
 /// Domain flags / migration markers only.
 ///
 /// **Do not** store Drift [schemaVersion] here — that lives solely on
-/// [YomuDatabase.schemaVersion] (P0 = 1; **P1 will be schemaVersion 2**).
+/// [YomuDatabase.schemaVersion].
 class AppMeta extends Table {
   TextColumn get key => text()();
   TextColumn get value => text()();
@@ -26,11 +28,55 @@ class AppMeta extends Table {
   Set<Column<Object>> get primaryKey => {key};
 }
 
+/// Plain-Dart input for a new persisted session.
+///
+/// Keeping this separate from Drift companions lets authentication code use
+/// storage without importing Drift.
+@immutable
+class NewDeviceSession {
+  const NewDeviceSession({
+    required this.sessionId,
+    required this.tokenHash,
+    required this.deviceName,
+    required this.createdAtMs,
+    required this.expiresAtMs,
+    this.lastSeenAtMs,
+  });
+
+  final String sessionId;
+  final String tokenHash;
+  final String deviceName;
+  final int createdAtMs;
+  final int expiresAtMs;
+  final int? lastSeenAtMs;
+}
+
+/// Persisted device sessions owned by Yomu.
+///
+/// Authentication tokens must be irreversibly hashed before reaching this
+/// table. The storage layer intentionally has no plaintext-token API.
+@DataClassName('StoredDeviceSession')
+class DeviceSessions extends Table {
+  TextColumn get sessionId => text()();
+  TextColumn get tokenHash => text().unique()();
+  TextColumn get deviceName => text()();
+  IntColumn get createdAtMs => integer()();
+  IntColumn get expiresAtMs => integer()();
+  IntColumn get lastSeenAtMs => integer().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sessionId};
+
+  @override
+  List<String> get customConstraints => const [
+    "CHECK (length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*')",
+  ];
+}
+
 /// Single-process Yomu SQLite database (Drift).
 ///
-/// P0 tables: [AppMeta] only.
-/// P1 (sessions) **must** bump [schemaVersion] to **2**.
-@DriftDatabase(tables: [AppMeta])
+/// Schema v1 contains [AppMeta]. Schema v2 adds [DeviceSessions].
+@DriftDatabase(tables: [AppMeta, DeviceSessions])
 class YomuDatabase extends _$YomuDatabase {
   YomuDatabase._(
     super.e,
@@ -66,7 +112,21 @@ class YomuDatabase extends _$YomuDatabase {
   static Future<void> Function(YomuDatabase db)? debugAfterCreated;
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) async {
+      await m.createAll();
+    },
+    onUpgrade: (m, from, to) async {
+      if (from == 1 && to == 2) {
+        await m.createTable(deviceSessions);
+        return;
+      }
+      throw StateError('Unsupported Yomu database migration: $from -> $to');
+    },
+  );
 
   static Future<T> _serializedLifecycle<T>(Future<T> Function() op) {
     final c = Completer<T>();
@@ -85,11 +145,9 @@ class YomuDatabase extends _$YomuDatabase {
   /// Order: exclusive lock → prepare file → SQLite isolate.
   /// Concurrent [open] calls are serialized; concurrent [close] is shared.
   static Future<YomuDatabase> open(Directory yomuRoot) {
-    return _serializedLifecycle(() => _openBody(
-          yomuRoot,
-          registerAsInstance: true,
-          useProcessLock: true,
-        ));
+    return _serializedLifecycle(
+      () => _openBody(yomuRoot, registerAsInstance: true, useProcessLock: true),
+    );
   }
 
   /// Unit-test open (temp dirs). Still serializes with production lifecycle mutex
@@ -102,10 +160,10 @@ class YomuDatabase extends _$YomuDatabase {
     bool useLifecycleMutex = true,
   }) {
     Future<YomuDatabase> body() => _openBody(
-          yomuRoot,
-          registerAsInstance: registerAsInstance,
-          useProcessLock: useProcessLock,
-        );
+      yomuRoot,
+      registerAsInstance: registerAsInstance,
+      useProcessLock: useProcessLock,
+    );
     if (useLifecycleMutex) {
       return _serializedLifecycle(body);
     }
@@ -265,18 +323,96 @@ class YomuDatabase extends _$YomuDatabase {
   Future<void> setMeta(String key, String value) async {
     final now = DateTime.now().toUtc().millisecondsSinceEpoch;
     await into(appMeta).insertOnConflictUpdate(
-      AppMetaCompanion.insert(
-        key: key,
-        value: value,
-        updatedAtMs: now,
-      ),
+      AppMetaCompanion.insert(key: key, value: value, updatedAtMs: now),
     );
   }
 
   Future<String?> getMeta(String key) async {
-    final row = await (select(appMeta)..where((t) => t.key.equals(key)))
-        .getSingleOrNull();
+    final row = await (select(
+      appMeta,
+    )..where((t) => t.key.equals(key))).getSingleOrNull();
     return row?.value;
+  }
+
+  /// Run [action] atomically on this database connection.
+  ///
+  /// The legacy-session importer uses this to persist imported sessions and
+  /// its [AppMeta] marker in the same transaction.
+  Future<T> runInTransaction<T>(
+    Future<T> Function(YomuDatabase database) action,
+  ) {
+    return transaction(() => action(this));
+  }
+
+  Future<List<StoredDeviceSession>> listDeviceSessions() {
+    return (select(
+      deviceSessions,
+    )..orderBy([(t) => OrderingTerm.desc(t.createdAtMs)])).get();
+  }
+
+  Future<List<StoredDeviceSession>> listActiveDeviceSessions(int nowMs) {
+    return (select(deviceSessions)
+          ..where((t) => t.expiresAtMs.isBiggerThanValue(nowMs))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAtMs)]))
+        .get();
+  }
+
+  Future<StoredDeviceSession?> getDeviceSessionById(String sessionId) {
+    return (select(
+      deviceSessions,
+    )..where((t) => t.sessionId.equals(sessionId))).getSingleOrNull();
+  }
+
+  Future<StoredDeviceSession?> getDeviceSessionByTokenHash(String tokenHash) {
+    return (select(
+      deviceSessions,
+    )..where((t) => t.tokenHash.equals(tokenHash))).getSingleOrNull();
+  }
+
+  /// Strict insert: primary-key or token-hash conflicts fail instead of
+  /// replacing an existing (possibly revoked) session.
+  Future<void> insertDeviceSession(NewDeviceSession session) async {
+    if (!_lowercaseSha256Pattern.hasMatch(session.tokenHash)) {
+      throw ArgumentError('tokenHash must be a lowercase SHA-256 digest');
+    }
+    await into(deviceSessions).insert(
+      DeviceSessionsCompanion.insert(
+        sessionId: session.sessionId,
+        tokenHash: session.tokenHash,
+        deviceName: session.deviceName,
+        createdAtMs: session.createdAtMs,
+        expiresAtMs: session.expiresAtMs,
+        lastSeenAtMs: Value(session.lastSeenAtMs),
+      ),
+    );
+  }
+
+  Future<bool> deleteDeviceSession(String sessionId) async {
+    final count = await (delete(
+      deviceSessions,
+    )..where((t) => t.sessionId.equals(sessionId))).go();
+    return count == 1;
+  }
+
+  Future<int> deleteDeviceSessionsByDeviceName(String deviceName) {
+    return (delete(
+      deviceSessions,
+    )..where((t) => t.deviceName.equals(deviceName))).go();
+  }
+
+  Future<int> deleteAllDeviceSessions() {
+    return delete(deviceSessions).go();
+  }
+
+  Future<bool> updateDeviceSessionLastSeen(
+    String sessionId,
+    int? lastSeenAtMs,
+  ) async {
+    final count =
+        await (update(deviceSessions)
+              ..where((t) => t.sessionId.equals(sessionId)))
+            .write(DeviceSessionsCompanion(lastSeenAtMs: Value(lastSeenAtMs)));
+    return count == 1;
   }
 
   /// Close DB executor and release process lock. Idempotent; concurrent calls

@@ -42,37 +42,68 @@ void main() {
   );
 
   test(
-    'StorageFirstBootstrap does not call afterStorage when open fails',
+    'StorageFirstBootstrap does not initialize Auth or services when open fails',
     () async {
-      var after = false;
+      var auth = false;
+      var services = false;
       await expectLater(
         StorageFirstBootstrap.run(
           openStorage: () async {
             throw StateError('lock held');
           },
-          afterStorage: () async {
-            after = true;
+          initializeAuth: () async {
+            auth = true;
+          },
+          startRemainingServices: () async {
+            services = true;
           },
         ),
         throwsStateError,
       );
-      expect(after, isFalse);
+      expect(auth, isFalse);
+      expect(services, isFalse);
     },
   );
 
   test(
-    'StorageFirstBootstrap runs afterStorage only after openStorage',
+    'StorageFirstBootstrap runs storage, Auth, then remaining services',
     () async {
       final order = <String>[];
       await StorageFirstBootstrap.run(
         openStorage: () async {
-          order.add('open');
+          order.add('storage');
         },
-        afterStorage: () async {
-          order.add('after');
+        initializeAuth: () async {
+          order.add('auth');
+        },
+        startRemainingServices: () async {
+          order.add('services');
         },
       );
-      expect(order, ['open', 'after']);
+      expect(order, ['storage', 'auth', 'services']);
+    },
+  );
+
+  test(
+    'StorageFirstBootstrap does not start services when Auth migration fails',
+    () async {
+      final order = <String>[];
+      await expectLater(
+        StorageFirstBootstrap.run(
+          openStorage: () async {
+            order.add('storage');
+          },
+          initializeAuth: () async {
+            order.add('auth');
+            throw StateError('legacy sessions malformed');
+          },
+          startRemainingServices: () async {
+            order.add('services');
+          },
+        ),
+        throwsStateError,
+      );
+      expect(order, ['storage', 'auth']);
     },
   );
 
@@ -231,25 +262,61 @@ void main() {
     },
   );
 
-  test('ResourceTeardown closes server even if stop throws', () async {
+  test('ResourceTeardown continues through Auth and DB after errors', () async {
     final events = <String>[];
     await ResourceTeardown.run(
+      cancelSubscription: () async {
+        events.add('subscription');
+      },
       stopServer: () async {
         events.add('stop');
         throw StateError('stop failed');
       },
       closeServer: () async {
         events.add('close');
+        throw StateError('close failed');
+      },
+      closeAuth: () async {
+        events.add('auth');
+        throw StateError('auth close failed after drain');
       },
       disposeManager: () async {
         events.add('manager');
+        throw StateError('manager failed');
       },
       closeDb: () async {
         events.add('db');
       },
     );
-    expect(events, ['stop', 'close', 'manager', 'db']);
+    expect(events, ['subscription', 'stop', 'close', 'auth', 'manager', 'db']);
   });
+
+  test(
+    'ResourceTeardown does not close DB while Auth drain is pending',
+    () async {
+      final authEntered = Completer<void>();
+      final releaseAuth = Completer<void>();
+      var dbClosed = false;
+
+      final teardown = ResourceTeardown.run(
+        closeAuth: () async {
+          authEntered.complete();
+          await releaseAuth.future;
+        },
+        closeDb: () async {
+          dbClosed = true;
+        },
+      );
+
+      await authEntered.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(dbClosed, isFalse);
+
+      releaseAuth.complete();
+      await teardown;
+      expect(dbClosed, isTrue);
+    },
+  );
 
   test(
     'second open via StorageFirstBootstrap never reaches Auth/Core/Suwayomi',
@@ -274,9 +341,11 @@ void main() {
       await expectLater(
         StorageFirstBootstrap.run(
           openStorage: () => YomuDatabase.open(root),
-          afterStorage: () async {
-            // These factories are what HomeShell runs only after storage open.
+          initializeAuth: () async {
             auth = true;
+          },
+          startRemainingServices: () async {
+            // These factories are what HomeShell runs only after storage/Auth.
             core = true;
             suwa = true;
           },

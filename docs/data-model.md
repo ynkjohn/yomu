@@ -6,16 +6,20 @@ Library membership, manga metadata from sources, chapters, pages, downloads, mai
 
 ## Yomu SQLite
 
-| Area | Tables (planned) |
-|------|------------------|
-| Sessions | `device_sessions` |
-| Settings | `app_settings` |
-| Maya | `maya_conversations`, `maya_messages`, `maya_memories` |
-| Safety | `action_proposals`, `audit_logs` |
-| Intention | `personal_status_overrides` |
-| Specs | `source_specs`, `source_revisions` |
-| Analytics | `reading_analytics`, `history_extras` |
-| Links | `suwayomi_link` |
+| Area | Tables | Estado |
+|------|--------|--------|
+| Sessions | `device_sessions` | schema v2; somente hash do bearer |
+| Settings | `app_settings` | candidato P2+; não aprovado |
+| Maya | `maya_conversations`, `maya_messages`, `maya_memories` | candidato P2+; não aprovado |
+| Safety | `action_proposals`, `audit_logs` | candidato P2+; não aprovado |
+| Intention | `personal_status_overrides` | candidato P2+; não aprovado |
+| Specs | `source_specs`, `source_revisions` | Source Builder; fase posterior |
+| Analytics | `reading_analytics`, `history_extras` | candidato P2+; não aprovado |
+| Links | `suwayomi_link` | candidato P2+; não aprovado |
+
+Exceto por `device_sessions`, os nomes acima são candidatos históricos, não
+autorização de persistência. P2+ exige auditoria de ownership e subfases com
+schema bump separado antes de criar qualquer outra tabela.
 
 ## Personal status reconciliation
 

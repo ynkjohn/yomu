@@ -5,13 +5,13 @@ import 'dart:math';
 class MediaTicket {
   MediaTicket({
     required this.id,
-    required this.sessionToken,
+    required this.sessionId,
     required this.target,
     required this.expiresAt,
   });
 
   final String id;
-  final String sessionToken;
+  final String sessionId;
 
   /// Suwayomi-relative path (`/api/v1/...`) or absolute http(s) from Suwayomi.
   final String target;
@@ -31,16 +31,16 @@ class MediaTicketStore {
   final Random _rng;
   final _tickets = <String, MediaTicket>{};
 
-  /// Create a ticket for [sessionToken] pointing at [target].
+  /// Create a ticket for [sessionId] pointing at [target].
   String issue({
-    required String sessionToken,
+    required String sessionId,
     required String target,
   }) {
     _purge();
     final id = _randomId();
     _tickets[id] = MediaTicket(
       id: id,
-      sessionToken: sessionToken,
+      sessionId: sessionId,
       target: target,
       expiresAt: DateTime.now().add(ttl),
     );
@@ -49,12 +49,12 @@ class MediaTicketStore {
 
   MediaTicket? resolve({
     required String ticketId,
-    required String sessionToken,
+    required String sessionId,
   }) {
     _purge();
     final t = _tickets[ticketId];
     if (t == null || t.isExpired) return null;
-    if (t.sessionToken != sessionToken) return null;
+    if (t.sessionId != sessionId) return null;
     return t;
   }
 

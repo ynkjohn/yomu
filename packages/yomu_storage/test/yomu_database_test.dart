@@ -2,15 +2,18 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift_dev/api/migrations_native.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:yomu_storage/yomu_storage.dart';
+
+import 'generated/schema.dart';
 
 void main() {
   late Directory root;
 
   setUp(() async {
-    root = Directory.systemTemp.createTempSync('yomu-storage-p0-');
+    root = Directory.systemTemp.createTempSync('yomu-storage-p1-');
     YomuDatabase.debugAfterCreated = null;
   });
 
@@ -26,12 +29,23 @@ void main() {
     } catch (_) {}
   });
 
-  test('create schema v1, app_meta, reopen, WAL, FK capabilities', () async {
+  test('create schema v2, app_meta, sessions, reopen, WAL, FK', () async {
     final db = await YomuDatabase.openForTest(root);
-    expect(db.schemaVersion, 1);
+    expect(db.schemaVersion, 2);
 
     await db.setMeta('p0.probe', 'ok');
     expect(await db.getMeta('p0.probe'), 'ok');
+    await db.insertDeviceSession(
+      _newSession(
+        sessionId: 'clean-session',
+        tokenHash: _hash('a'),
+        deviceName: 'iPhone',
+      ),
+    );
+    expect(
+      (await db.getDeviceSessionById('clean-session'))?.tokenHash,
+      _hash('a'),
+    );
 
     final version = await db.sqliteVersion();
     expect(version, isNotEmpty);
@@ -46,11 +60,217 @@ void main() {
 
     final db2 = await YomuDatabase.openForTest(root);
     expect(await db2.getMeta('p0.probe'), 'ok');
+    expect(await db2.getDeviceSessionById('clean-session'), isNotNull);
     expect(File(path).existsSync(), isTrue);
     final header = await File(path).openRead(0, 16).first;
     expect(String.fromCharCodes(header.take(15)), 'SQLite format 3');
     await db2.close();
   });
+
+  test('migrates real schema v1 to v2 and preserves app_meta', () async {
+    final verifier = SchemaVerifier(GeneratedHelper());
+    final v1 = await verifier.schemaAt(1);
+    addTearDown(v1.close);
+    v1.rawDatabase.execute(
+      'INSERT INTO app_meta(key, value, updated_at_ms) VALUES (?, ?, ?)',
+      ['p0.preserved', 'yes', 123456],
+    );
+
+    final paths = YomuStoragePaths(root);
+    await paths.ensureLayout();
+    v1.rawDatabase.execute('VACUUM INTO ?', [paths.databaseFile.path]);
+
+    final db = await YomuDatabase.openForTest(root);
+    await db.validateDatabaseSchema();
+    expect(await db.getMeta('p0.preserved'), 'yes');
+    expect(
+      (await db
+              .customSelect(
+                "SELECT updated_at_ms FROM app_meta WHERE key = 'p0.preserved'",
+              )
+              .getSingle())
+          .read<int>('updated_at_ms'),
+      123456,
+    );
+    expect(await db.listDeviceSessions(), isEmpty);
+    expect(
+      (await db.customSelect('PRAGMA user_version').getSingle())
+          .data
+          .values
+          .single,
+      2,
+    );
+
+    await db.insertDeviceSession(
+      _newSession(
+        sessionId: 'post-migration',
+        tokenHash: _hash('b'),
+        deviceName: 'Migrated iPhone',
+      ),
+    );
+    expect(await db.getDeviceSessionById('post-migration'), isNotNull);
+    await db.close();
+  });
+
+  test('device session constraints, queries, updates, and deletes', () async {
+    final db = await YomuDatabase.openForTest(root);
+    final now = DateTime.now().toUtc().millisecondsSinceEpoch;
+    final active = _newSession(
+      sessionId: 'active',
+      tokenHash: _hash('c'),
+      deviceName: 'iPhone',
+      createdAtMs: now - 1000,
+      expiresAtMs: now + 100000,
+    );
+    final expired = _newSession(
+      sessionId: 'expired',
+      tokenHash: _hash('d'),
+      deviceName: 'Old iPhone',
+      createdAtMs: now - 200000,
+      expiresAtMs: now - 1,
+    );
+    await db.insertDeviceSession(active);
+    await db.insertDeviceSession(expired);
+
+    expect(
+      (await db.getDeviceSessionByTokenHash(active.tokenHash))?.sessionId,
+      active.sessionId,
+    );
+    expect((await db.listActiveDeviceSessions(now)).map((s) => s.sessionId), [
+      'active',
+    ]);
+
+    expect(
+      db.insertDeviceSession(
+        _newSession(
+          sessionId: active.sessionId,
+          tokenHash: _hash('e'),
+          deviceName: 'Duplicate id',
+        ),
+      ),
+      throwsA(anything),
+    );
+    expect(
+      db.insertDeviceSession(
+        _newSession(
+          sessionId: 'duplicate-hash',
+          tokenHash: active.tokenHash,
+          deviceName: 'Duplicate hash',
+        ),
+      ),
+      throwsA(anything),
+    );
+    expect(
+      db.insertDeviceSession(
+        _newSession(
+          sessionId: 'plaintext',
+          tokenHash: 'plaintext-token',
+          deviceName: 'Invalid token storage',
+        ),
+      ),
+      throwsA(
+        isA<ArgumentError>().having(
+          (error) => error.toString(),
+          'message',
+          isNot(contains('plaintext-token')),
+        ),
+      ),
+    );
+    expect(
+      (await db.listDeviceSessions()).map((s) => s.tokenHash),
+      isNot(contains('plaintext-token')),
+    );
+    await expectLater(
+      db.customStatement(
+        'INSERT INTO device_sessions('
+        'session_id, token_hash, device_name, created_at_ms, expires_at_ms'
+        ') VALUES (?, NULL, ?, ?, ?)',
+        ['null-hash', 'Invalid', now, now + 1],
+      ),
+      throwsA(anything),
+    );
+
+    expect(await db.updateDeviceSessionLastSeen('active', now), isTrue);
+    expect((await db.getDeviceSessionById('active'))?.lastSeenAtMs, now);
+    expect(await db.updateDeviceSessionLastSeen('active', null), isTrue);
+    expect((await db.getDeviceSessionById('active'))?.lastSeenAtMs, isNull);
+    expect(await db.updateDeviceSessionLastSeen('missing', now), isFalse);
+
+    expect(await db.deleteDeviceSession('missing'), isFalse);
+    expect(await db.deleteDeviceSession('expired'), isTrue);
+    expect(await db.deleteDeviceSessionsByDeviceName('iPhone'), 1);
+    expect(await db.listDeviceSessions(), isEmpty);
+
+    await db.insertDeviceSession(active);
+    await db.insertDeviceSession(expired);
+    expect(await db.deleteAllDeviceSessions(), 2);
+    expect(await db.listDeviceSessions(), isEmpty);
+    await db.close();
+  });
+
+  test('SQLite enforces lowercase SHA-256 token hashes', () async {
+    final db = await YomuDatabase.openForTest(root);
+    final now = DateTime.now().toUtc().millisecondsSinceEpoch;
+
+    Future<void> rawInsert(String sessionId, String tokenHash) {
+      return db.customStatement(
+        'INSERT INTO device_sessions('
+        'session_id, token_hash, device_name, created_at_ms, expires_at_ms'
+        ') VALUES (?, ?, ?, ?, ?)',
+        [sessionId, tokenHash, 'Raw SQL', now, now + 1000],
+      );
+    }
+
+    await expectLater(
+      rawInsert('plaintext', 'plaintext-token'),
+      throwsA(anything),
+    );
+    await expectLater(rawInsert('uppercase', _hash('A')), throwsA(anything));
+    await expectLater(
+      rawInsert('short', List<String>.filled(63, 'a').join()),
+      throwsA(anything),
+    );
+
+    final validHash = _hash('1');
+    await rawInsert('valid', validHash);
+    expect((await db.getDeviceSessionById('valid'))?.tokenHash, validHash);
+    await db.close();
+  });
+
+  test(
+    'runInTransaction commits atomically and rolls back on failure',
+    () async {
+      final db = await YomuDatabase.openForTest(root);
+      final committed = _newSession(
+        sessionId: 'committed',
+        tokenHash: _hash('f'),
+        deviceName: 'Committed',
+      );
+      await db.runInTransaction((tx) async {
+        await tx.insertDeviceSession(committed);
+        await tx.setMeta('p1.import', 'committed');
+      });
+      expect(await db.getDeviceSessionById('committed'), isNotNull);
+      expect(await db.getMeta('p1.import'), 'committed');
+
+      final rolledBack = _newSession(
+        sessionId: 'rolled-back',
+        tokenHash: _hash('0'),
+        deviceName: 'Rolled back',
+      );
+      await expectLater(
+        db.runInTransaction<void>((tx) async {
+          await tx.insertDeviceSession(rolledBack);
+          await tx.setMeta('p1.rollback', 'must-not-persist');
+          throw StateError('rollback probe');
+        }),
+        throwsStateError,
+      );
+      expect(await db.getDeviceSessionById('rolled-back'), isNull);
+      expect(await db.getMeta('p1.rollback'), isNull);
+      await db.close();
+    },
+  );
 
   test('placeholder v0 exact body renamed then SQLite created', () async {
     final paths = YomuStoragePaths(root);
@@ -84,20 +304,22 @@ void main() {
     await db.close();
   });
 
-  test('two concurrent open calls serialize; second fails if instance held',
-      () async {
-    final f1 = YomuDatabase.open(root);
-    final f2 = YomuDatabase.open(root);
-    final results = await Future.wait([
-      f1.then<Object>((d) => d).catchError((Object e) => e),
-      f2.then<Object>((d) => d).catchError((Object e) => e),
-    ]);
-    final dbs = results.whereType<YomuDatabase>().toList();
-    final errs = results.whereType<StateError>().toList();
-    expect(dbs.length, 1);
-    expect(errs.length, 1);
-    await dbs.single.close();
-  });
+  test(
+    'two concurrent open calls serialize; second fails if instance held',
+    () async {
+      final f1 = YomuDatabase.open(root);
+      final f2 = YomuDatabase.open(root);
+      final results = await Future.wait([
+        f1.then<Object>((d) => d).catchError((Object e) => e),
+        f2.then<Object>((d) => d).catchError((Object e) => e),
+      ]);
+      final dbs = results.whereType<YomuDatabase>().toList();
+      final errs = results.whereType<StateError>().toList();
+      expect(dbs.length, 1);
+      expect(errs.length, 1);
+      await dbs.single.close();
+    },
+  );
 
   test('close is idempotent and concurrent close shares result', () async {
     final db = await YomuDatabase.open(root);
@@ -119,28 +341,30 @@ void main() {
     await db2.close();
   });
 
-  test('injected failure after executor closes isolate and releases lock',
-      () async {
-    YomuDatabase.debugAfterCreated = (_) async {
-      throw StateError('injected_after_create');
-    };
-    await expectLater(
-      YomuDatabase.open(root),
-      throwsA(
-        isA<StateError>().having(
-          (e) => e.message,
-          'message',
-          contains('injected_after_create'),
+  test(
+    'injected failure after executor closes isolate and releases lock',
+    () async {
+      YomuDatabase.debugAfterCreated = (_) async {
+        throw StateError('injected_after_create');
+      };
+      await expectLater(
+        YomuDatabase.open(root),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('injected_after_create'),
+          ),
         ),
-      ),
-    );
-    expect(YomuDatabase.instance, isNull);
+      );
+      expect(YomuDatabase.instance, isNull);
 
-    YomuDatabase.debugAfterCreated = null;
-    final db = await YomuDatabase.open(root);
-    expect(db, isNotNull);
-    await db.close();
-  });
+      YomuDatabase.debugAfterCreated = null;
+      final db = await YomuDatabase.open(root);
+      expect(db, isNotNull);
+      await db.close();
+    },
+  );
 
   test('second process acquire fails within timeout budget', () async {
     final db = await YomuDatabase.openForTest(root, useProcessLock: true);
@@ -153,7 +377,11 @@ void main() {
       workingDirectory: packageRoot,
       runInShell: false,
     );
-    expect(result.exitCode, isNot(0), reason: '${result.stdout}${result.stderr}');
+    expect(
+      result.exitCode,
+      isNot(0),
+      reason: '${result.stdout}${result.stderr}',
+    );
     final out = '${result.stdout}${result.stderr}';
     expect(out, anyOf(contains('LOCK_FAIL'), contains('LOCK_TIMEOUT')));
     // Budget is measured in the helper around acquire only (not Process.run).
@@ -248,3 +476,24 @@ int _parseAcquireMs(String out) {
   expect(m, isNotNull, reason: 'missing ACQUIRE_MS in: $out');
   return int.parse(m!.group(1)!);
 }
+
+NewDeviceSession _newSession({
+  required String sessionId,
+  required String tokenHash,
+  required String deviceName,
+  int? createdAtMs,
+  int? expiresAtMs,
+  int? lastSeenAtMs,
+}) {
+  final now = DateTime.now().toUtc().millisecondsSinceEpoch;
+  return NewDeviceSession(
+    sessionId: sessionId,
+    tokenHash: tokenHash,
+    deviceName: deviceName,
+    createdAtMs: createdAtMs ?? now,
+    expiresAtMs: expiresAtMs ?? now + const Duration(days: 30).inMilliseconds,
+    lastSeenAtMs: lastSeenAtMs,
+  );
+}
+
+String _hash(String hexDigit) => List<String>.filled(64, hexDigit).join();

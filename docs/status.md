@@ -14,6 +14,7 @@
 | **2D.2 — JRE bundle + lifecycle/LAN/PWA edges** | ✅ código |
 | **P0 — storage foundation (schema v1 `app_meta`)** | ✅ HEAD `941c4e8` |
 | **Pós-P0 — promoção visual desktop + correções funcionais** | ✅ conteúdo deste checkpoint |
+| **P1 — sessões/Auth no SQLite (schema v2)** | ✅ código e gates; aguardando commit |
 
 ## Phases
 
@@ -24,9 +25,41 @@
 | 2D / 2D.1 hardening | ✅ |
 | P0 storage foundation | ✅ |
 | Pós-P0 desktop visual + reader/explore/repos fixes | ✅ conteúdo deste checkpoint |
-| P1 sessions/auth schema bump | **não iniciado** |
+| P1 sessions/auth schema bump | ✅ código validado; não commitado |
 | Source Builder | bloqueado |
 | Histórico / settings / backup completos | placeholders |
+
+## P1 — sessões e autenticação (2026-07-15)
+
+- Baseline separado: `master` / `3615126762a07427930d5579774d6b7941780baa`
+  (`feat: finalize post-p0 desktop checkpoint`), filho direto do P0. O conteúdo
+  P1 permanece uncommitted e sem staging.
+- Drift migra explicitamente `1 → 2`, preserva `app_meta` e adiciona somente
+  `device_sessions`. `session_id` é a primary key; `token_hash` é `NOT NULL`,
+  `UNIQUE` e protegido no próprio SQLite por `CHECK` de SHA-256 lowercase.
+- O bearer de 256 bits é retornado apenas no claim. `DeviceSession`, UI,
+  revogação e tickets de mídia usam um `sessionId` aleatório independente;
+  token plaintext não é persistido nem incluído em erros Auth.
+- `device_sessions.json` é validado e importado com marker e inserts na mesma
+  transação. A fonte tem limite de 4 MiB, fingerprint SHA-256 e só é removida
+  após commit/readback. JSON ausente, vazio, malformado, duplicado e residual
+  após crash possuem políticas conservadoras documentadas em
+  `docs/p1-session-persistence.md`.
+- Mutações Auth são serializadas. Pairing/restart, revogação individual e total,
+  expiração, concorrência e `close()` com writes pendentes têm regressão. O
+  bootstrap executa storage → Auth → serviços; teardown executa HTTP → Auth
+  drain → Suwayomi → SQLite.
+- Validação atual: storage 27/27, local server/Auth 38/38, desktop 77/77,
+  analyzer completo limpo e `tool\verify_workspace.ps1` aprovado em 197,4 s.
+  O verifier também aprovou core 3/3, Suwayomi 42/42, Maya 8/8, PWA e o build
+  Windows Debug em
+  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`.
+- O executável não foi iniciado contra `%APPDATA%` real: isso dispararia a
+  migração e remoção deliberada do JSON legado. A prova runtime desta fase usa
+  bancos e diretórios temporários. Não houve alteração visual de layout que
+  exigisse nova evidência por screenshot.
+- A referência desktop permaneceu imutável, SHA-256
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
 
 ## Checkpoint pós-P0 (2026-07-14)
 
@@ -56,4 +89,7 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 - PWA HTTP só em LAN confiável (HTTPS na fase PWA final)
 - A evidência visual atual cobre telas e modos principais, mas não todos os estados de loading/erro, menus, tooltips, foco e animações; não há alegação de fidelidade 1:1.
 - O painel de fim do leitor tem prova widget, não prova runtime atual; evitou-se alterar progresso/`isRead` real apenas para produzir screenshot.
-- P1 sessions/auth e Source Builder fora de escopo
+- P1 aguarda autorização separada para staging e commit.
+- Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
+  correto, com custo de write a observar em uso LAN intenso.
+- Source Builder permanece fora de escopo e na última fase.

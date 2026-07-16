@@ -109,6 +109,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   bool _bootstrapping = true;
   bool _busyEngine = false;
   bool _busyHttp = false;
+  bool _busyAuth = false;
   bool _lanEnabled = false;
   String? _aboutVersion;
   String? _pairingCode;
@@ -153,6 +154,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       if (_lifecycle.shuttingDown) return;
       await _teardownOwnedResources();
       YomuDatabase? db;
+      DeviceAuthStore? auth;
       SuwayomiProcessManager? manager;
       YomuServer? server;
       StreamSubscription<SuwayomiStatus>? statusSub;
@@ -176,14 +178,22 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             }
             _db = db;
           },
-          afterStorage: () async {
+          initializeAuth: () async {
+            auth = await DeviceAuthStore.open(
+              database: db!,
+              legacyFile: File(p.join(root.path, 'device_sessions.json')),
+            );
+            if (!mounted || _lifecycle.shuttingDown) {
+              await _teardownResources(auth: auth, db: db);
+              auth = null;
+              db = null;
+              _db = null;
+              throw _BootstrapAborted();
+            }
+          },
+          startRemainingServices: () async {
             final paths = SuwayomiPaths(root);
             await paths.ensureLayout();
-
-            final auth = DeviceAuthStore(
-              persistFile: File(p.join(root.path, 'device_sessions.json')),
-            );
-            await auth.load();
 
             final mayaStore = MayaStore(
               File(p.join(root.path, 'maya_chat.json')),
@@ -211,7 +221,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             final pwaDir = await _resolvePwaDir();
             server = _buildYomuServer(
               manager: manager!,
-              auth: auth,
+              auth: auth!,
               pwaDir: pwaDir,
               lanEnabled: false,
               lanAddresses: const [],
@@ -237,10 +247,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               await _teardownResources(
                 statusSub: statusSub,
                 server: server,
+                auth: auth,
                 manager: manager,
                 db: db,
               );
               db = null;
+              auth = null;
               manager = null;
               server = null;
               statusSub = null;
@@ -251,13 +263,15 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             final liveServer = server!;
             final liveSub = statusSub!;
             final liveDb = db!;
+            final liveAuth = auth!;
             _statusSub = liveSub;
             _manager = liveManager;
             _yomuServer = liveServer;
             _db = liveDb;
+            _auth = liveAuth;
+            auth = null;
             setState(() {
               _api = SuwayomiApi(liveManager.createClient());
-              _auth = auth;
               _maya = maya;
               _pwaDir = pwaDir;
               _suwayomiStatus = liveManager.status;
@@ -277,6 +291,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         await _teardownResources(
           statusSub: statusSub ?? _statusSub,
           server: server ?? _yomuServer,
+          auth: auth ?? _auth,
           manager: manager ?? _manager,
           db: db ?? _db ?? YomuDatabase.instance,
         );
@@ -299,10 +314,11 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     });
   }
 
-  /// Core → Suwayomi → DB. [close] runs even if [stop] throws.
+  /// Core → Auth → Suwayomi → DB. [close] runs even if [stop] throws.
   Future<void> _teardownResources({
     StreamSubscription<SuwayomiStatus>? statusSub,
     YomuServer? server,
+    DeviceAuthStore? auth,
     SuwayomiProcessManager? manager,
     YomuDatabase? db,
   }) {
@@ -315,6 +331,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       },
       closeServer: () async {
         server?.close();
+      },
+      closeAuth: () async {
+        await auth?.close();
       },
       disposeManager: () async {
         try {
@@ -332,16 +351,19 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Future<void> _teardownOwnedResources() async {
     final sub = _statusSub;
     final server = _yomuServer;
+    final auth = _auth;
     final manager = _manager;
     final db = _db ?? YomuDatabase.instance;
     _statusSub = null;
     _yomuServer = null;
+    _auth = null;
     _manager = null;
     _db = null;
     _api = null;
     await _teardownResources(
       statusSub: sub,
       server: server,
+      auth: auth,
       manager: manager,
       db: db,
     );
@@ -504,6 +526,41 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _revokeSession(String sessionId) async {
+    final auth = _auth;
+    if (auth == null) return;
+    await _runAuthMutation(auth, () async {
+      await auth.revoke(sessionId);
+    });
+  }
+
+  Future<void> _revokeAllSessions() async {
+    final auth = _auth;
+    if (auth == null) return;
+    await _runAuthMutation(auth, auth.revokeAll);
+  }
+
+  Future<void> _runAuthMutation(
+    DeviceAuthStore auth,
+    Future<void> Function() mutation,
+  ) async {
+    if (_busyAuth || _lifecycle.shuttingDown || !identical(_auth, auth)) {
+      return;
+    }
+    if (mounted) setState(() => _busyAuth = true);
+    try {
+      await mutation();
+    } on DeviceAuthException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Falha ao persistir a revogação.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busyAuth = false);
+    }
+  }
+
   /// Prefer packaged `{exeDir}/pwa` (Release); fall back to monorepo only in dev.
   Future<Directory?> _resolvePwaDir() async {
     final candidates = <Directory>[];
@@ -541,7 +598,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Future<void> _coordinatedShutdown() {
     return _lifecycle.shutdown(() async {
       await _teardownOwnedResources();
-      _auth = null;
       _maya = null;
     });
   }
@@ -684,7 +740,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         yomuPort: _yomuServer?.boundPort ?? 8787,
         managedRootDir: _manager?.managedRootDir ?? '—',
         aboutVersion: _aboutVersion,
-        busy: _busyEngine || _busyHttp,
+        busy: _busyEngine || _busyHttp || _busyAuth,
         lanEnabled: _lanEnabled,
         onToggleLan: (v) => unawaited(_toggleLan(v)),
         pairingCode: displayCode,
@@ -696,21 +752,15 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         sessions: (_auth?.sessions ?? [])
             .map(
               (s) => PairedSessionRow(
-                token: s.token,
+                sessionId: s.sessionId,
                 deviceName: s.deviceName,
                 createdAt: s.createdAt,
                 lastSeenAt: s.lastSeenAt,
               ),
             )
             .toList(),
-        onRevokeSession: (token) async {
-          await _auth?.revoke(token);
-          if (mounted) setState(() {});
-        },
-        onRevokeAllSessions: () async {
-          await _auth?.revokeAll();
-          if (mounted) setState(() {});
-        },
+        onRevokeSession: _revokeSession,
+        onRevokeAllSessions: _revokeAllSessions,
         onStart: () => unawaited(_startSuwayomi()),
         onStop: () => unawaited(_stopSuwayomi()),
         onRestart: () => unawaited(_restartSuwayomi()),

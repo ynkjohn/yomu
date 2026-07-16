@@ -105,7 +105,7 @@ class HttpServerRestartCoordinator {
   }
 }
 
-/// Resource teardown order: subscription → Core HTTP → Suwayomi → DB.
+/// Resource teardown order: subscription → Core HTTP → Auth → Suwayomi → DB.
 ///
 /// [closeServer] always runs even if [stopServer] throws.
 class ResourceTeardown {
@@ -113,6 +113,7 @@ class ResourceTeardown {
     Future<void> Function()? cancelSubscription,
     Future<void> Function()? stopServer,
     Future<void> Function()? closeServer,
+    Future<void> Function()? closeAuth,
     Future<void> Function()? disposeManager,
     Future<void> Function()? closeDb,
   }) async {
@@ -126,6 +127,9 @@ class ResourceTeardown {
       await closeServer?.call();
     } catch (_) {}
     try {
+      await closeAuth?.call();
+    } catch (_) {}
+    try {
       await disposeManager?.call();
     } catch (_) {}
     try {
@@ -134,18 +138,21 @@ class ResourceTeardown {
   }
 }
 
-/// Bootstrap steps after storage open — used by HomeShell and unit tests.
+/// Storage-first bootstrap phases used by HomeShell and unit tests.
 ///
-/// Ensures Auth/Core/Suwayomi factories are **not** invoked if [openStorage]
-/// throws (second instance / lock failure).
+/// Ensures Auth is initialized only after storage opens, and remaining services
+/// are initialized only after Auth loading / legacy migration succeeds.
 class StorageFirstBootstrap {
   /// [openStorage] must acquire lock + open DB (or throw).
-  /// [afterStorage] creates Auth, Maya, Suwayomi manager, Core HTTP.
+  /// [initializeAuth] loads Auth from SQLite and migrates legacy sessions.
+  /// [startRemainingServices] creates Maya, Suwayomi manager, and Core HTTP.
   static Future<void> run({
     required Future<void> Function() openStorage,
-    required Future<void> Function() afterStorage,
+    required Future<void> Function() initializeAuth,
+    required Future<void> Function() startRemainingServices,
   }) async {
     await openStorage();
-    await afterStorage();
+    await initializeAuth();
+    await startRemainingServices();
   }
 }

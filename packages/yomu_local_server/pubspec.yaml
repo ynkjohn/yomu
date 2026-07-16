@@ -9,8 +9,11 @@ environment:
 resolution: workspace
 
 dependencies:
+  crypto: ^3.0.6
   yomu_core:
     path: ../yomu_core
+  yomu_storage:
+    path: ../yomu_storage
   yomu_suwayomi:
     path: ../yomu_suwayomi
   shelf: ^1.4.2
@@ -21,4 +24,5 @@ dependencies:
 
 dev_dependencies:
   lints: ^5.1.1
+  sqlite3: 2.9.4
   test: ^1.25.15

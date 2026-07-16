@@ -5,10 +5,13 @@ void main() {
   test('ticket is session-bound', () {
     final store = MediaTicketStore();
     final id = store.issue(
-      sessionToken: 'tok-a',
+      sessionId: 'session-a',
       target: '/api/v1/manga/1/thumbnail',
     );
-    expect(store.resolve(ticketId: id, sessionToken: 'tok-a')?.target, isNotNull);
-    expect(store.resolve(ticketId: id, sessionToken: 'tok-b'), isNull);
+    expect(
+      store.resolve(ticketId: id, sessionId: 'session-a')?.target,
+      isNotNull,
+    );
+    expect(store.resolve(ticketId: id, sessionId: 'session-b'), isNull);
   });
 }
