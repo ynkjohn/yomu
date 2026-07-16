@@ -13,7 +13,7 @@ void main() {
   late Directory root;
 
   setUp(() async {
-    root = Directory.systemTemp.createTempSync('yomu-storage-p1-');
+    root = Directory.systemTemp.createTempSync('yomu-storage-p2a-');
     YomuDatabase.debugAfterCreated = null;
   });
 
@@ -29,9 +29,10 @@ void main() {
     } catch (_) {}
   });
 
-  test('create schema v2, app_meta, sessions, reopen, WAL, FK', () async {
+  test('create schema v3, reopen, WAL, FK, and empty Maya data', () async {
     final db = await YomuDatabase.openForTest(root);
-    expect(db.schemaVersion, 2);
+    expect(db.schemaVersion, 3);
+    await db.validateDatabaseSchema();
 
     await db.setMeta('p0.probe', 'ok');
     expect(await db.getMeta('p0.probe'), 'ok');
@@ -54,6 +55,7 @@ void main() {
     expect(await db.journalMode(), 'wal');
     expect(await db.foreignKeysEnabled(), isTrue);
     expect(await db.foreignKeysEnforcedWithTempTables(), isTrue);
+    expect(await db.isMayaDataEmpty(), isTrue);
 
     final path = db.paths.databaseFile.path;
     await db.close();
@@ -67,50 +69,94 @@ void main() {
     await db2.close();
   });
 
-  test('migrates real schema v1 to v2 and preserves app_meta', () async {
-    final verifier = SchemaVerifier(GeneratedHelper());
-    final v1 = await verifier.schemaAt(1);
-    addTearDown(v1.close);
-    v1.rawDatabase.execute(
-      'INSERT INTO app_meta(key, value, updated_at_ms) VALUES (?, ?, ?)',
-      ['p0.preserved', 'yes', 123456],
-    );
+  test(
+    'migrates real schema v1 through v2 to v3 and preserves app_meta',
+    () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final v1 = await verifier.schemaAt(1);
+      addTearDown(v1.close);
+      v1.rawDatabase.execute(
+        'INSERT INTO app_meta(key, value, updated_at_ms) VALUES (?, ?, ?)',
+        ['p0.preserved', 'yes', 123456],
+      );
 
-    final paths = YomuStoragePaths(root);
-    await paths.ensureLayout();
-    v1.rawDatabase.execute('VACUUM INTO ?', [paths.databaseFile.path]);
+      final paths = YomuStoragePaths(root);
+      await paths.ensureLayout();
+      v1.rawDatabase.execute('VACUUM INTO ?', [paths.databaseFile.path]);
 
-    final db = await YomuDatabase.openForTest(root);
-    await db.validateDatabaseSchema();
-    expect(await db.getMeta('p0.preserved'), 'yes');
-    expect(
-      (await db
-              .customSelect(
-                "SELECT updated_at_ms FROM app_meta WHERE key = 'p0.preserved'",
-              )
-              .getSingle())
-          .read<int>('updated_at_ms'),
-      123456,
-    );
-    expect(await db.listDeviceSessions(), isEmpty);
-    expect(
-      (await db.customSelect('PRAGMA user_version').getSingle())
-          .data
-          .values
-          .single,
-      2,
-    );
+      final db = await YomuDatabase.openForTest(root);
+      await db.validateDatabaseSchema();
+      expect(await db.getMeta('p0.preserved'), 'yes');
+      expect(
+        (await db
+                .customSelect(
+                  "SELECT updated_at_ms FROM app_meta WHERE key = 'p0.preserved'",
+                )
+                .getSingle())
+            .read<int>('updated_at_ms'),
+        123456,
+      );
+      expect(await db.listDeviceSessions(), isEmpty);
+      expect(await db.isMayaDataEmpty(), isTrue);
+      expect(
+        (await db.customSelect('PRAGMA user_version').getSingle())
+            .data
+            .values
+            .single,
+        3,
+      );
 
-    await db.insertDeviceSession(
-      _newSession(
-        sessionId: 'post-migration',
-        tokenHash: _hash('b'),
-        deviceName: 'Migrated iPhone',
-      ),
-    );
-    expect(await db.getDeviceSessionById('post-migration'), isNotNull);
-    await db.close();
-  });
+      await db.insertDeviceSession(
+        _newSession(
+          sessionId: 'post-migration',
+          tokenHash: _hash('b'),
+          deviceName: 'Migrated iPhone',
+        ),
+      );
+      expect(await db.getDeviceSessionById('post-migration'), isNotNull);
+      await db.close();
+    },
+  );
+
+  test(
+    'migrates real schema v2 to v3 and preserves meta and sessions',
+    () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final v2 = await verifier.schemaAt(2);
+      addTearDown(v2.close);
+      v2.rawDatabase.execute(
+        'INSERT INTO app_meta(key, value, updated_at_ms) VALUES (?, ?, ?)',
+        ['p1.preserved', 'yes', 222333],
+      );
+      v2.rawDatabase.execute(
+        'INSERT INTO device_sessions('
+        'session_id, token_hash, device_name, created_at_ms, expires_at_ms'
+        ') VALUES (?, ?, ?, ?, ?)',
+        ['v2-session', _hash('2'), 'iPhone', 1000, 2000],
+      );
+
+      final paths = YomuStoragePaths(root);
+      await paths.ensureLayout();
+      v2.rawDatabase.execute('VACUUM INTO ?', [paths.databaseFile.path]);
+
+      final db = await YomuDatabase.openForTest(root);
+      await db.validateDatabaseSchema();
+      expect(await db.getMeta('p1.preserved'), 'yes');
+      expect(
+        (await db.getDeviceSessionById('v2-session'))?.tokenHash,
+        _hash('2'),
+      );
+      expect(await db.isMayaDataEmpty(), isTrue);
+      expect(
+        (await db.customSelect('PRAGMA user_version').getSingle())
+            .data
+            .values
+            .single,
+        3,
+      );
+      await db.close();
+    },
+  );
 
   test('device session constraints, queries, updates, and deletes', () async {
     final db = await YomuDatabase.openForTest(root);
@@ -271,6 +317,462 @@ void main() {
       await db.close();
     },
   );
+
+  test(
+    'Maya append and load preserve explicit message/proposal order',
+    () async {
+      final db = await YomuDatabase.openForTest(root);
+      await db.appendMayaTurn(
+        messages: [
+          _newMayaMessage(
+            messageId: 'user-1',
+            role: 'user',
+            text: 'primeiro na conversa',
+            createdAtMs: 2000,
+          ),
+          _newMayaMessage(
+            messageId: 'assistant-1',
+            text: 'segundo na conversa',
+            createdAtMs: 1000,
+          ),
+        ],
+        proposals: [
+          _newMayaProposal(
+            proposalId: 'proposal-1',
+            messageId: 'assistant-1',
+            proposalOrder: 1,
+            createdAtMs: 1000,
+          ),
+          _newMayaProposal(
+            proposalId: 'proposal-0',
+            messageId: 'assistant-1',
+            proposalOrder: 0,
+            createdAtMs: 1000,
+          ),
+        ],
+      );
+      await db.appendMayaTurn(
+        messages: [
+          _newMayaMessage(
+            messageId: 'assistant-2',
+            text: 'terceiro apesar do timestamp',
+            createdAtMs: 500,
+          ),
+        ],
+        proposals: const [],
+      );
+
+      final snapshot = await db.loadMayaSnapshot();
+      expect(snapshot.messages.map((m) => m.messageId), [
+        'user-1',
+        'assistant-1',
+        'assistant-2',
+      ]);
+      expect(snapshot.messages.map((m) => m.sortOrder), [0, 1, 2]);
+      expect(snapshot.messages.map((m) => m.content), [
+        'primeiro na conversa',
+        'segundo na conversa',
+        'terceiro apesar do timestamp',
+      ]);
+      expect(snapshot.proposals.map((p) => p.proposalId), [
+        'proposal-0',
+        'proposal-1',
+      ]);
+      expect((await db.countMayaData()).messageCount, 3);
+      expect((await db.countMayaData()).proposalCount, 2);
+      await db.close();
+    },
+  );
+
+  test(
+    'Maya schema enforces enums, pairing, temporal state, FK, and cascade',
+    () async {
+      final db = await YomuDatabase.openForTest(root);
+
+      Future<void> rawMessage({
+        required String id,
+        required int order,
+        required String role,
+        required int createdAtMs,
+      }) {
+        return db.customStatement(
+          'INSERT INTO maya_messages('
+          'message_id, sort_order, role, text, created_at_ms'
+          ') VALUES (?, ?, ?, ?, ?)',
+          [id, order, role, 'text', createdAtMs],
+        );
+      }
+
+      Future<void> rawProposal({
+        required String id,
+        String? messageId = 'assistant',
+        int? proposalOrder = 0,
+        String kind = 'openManga',
+        String status = 'pending',
+        int createdAtMs = 100,
+        int? confirmedAtMs,
+        int? completedAtMs,
+      }) {
+        return db.customStatement(
+          'INSERT INTO maya_action_proposals('
+          'proposal_id, message_id, proposal_order, kind, title, description, '
+          'payload_json, status, created_at_ms, confirmed_at_ms, '
+          'completed_at_ms, error'
+          ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            id,
+            messageId,
+            proposalOrder,
+            kind,
+            'title',
+            'description',
+            '{}',
+            status,
+            createdAtMs,
+            confirmedAtMs,
+            completedAtMs,
+            null,
+          ],
+        );
+      }
+
+      await rawMessage(
+        id: 'assistant',
+        order: 0,
+        role: 'assistant',
+        createdAtMs: 100,
+      );
+      await rawProposal(id: 'valid');
+
+      await expectLater(
+        rawMessage(id: 'bad-role', order: 1, role: 'tool', createdAtMs: 100),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawMessage(id: 'bad-order', order: -1, role: 'user', createdAtMs: 100),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawMessage(id: 'bad-time', order: 1, role: 'user', createdAtMs: -1),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(id: 'bad-kind', kind: 'deleteManga', proposalOrder: 1),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(id: 'bad-status', status: 'unknown', proposalOrder: 1),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(
+          id: 'bad-pair',
+          messageId: 'assistant',
+          proposalOrder: null,
+        ),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(id: 'bad-fk', messageId: 'missing', proposalOrder: 0),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(
+          id: 'pending-confirmed',
+          proposalOrder: 1,
+          confirmedAtMs: 100,
+        ),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(
+          id: 'confirmed-without-time',
+          proposalOrder: 1,
+          status: 'confirmed',
+        ),
+        throwsA(anything),
+      );
+      await expectLater(
+        rawProposal(
+          id: 'executed-backwards',
+          proposalOrder: 1,
+          status: 'executed',
+          confirmedAtMs: 200,
+          completedAtMs: 150,
+        ),
+        throwsA(anything),
+      );
+      await expectLater(rawProposal(id: 'duplicate-order'), throwsA(anything));
+
+      await db.customStatement(
+        "DELETE FROM maya_messages WHERE message_id = 'assistant'",
+      );
+      expect((await db.countMayaData()).proposalCount, 0);
+      await db.close();
+    },
+  );
+
+  test(
+    'Maya import commits marker with rows and rolls back crash hook',
+    () async {
+      final db = await YomuDatabase.openForTest(root);
+      final messages = [
+        _newMayaMessage(
+          messageId: 'legacy-message',
+          text: 'legacy',
+          createdAtMs: 100,
+        ),
+      ];
+      final proposals = [
+        _newMayaProposal(
+          proposalId: 'legacy-proposal',
+          messageId: 'legacy-message',
+          proposalOrder: 0,
+          createdAtMs: 100,
+        ),
+      ];
+
+      await expectLater(
+        db.importMayaSnapshot(
+          messages: messages,
+          proposals: proposals,
+          markerKey: 'migration.maya.test',
+          markerValue: 'fingerprint',
+          afterRowsInsertedBeforeMarker: () async {
+            throw StateError('simulated crash');
+          },
+        ),
+        throwsStateError,
+      );
+      expect(await db.isMayaDataEmpty(), isTrue);
+      expect(await db.getMeta('migration.maya.test'), isNull);
+
+      await db.importMayaSnapshot(
+        messages: messages,
+        proposals: proposals,
+        markerKey: 'migration.maya.test',
+        markerValue: 'fingerprint',
+      );
+      expect(await db.getMeta('migration.maya.test'), 'fingerprint');
+      expect((await db.countMayaData()).messageCount, 1);
+      expect((await db.countMayaData()).proposalCount, 1);
+      await expectLater(
+        db.importMayaSnapshot(messages: const [], proposals: const []),
+        throwsStateError,
+      );
+      await db.close();
+    },
+  );
+
+  test(
+    'Maya proposal CAS, uncertain outcome, rollback, and clear are atomic',
+    () async {
+      final db = await YomuDatabase.openForTest(root);
+      await db.appendMayaTurn(
+        messages: [
+          _newMayaMessage(
+            messageId: 'proposal-message',
+            text: 'proposal',
+            createdAtMs: 100,
+          ),
+        ],
+        proposals: [
+          _newMayaProposal(
+            proposalId: 'execute-me',
+            messageId: 'proposal-message',
+            proposalOrder: 0,
+            createdAtMs: 100,
+          ),
+          _newMayaProposal(
+            proposalId: 'reject-me',
+            messageId: 'proposal-message',
+            proposalOrder: 1,
+            createdAtMs: 100,
+          ),
+          _newMayaProposal(
+            proposalId: 'fail-me',
+            messageId: 'proposal-message',
+            proposalOrder: 2,
+            createdAtMs: 100,
+          ),
+          _newMayaProposal(
+            proposalId: 'race-me',
+            messageId: 'proposal-message',
+            proposalOrder: 3,
+            createdAtMs: 100,
+          ),
+          _newMayaProposal(
+            proposalId: 'standalone',
+            messageId: null,
+            proposalOrder: null,
+            createdAtMs: 90,
+          ),
+        ],
+      );
+
+      expect(await db.confirmMayaProposal('execute-me', 110), isTrue);
+      expect(await db.confirmMayaProposal('execute-me', 111), isFalse);
+      final concurrentConfirm = await Future.wait([
+        db.confirmMayaProposal('race-me', 112),
+        db.confirmMayaProposal('race-me', 113),
+      ]);
+      expect(concurrentConfirm.where((updated) => updated), hasLength(1));
+      expect(
+        await db.markConfirmedMayaProposalOutcomeUncertain(
+          'execute-me',
+          error: 'outcome_unknown',
+          outcomeMessage: _newMayaMessage(
+            messageId: 'uncertain-message',
+            text: 'resultado incerto',
+            createdAtMs: 120,
+          ),
+        ),
+        isTrue,
+      );
+      var snapshot = await db.loadMayaSnapshot();
+      var executing = snapshot.proposals.singleWhere(
+        (proposal) => proposal.proposalId == 'execute-me',
+      );
+      expect(executing.status, 'confirmed');
+      expect(executing.confirmedAtMs, 110);
+      expect(executing.completedAtMs, isNull);
+      expect(executing.error, 'outcome_unknown');
+      expect(snapshot.messages.last.messageId, 'uncertain-message');
+
+      await expectLater(
+        db.completeConfirmedMayaProposal(
+          'execute-me',
+          status: 'executed',
+          completedAtMs: 130,
+          outcomeMessage: _newMayaMessage(
+            messageId: 'proposal-message',
+            text: 'duplicate id forces rollback',
+            createdAtMs: 130,
+          ),
+        ),
+        throwsA(anything),
+      );
+      executing = (await db.loadMayaSnapshot()).proposals.singleWhere(
+        (proposal) => proposal.proposalId == 'execute-me',
+      );
+      expect(executing.status, 'confirmed');
+      expect(executing.completedAtMs, isNull);
+
+      expect(
+        await db.completeConfirmedMayaProposal(
+          'execute-me',
+          status: 'executed',
+          completedAtMs: 140,
+          outcomeMessage: _newMayaMessage(
+            messageId: 'executed-message',
+            text: 'executed',
+            createdAtMs: 140,
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        await db.completeConfirmedMayaProposal(
+          'execute-me',
+          status: 'executed',
+          completedAtMs: 150,
+        ),
+        isFalse,
+      );
+      expect(
+        await db.resolvePendingMayaProposal(
+          'reject-me',
+          status: 'rejected',
+          completedAtMs: 125,
+          outcomeMessage: _newMayaMessage(
+            messageId: 'rejected-message',
+            text: 'rejected',
+            createdAtMs: 125,
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        await db.resolvePendingMayaProposal(
+          'fail-me',
+          status: 'failed',
+          completedAtMs: 126,
+          error: 'validation_failed',
+        ),
+        isTrue,
+      );
+
+      snapshot = await db.loadMayaSnapshot();
+      expect(
+        snapshot.proposals
+            .singleWhere((proposal) => proposal.proposalId == 'execute-me')
+            .status,
+        'executed',
+      );
+      expect(
+        snapshot.proposals
+            .singleWhere((proposal) => proposal.proposalId == 'reject-me')
+            .status,
+        'rejected',
+      );
+      expect(
+        snapshot.proposals
+            .singleWhere((proposal) => proposal.proposalId == 'fail-me')
+            .status,
+        'failed',
+      );
+      expect(
+        snapshot.proposals
+            .singleWhere((proposal) => proposal.proposalId == 'standalone')
+            .messageId,
+        isNull,
+      );
+
+      expect(await db.clearMayaData(), isFalse);
+      expect(await db.isMayaDataEmpty(), isFalse);
+      expect(
+        await db.completeConfirmedMayaProposal(
+          'race-me',
+          status: 'executed',
+          completedAtMs: 150,
+        ),
+        isTrue,
+      );
+      expect(await db.clearMayaData(), isTrue);
+      expect(await db.isMayaDataEmpty(), isTrue);
+      await db.close();
+    },
+  );
+
+  test('Maya clear preserves a durable confirmed proposal', () async {
+    final db = await YomuDatabase.openForTest(root);
+    await db.appendMayaTurn(
+      messages: [
+        _newMayaMessage(
+          messageId: 'confirmed-message',
+          text: 'proposal',
+          createdAtMs: 100,
+        ),
+      ],
+      proposals: [
+        _newMayaProposal(
+          proposalId: 'confirmed-proposal',
+          messageId: 'confirmed-message',
+          proposalOrder: 0,
+          status: 'confirmed',
+          createdAtMs: 100,
+          confirmedAtMs: 110,
+        ),
+      ],
+    );
+
+    expect(await db.clearMayaData(), isFalse);
+    final snapshot = await db.loadMayaSnapshot();
+    expect(snapshot.messages, hasLength(1));
+    expect(snapshot.proposals, hasLength(1));
+    expect(snapshot.proposals.single.status, 'confirmed');
+    await db.close();
+  });
 
   test('placeholder v0 exact body renamed then SQLite created', () async {
     final paths = YomuStoragePaths(root);
@@ -493,6 +995,47 @@ NewDeviceSession _newSession({
     createdAtMs: createdAtMs ?? now,
     expiresAtMs: expiresAtMs ?? now + const Duration(days: 30).inMilliseconds,
     lastSeenAtMs: lastSeenAtMs,
+  );
+}
+
+NewMayaMessage _newMayaMessage({
+  required String messageId,
+  String role = 'assistant',
+  required String text,
+  required int createdAtMs,
+}) {
+  return NewMayaMessage(
+    messageId: messageId,
+    role: role,
+    text: text,
+    createdAtMs: createdAtMs,
+  );
+}
+
+NewMayaProposal _newMayaProposal({
+  required String proposalId,
+  required String? messageId,
+  required int? proposalOrder,
+  String kind = 'openManga',
+  String status = 'pending',
+  required int createdAtMs,
+  int? confirmedAtMs,
+  int? completedAtMs,
+  String? error,
+}) {
+  return NewMayaProposal(
+    proposalId: proposalId,
+    messageId: messageId,
+    proposalOrder: proposalOrder,
+    kind: kind,
+    title: 'title',
+    description: 'description',
+    payloadJson: '{"mangaId":1,"title":"Title"}',
+    status: status,
+    createdAtMs: createdAtMs,
+    confirmedAtMs: confirmedAtMs,
+    completedAtMs: completedAtMs,
+    error: error,
   );
 }
 

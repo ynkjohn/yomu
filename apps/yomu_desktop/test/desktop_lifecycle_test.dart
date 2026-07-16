@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_desktop/shell/desktop_lifecycle.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
@@ -45,6 +46,7 @@ void main() {
     'StorageFirstBootstrap does not initialize Auth or services when open fails',
     () async {
       var auth = false;
+      var maya = false;
       var services = false;
       await expectLater(
         StorageFirstBootstrap.run(
@@ -54,6 +56,10 @@ void main() {
           initializeAuth: () async {
             auth = true;
           },
+          initializeOptionalMaya: () async {
+            maya = true;
+          },
+          onMayaUnavailable: (_) {},
           startRemainingServices: () async {
             services = true;
           },
@@ -61,6 +67,7 @@ void main() {
         throwsStateError,
       );
       expect(auth, isFalse);
+      expect(maya, isFalse);
       expect(services, isFalse);
     },
   );
@@ -76,11 +83,15 @@ void main() {
         initializeAuth: () async {
           order.add('auth');
         },
+        initializeOptionalMaya: () async {
+          order.add('maya');
+        },
+        onMayaUnavailable: (_) {},
         startRemainingServices: () async {
           order.add('services');
         },
       );
-      expect(order, ['storage', 'auth', 'services']);
+      expect(order, ['storage', 'auth', 'maya', 'services']);
     },
   );
 
@@ -97,6 +108,10 @@ void main() {
             order.add('auth');
             throw StateError('legacy sessions malformed');
           },
+          initializeOptionalMaya: () async {
+            order.add('maya');
+          },
+          onMayaUnavailable: (_) {},
           startRemainingServices: () async {
             order.add('services');
           },
@@ -106,6 +121,66 @@ void main() {
       expect(order, ['storage', 'auth']);
     },
   );
+
+  test(
+    'typed legacy Maya failure degrades Maya and starts remaining services',
+    () async {
+      final order = <String>[];
+      LegacyMayaMigrationException? unavailable;
+
+      await StorageFirstBootstrap.run(
+        openStorage: () async {
+          order.add('storage');
+        },
+        initializeAuth: () async {
+          order.add('auth');
+        },
+        initializeOptionalMaya: () async {
+          order.add('maya');
+          throw const LegacyMayaMigrationException('legacy_json_invalid');
+        },
+        onMayaUnavailable: (error) {
+          unavailable = error;
+        },
+        startRemainingServices: () async {
+          order.add('services');
+        },
+      );
+
+      expect(order, ['storage', 'auth', 'maya', 'services']);
+      expect(unavailable?.code, 'legacy_json_invalid');
+    },
+  );
+
+  test('non-legacy Maya storage failure remains fatal', () async {
+    final order = <String>[];
+    var unavailableCalled = false;
+
+    await expectLater(
+      StorageFirstBootstrap.run(
+        openStorage: () async {
+          order.add('storage');
+        },
+        initializeAuth: () async {
+          order.add('auth');
+        },
+        initializeOptionalMaya: () async {
+          order.add('maya');
+          throw StateError('sqlite load failed');
+        },
+        onMayaUnavailable: (_) {
+          unavailableCalled = true;
+        },
+        startRemainingServices: () async {
+          order.add('services');
+        },
+      ),
+      throwsStateError,
+    );
+
+    expect(order, ['storage', 'auth', 'maya']);
+    expect(unavailableCalled, isFalse);
+  });
 
   test(
     'HttpServerRestartCoordinator disposes new server on abort after start',
@@ -276,6 +351,13 @@ void main() {
         events.add('close');
         throw StateError('close failed');
       },
+      closeMaya: () async {
+        events.add('maya');
+        throw StateError('maya close failed after drain');
+      },
+      releaseMayaPort: () async {
+        events.add('maya-port');
+      },
       closeAuth: () async {
         events.add('auth');
         throw StateError('auth close failed after drain');
@@ -288,8 +370,56 @@ void main() {
         events.add('db');
       },
     );
-    expect(events, ['subscription', 'stop', 'close', 'auth', 'manager', 'db']);
+    expect(events, [
+      'subscription',
+      'stop',
+      'close',
+      'maya',
+      'maya-port',
+      'auth',
+      'manager',
+      'db',
+    ]);
   });
+
+  test(
+    'ResourceTeardown keeps Maya port, manager, and DB alive while Maya drains',
+    () async {
+      final mayaEntered = Completer<void>();
+      final releaseMaya = Completer<void>();
+      var mayaPortReleased = false;
+      var managerDisposed = false;
+      var dbClosed = false;
+
+      final teardown = ResourceTeardown.run(
+        closeMaya: () async {
+          mayaEntered.complete();
+          await releaseMaya.future;
+        },
+        releaseMayaPort: () async {
+          mayaPortReleased = true;
+        },
+        disposeManager: () async {
+          managerDisposed = true;
+        },
+        closeDb: () async {
+          dbClosed = true;
+        },
+      );
+
+      await mayaEntered.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(mayaPortReleased, isFalse);
+      expect(managerDisposed, isFalse);
+      expect(dbClosed, isFalse);
+
+      releaseMaya.complete();
+      await teardown;
+      expect(mayaPortReleased, isTrue);
+      expect(managerDisposed, isTrue);
+      expect(dbClosed, isTrue);
+    },
+  );
 
   test(
     'ResourceTeardown does not close DB while Auth drain is pending',
@@ -335,6 +465,7 @@ void main() {
 
       final first = await YomuDatabase.open(root);
       var auth = false;
+      var maya = false;
       var core = false;
       var suwa = false;
 
@@ -344,6 +475,10 @@ void main() {
           initializeAuth: () async {
             auth = true;
           },
+          initializeOptionalMaya: () async {
+            maya = true;
+          },
+          onMayaUnavailable: (_) {},
           startRemainingServices: () async {
             // These factories are what HomeShell runs only after storage/Auth.
             core = true;
@@ -353,6 +488,7 @@ void main() {
         throwsStateError,
       );
       expect(auth, isFalse);
+      expect(maya, isFalse);
       expect(core, isFalse);
       expect(suwa, isFalse);
       await first.close();

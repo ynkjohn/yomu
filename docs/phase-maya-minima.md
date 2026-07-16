@@ -1,5 +1,9 @@
 # Fase Maya mínima
 
+> Estado histórico: esta fase introduziu a Maya com persistência JSON. A P2A
+> substitui esse placeholder pelo SQLite Yomu schema v3; consulte
+> `docs/p2a-maya-persistence.md`.
+
 ## Objetivo
 
 Assistente **local-first** no desktop que consulta a biblioteca Suwayomi e só executa ações mutáveis após **confirmação explícita** (ActionProposal).
@@ -9,13 +13,14 @@ Assistente **local-first** no desktop que consulta a biblioteca Suwayomi e só e
 - Chat UI na aba **Maya**
 - Motor heurístico PT-BR offline (sem API key)
 - Propostas: abrir obra, baixar capítulo
-- Persistência JSON: `…/yomu/maya_chat.json`
+- Persistência originalmente em `…/yomu/maya_chat.json`; fonte migrada pela
+  P2A para o SQLite Yomu
 - Port `MayaLibraryPort` → Suwayomi loopback (nunca LAN)
 
 ## Fora de escopo (agora)
 
 - LLM cloud obrigatório (hook `MayaLlmProvider` existe, sem provider default)
-- Drift SQLite (`maya_conversations` tables) — JSON placeholder
+- Múltiplas conversas, memória e configurações de provider
 - Maya no PWA iPhone
 - Source Builder
 

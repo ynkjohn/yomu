@@ -15,6 +15,7 @@
 | **P0 — storage foundation (schema v1 `app_meta`)** | ✅ HEAD `941c4e8` |
 | **Pós-P0 — promoção visual desktop + correções funcionais** | ✅ conteúdo deste checkpoint |
 | **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
+| **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ validação concluída |
 
 ## Phases
 
@@ -26,8 +27,49 @@
 | P0 storage foundation | ✅ |
 | Pós-P0 desktop visual + reader/explore/repos fixes | ✅ conteúdo deste checkpoint |
 | P1 sessions/auth schema bump | ✅ commit `c9d51d3` |
+| P2A Maya persistence schema bump | ✅ validação concluída |
 | Source Builder | bloqueado |
 | Histórico / settings / backup completos | placeholders |
+
+## P2A — persistência da Maya (2026-07-15)
+
+- Baseline separado: `master` / `9d17320d6dffaf61aeaf6ff40e5a476d48f8fb6d`
+  (`docs: record completed P1 checkpoint`). Esta implementação integra somente
+  o bump `2 → 3` e o escopo de persistência da Maya descrito abaixo.
+- Drift migra explicitamente `2 → 3` e adiciona somente `maya_messages` e
+  `maya_action_proposals`. Histórico, estado das propostas e ordenação são
+  persistidos no SQLite Yomu; catálogo, capítulos e fatos de leitura continuam
+  pertencendo exclusivamente ao Suwayomi.
+- A confirmação é uma barreira durável at-most-once: o estado `confirmed` é
+  persistido antes do efeito externo. Resultado ambíguo é exibido como não
+  verificado e nunca sofre retry automático. Mutações e limpeza são
+  serializadas; propostas já confirmadas impedem limpeza destrutiva por stores
+  obsoletos.
+- `maya_chat.json` é importado com transação, marker e fingerprint SHA-256. A
+  leitura é limitada a 4 MiB + 1 byte; arquivos inválidos permanecem
+  preservados. Captura, publicação, compatibilidade pré-nonce e restore usam
+  move atômico no-replace no Windows; restart retoma estados intermediários sem
+  sobrescrever destinos nem duplicar mensagens.
+- Prova runtime atual sobre cópia temporária do JSON real: schema v3, quatro
+  mensagens e zero propostas; archive com o mesmo SHA-256 do original; segundo
+  open manteve marker e contagens sem duplicação. O original permaneceu byte a
+  byte e com metadata inalterada. Todos os temporários criados para a prova
+  foram removidos.
+- Validação atual: `yomu_ai` 54/54, `yomu_storage` 33/33, local server/Auth
+  38/38, desktop 84/84, core 3/3 e Suwayomi 42/42. Analyzer completo, PWA
+  preload/reader race e `git diff --check` passaram; o
+  `tool\verify_workspace.ps1` foi aprovado em 144 s e gerou o build Windows
+  Debug em
+  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`.
+- Evidência visual atual:
+  `%USERPROFILE%\Downloads\yomu-sol-final\2026-07-15`, cobrindo histórico
+  disponível com engine offline, confirmação não verificada sem retry e
+  migração bloqueada com mensagem sanitizada.
+- A referência desktop permaneceu imutável, SHA-256
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
+- P2A não transforma o engine heurístico em LLM nem adiciona providers. Essa
+  capacidade permanece em subfase posterior própria, com plano e aprovação
+  separados.
 
 ## P1 — sessões e autenticação (2026-07-15)
 

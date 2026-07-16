@@ -7,11 +7,13 @@ class MayaScreen extends StatefulWidget {
     super.key,
     required this.service,
     required this.engineReady,
+    this.unavailableReason,
     this.onOpenManga,
   });
 
   final MayaService? service;
   final bool engineReady;
+  final String? unavailableReason;
   final void Function(int mangaId, String title)? onOpenManga;
 
   @override
@@ -45,8 +47,8 @@ class _MayaScreenState extends State<MayaScreen> {
     _controller.clear();
     try {
       await maya.sendUserMessage(text);
-    } catch (error) {
-      _error = '$error';
+    } catch (_) {
+      _error = 'Não foi possível salvar a mensagem da Maya.';
     }
     if (!mounted) return;
     setState(() => _busy = false);
@@ -55,7 +57,7 @@ class _MayaScreenState extends State<MayaScreen> {
 
   Future<void> _confirm(ActionProposal proposal) async {
     final maya = _maya;
-    if (maya == null || _busy) return;
+    if (!_available || maya == null || _busy) return;
     setState(() => _busy = true);
     try {
       final done = await maya.confirmProposal(proposal.id);
@@ -67,8 +69,10 @@ class _MayaScreenState extends State<MayaScreen> {
           widget.onOpenManga?.call(mangaId, '${done.payload['title'] ?? ''}');
         }
       }
-    } catch (error) {
-      _error = '$error';
+    } catch (_) {
+      _error =
+          'Não foi possível concluir a ação da Maya. '
+          'O estado persistido foi preservado.';
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -79,8 +83,8 @@ class _MayaScreenState extends State<MayaScreen> {
     setState(() => _busy = true);
     try {
       await maya.rejectProposal(proposal.id);
-    } catch (error) {
-      _error = '$error';
+    } catch (_) {
+      _error = 'Não foi possível registrar o cancelamento da proposta.';
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -115,8 +119,8 @@ class _MayaScreenState extends State<MayaScreen> {
     });
     try {
       await maya.clearHistory();
-    } catch (error) {
-      _error = '$error';
+    } catch (_) {
+      _error = 'Não foi possível limpar o histórico da Maya.';
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -144,7 +148,7 @@ class _MayaScreenState extends State<MayaScreen> {
           child: Column(
             children: [
               _MayaHeader(
-                engineReady: _available,
+                engineReady: widget.engineReady,
                 messageCount: messages.length,
                 onClearHistory: messages.isEmpty || _busy
                     ? null
@@ -208,7 +212,15 @@ class _MayaScreenState extends State<MayaScreen> {
   }
 
   Widget _conversation(List<MayaMessage> messages) {
-    if (_maya == null || (!_available && messages.isEmpty)) {
+    if (_maya == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: _MayaUnavailable(reason: widget.unavailableReason),
+        ),
+      );
+    }
+    if (!_available && messages.isEmpty) {
       return const Center(
         child: Padding(padding: EdgeInsets.all(28), child: _MayaUnavailable()),
       );
@@ -247,6 +259,7 @@ class _MayaScreenState extends State<MayaScreen> {
                     _ProposalCard(
                       proposal: proposal,
                       busy: _busy,
+                      canConfirm: _available,
                       onConfirm: () => _confirm(proposal),
                       onReject: () => _reject(proposal),
                     ),
@@ -423,12 +436,14 @@ class _ProposalCard extends StatelessWidget {
   const _ProposalCard({
     required this.proposal,
     required this.busy,
+    required this.canConfirm,
     required this.onConfirm,
     required this.onReject,
   });
 
   final ActionProposal proposal;
   final bool busy;
+  final bool canConfirm;
   final VoidCallback onConfirm;
   final VoidCallback onReject;
 
@@ -463,6 +478,26 @@ class _ProposalCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      );
+    }
+    if (proposal.status == ActionProposalStatus.confirmed) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
+          color: const Color(0xFF141923),
+          border: Border.all(color: const Color(0x66C8B7F4)),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: const Text(
+          'Confirmação registrada, mas o resultado não foi verificado. '
+          'A ação não será repetida automaticamente.',
+          style: TextStyle(
+            color: YomuTokens.textMuted,
+            fontSize: 12.5,
+            height: 1.45,
+          ),
         ),
       );
     }
@@ -526,7 +561,7 @@ class _ProposalCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: busy ? null : onConfirm,
+                  onPressed: busy || !canConfirm ? null : onConfirm,
                   child: const Text('Confirmar ação'),
                 ),
               ],
@@ -696,7 +731,9 @@ class _MayaMemoryPanel extends StatelessWidget {
 }
 
 class _MayaUnavailable extends StatelessWidget {
-  const _MayaUnavailable();
+  const _MayaUnavailable({this.reason});
+
+  final String? reason;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -704,20 +741,23 @@ class _MayaUnavailable extends StatelessWidget {
     children: [
       const _MayaFace(size: 56),
       const SizedBox(height: 14),
-      const Text(
-        'Maya temporariamente indisponível',
-        style: TextStyle(
+      Text(
+        reason == null
+            ? 'Maya temporariamente indisponível'
+            : 'Histórico da Maya indisponível',
+        style: const TextStyle(
           color: YomuTokens.text,
           fontSize: 19,
           fontWeight: FontWeight.w700,
         ),
       ),
       const SizedBox(height: 8),
-      const Text(
-        'Inicie o Suwayomi para a Maya consultar a biblioteca.\n'
-        'As ações só são executadas depois da sua confirmação.',
+      Text(
+        reason ??
+            'Inicie o Suwayomi para a Maya consultar a biblioteca.\n'
+                'As ações só são executadas depois da sua confirmação.',
         textAlign: TextAlign.center,
-        style: TextStyle(
+        style: const TextStyle(
           color: YomuTokens.textMuted,
           fontSize: 13.5,
           height: 1.55,

@@ -104,6 +104,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
   MayaService? _maya;
+  String? _mayaUnavailableReason;
   Directory? _pwaDir;
   String? _bootstrapError;
   bool _bootstrapping = true;
@@ -155,9 +156,11 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       await _teardownOwnedResources();
       YomuDatabase? db;
       DeviceAuthStore? auth;
+      MayaService? maya;
       SuwayomiProcessManager? manager;
       YomuServer? server;
       StreamSubscription<SuwayomiStatus>? statusSub;
+      String? mayaUnavailableReason;
       try {
         final appData = Platform.environment['APPDATA'];
         if (appData == null || appData.trim().isEmpty) {
@@ -191,18 +194,31 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               throw _BootstrapAborted();
             }
           },
+          initializeOptionalMaya: () async {
+            final store = await MayaStore.open(
+              database: db!,
+              legacyFile: File(p.join(root.path, 'maya_chat.json')),
+            );
+            maya = MayaService(
+              store: store,
+              libraryPort: SuwayomiMayaPort(() => _api),
+            );
+            if (!mounted || _lifecycle.shuttingDown) {
+              await _teardownResources(maya: maya, auth: auth, db: db);
+              maya = null;
+              auth = null;
+              db = null;
+              _db = null;
+              throw _BootstrapAborted();
+            }
+          },
+          onMayaUnavailable: (_) {
+            maya = null;
+            mayaUnavailableReason = _mayaLegacyMigrationBlockedMessage;
+          },
           startRemainingServices: () async {
             final paths = SuwayomiPaths(root);
             await paths.ensureLayout();
-
-            final mayaStore = MayaStore(
-              File(p.join(root.path, 'maya_chat.json')),
-            );
-            await mayaStore.load();
-            final maya = MayaService(
-              store: mayaStore,
-              libraryPort: SuwayomiMayaPort(() => _api),
-            );
 
             final manifestJson = await rootBundle.loadString(
               'assets/vendor/manifest.json',
@@ -247,6 +263,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               await _teardownResources(
                 statusSub: statusSub,
                 server: server,
+                maya: maya,
                 auth: auth,
                 manager: manager,
                 db: db,
@@ -256,6 +273,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               manager = null;
               server = null;
               statusSub = null;
+              maya = null;
               throw _BootstrapAborted();
             }
 
@@ -264,6 +282,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             final liveSub = statusSub!;
             final liveDb = db!;
             final liveAuth = auth!;
+            final liveMaya = maya;
+            final liveMayaUnavailableReason = mayaUnavailableReason;
             _statusSub = liveSub;
             _manager = liveManager;
             _yomuServer = liveServer;
@@ -272,7 +292,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             auth = null;
             setState(() {
               _api = SuwayomiApi(liveManager.createClient());
-              _maya = maya;
+              _maya = liveMaya;
+              _mayaUnavailableReason = liveMayaUnavailableReason;
               _pwaDir = pwaDir;
               _suwayomiStatus = liveManager.status;
               _lanEnabled = false;
@@ -283,6 +304,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             manager = null;
             server = null;
             statusSub = null;
+            maya = null;
           },
         );
       } on _BootstrapAborted {
@@ -291,6 +313,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         await _teardownResources(
           statusSub: statusSub ?? _statusSub,
           server: server ?? _yomuServer,
+          maya: maya ?? _maya,
           auth: auth ?? _auth,
           manager: manager ?? _manager,
           db: db ?? _db ?? YomuDatabase.instance,
@@ -301,6 +324,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _db = null;
         _auth = null;
         _maya = null;
+        _mayaUnavailableReason = null;
         _api = null;
         if (!mounted) return;
         final msg = e is YomuAlreadyRunningException
@@ -314,10 +338,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     });
   }
 
-  /// Core → Auth → Suwayomi → DB. [close] runs even if [stop] throws.
+  /// Core → Maya → Auth → Suwayomi → DB. [close] runs even if [stop] throws.
   Future<void> _teardownResources({
     StreamSubscription<SuwayomiStatus>? statusSub,
     YomuServer? server,
+    MayaService? maya,
+    Future<void> Function()? releaseMayaPort,
     DeviceAuthStore? auth,
     SuwayomiProcessManager? manager,
     YomuDatabase? db,
@@ -332,6 +358,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       closeServer: () async {
         server?.close();
       },
+      closeMaya: () async {
+        await maya?.close();
+      },
+      releaseMayaPort: releaseMayaPort,
       closeAuth: () async {
         await auth?.close();
       },
@@ -351,18 +381,27 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   Future<void> _teardownOwnedResources() async {
     final sub = _statusSub;
     final server = _yomuServer;
+    final maya = _maya;
     final auth = _auth;
     final manager = _manager;
     final db = _db ?? YomuDatabase.instance;
+    final api = _api;
     _statusSub = null;
     _yomuServer = null;
+    _maya = null;
+    _mayaUnavailableReason = null;
     _auth = null;
     _manager = null;
     _db = null;
-    _api = null;
     await _teardownResources(
       statusSub: sub,
       server: server,
+      maya: maya,
+      // Maya's Suwayomi port resolves through `_api`. Keep this exact client
+      // available until all already-admitted Maya mutations have drained.
+      releaseMayaPort: () async {
+        if (identical(_api, api)) _api = null;
+      },
       auth: auth,
       manager: manager,
       db: db,
@@ -596,10 +635,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   /// Idempotent shutdown: waits for in-flight bootstrap/restart, then tears down.
   Future<void> _coordinatedShutdown() {
-    return _lifecycle.shutdown(() async {
-      await _teardownOwnedResources();
-      _maya = null;
-    });
+    return _lifecycle.shutdown(_teardownOwnedResources);
   }
 
   @override
@@ -797,6 +833,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       'maya' => MayaScreen(
         service: _maya,
         engineReady: _engineReady,
+        unavailableReason: _mayaUnavailableReason,
         onOpenManga: (id, title) {
           final api = _api;
           if (api == null) return;
@@ -839,6 +876,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 }
+
+const _mayaLegacyMigrationBlockedMessage =
+    'A migração do histórico da Maya foi bloqueada. '
+    'O arquivo original foi preservado.';
 
 /// Clean abort for unmount/shutdown mid-bootstrap (not user-facing).
 class _BootstrapAborted implements Exception {}

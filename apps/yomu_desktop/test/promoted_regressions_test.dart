@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:ui' show SemanticsAction, SemanticsFlag;
 
 import 'package:flutter/material.dart';
@@ -19,6 +18,29 @@ void main() {
   Future<void> setDesktopSurface(WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1240, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+  }
+
+  void addMayaTearDown(WidgetTester tester, MayaService maya) {
+    addTearDown(() async {
+      Object? closeError;
+      StackTrace? closeStackTrace;
+      var closed = false;
+      maya.close().then(
+        (_) => closed = true,
+        onError: (Object error, StackTrace stackTrace) {
+          closeError = error;
+          closeStackTrace = stackTrace;
+          closed = true;
+        },
+      );
+      await tester.pump(Duration.zero);
+      if (!closed) {
+        throw StateError('Maya fixture still had pending asynchronous work.');
+      }
+      if (closeError != null) {
+        Error.throwWithStackTrace(closeError!, closeStackTrace!);
+      }
+    });
   }
 
   testWidgets('Library filters the real collection by title', (tester) async {
@@ -326,30 +348,18 @@ void main() {
     tester,
   ) async {
     await setDesktopSurface(tester);
-    final file = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}'
-      'yomu-maya-widget-${DateTime.now().microsecondsSinceEpoch}.json',
-    );
-    addTearDown(() async {
-      if (await file.exists()) await file.delete();
-    });
-    final store = await tester.runAsync(() async {
-      final seed = MayaStore(file);
-      seed.messages.add(
+    final store = MayaStore.inMemory(
+      seedMessages: [
         MayaMessage(
           id: 'm1',
           role: MayaRole.assistant,
           text: 'Histórico persistido',
           createdAt: DateTime.utc(2026, 7, 14),
         ),
-      );
-      await seed.save();
-      final loaded = MayaStore(file);
-      await loaded.load();
-      return loaded;
-    });
-    expect(store, isNotNull);
-    final maya = MayaService(store: store!, libraryPort: _NoopMayaPort());
+      ],
+    );
+    final maya = MayaService(store: store, libraryPort: _NoopMayaPort());
+    addMayaTearDown(tester, maya);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -372,23 +382,18 @@ void main() {
     tester,
   ) async {
     await setDesktopSurface(tester);
-    final file = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}'
-      'yomu-maya-clear-${DateTime.now().microsecondsSinceEpoch}.json',
-    );
-    addTearDown(() async {
-      if (await file.exists()) await file.delete();
-    });
-    final store = MayaStore(file);
-    store.messages.add(
-      MayaMessage(
-        id: 'm1',
-        role: MayaRole.user,
-        text: 'Mensagem para apagar',
-        createdAt: DateTime.utc(2026, 7, 14),
-      ),
+    final store = MayaStore.inMemory(
+      seedMessages: [
+        MayaMessage(
+          id: 'm1',
+          role: MayaRole.user,
+          text: 'Mensagem para apagar',
+          createdAt: DateTime.utc(2026, 7, 14),
+        ),
+      ],
     );
     final maya = MayaService(store: store, libraryPort: _NoopMayaPort());
+    addMayaTearDown(tester, maya);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -409,6 +414,196 @@ void main() {
 
     expect(store.messages, isEmpty);
     expect(find.text('Mensagem para apagar'), findsNothing);
+  });
+
+  testWidgets('Maya blocks confirm offline but keeps local reject available', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    final message = MayaMessage(
+      id: 'm-pending',
+      role: MayaRole.assistant,
+      text: 'Posso baixar este capítulo.',
+      createdAt: DateTime.utc(2026, 7, 14),
+      proposalIds: const ['p-pending'],
+    );
+    final proposal = ActionProposal(
+      id: 'p-pending',
+      kind: MayaActionKind.downloadChapter,
+      title: 'Baixar capítulo',
+      description: 'Enfileirar o capítulo 99.',
+      payload: const {'chapterId': 99},
+      status: ActionProposalStatus.pending,
+      createdAt: DateTime.utc(2026, 7, 14),
+    );
+    final store = MayaStore.inMemory(
+      seedMessages: [message],
+      seedProposals: [proposal],
+    );
+    final port = _NoopMayaPort();
+    final maya = MayaService(store: store, libraryPort: port);
+    addMayaTearDown(tester, maya);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(body: MayaScreen(service: maya, engineReady: false)),
+      ),
+    );
+    await tester.pump();
+
+    final confirm = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Confirmar ação'),
+    );
+    final reject = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Ignorar'),
+    );
+    expect(confirm.onPressed, isNull);
+    expect(reject.onPressed, isNotNull);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Ignorar'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Proposta ignorada — nada foi alterado.'), findsOneWidget);
+    expect(port.downloads, isEmpty);
+  });
+
+  testWidgets('Maya renders confirmed as unverified without retry action', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    final store = MayaStore.inMemory(
+      seedMessages: [
+        MayaMessage(
+          id: 'm-confirmed',
+          role: MayaRole.assistant,
+          text: 'Confirmação em andamento.',
+          createdAt: DateTime.utc(2026, 7, 14),
+          proposalIds: const ['p-confirmed'],
+        ),
+      ],
+      seedProposals: [
+        ActionProposal(
+          id: 'p-confirmed',
+          kind: MayaActionKind.downloadChapter,
+          title: 'Baixar capítulo',
+          description: 'Enfileirar o capítulo 99.',
+          payload: const {'chapterId': 99},
+          status: ActionProposalStatus.confirmed,
+          createdAt: DateTime.utc(2026, 7, 14),
+        ),
+      ],
+    );
+    final maya = MayaService(store: store, libraryPort: _NoopMayaPort());
+    addMayaTearDown(tester, maya);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(body: MayaScreen(service: maya, engineReady: true)),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.text(
+        'Confirmação registrada, mas o resultado não foi verificado. '
+        'A ação não será repetida automaticamente.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Confirmar ação'), findsNothing);
+  });
+
+  testWidgets('Maya does not expose internal confirmation errors', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    final createdAt = DateTime.utc(2026, 7, 14);
+    final store = MayaStore.inMemory(
+      seedMessages: [
+        MayaMessage(
+          id: 'm-sensitive-error',
+          role: MayaRole.assistant,
+          text: 'Posso baixar este capítulo.',
+          createdAt: createdAt,
+          proposalIds: const ['p-sensitive-error'],
+        ),
+      ],
+      seedProposals: [
+        ActionProposal(
+          id: 'p-sensitive-error',
+          kind: MayaActionKind.downloadChapter,
+          title: 'Baixar capítulo',
+          description: 'Enfileirar o capítulo 99.',
+          payload: const {'chapterId': 99},
+          status: ActionProposalStatus.pending,
+          createdAt: createdAt,
+        ),
+      ],
+    );
+    final maya = MayaService(
+      store: store,
+      libraryPort: _NoopMayaPort(),
+      hooks: MayaServiceHooks(
+        afterConfirmationPersistedBeforeDispatch: (_) async {
+          throw StateError(r'secret C:\Users\private\maya_chat.json');
+        },
+      ),
+    );
+    addMayaTearDown(tester, maya);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(body: MayaScreen(service: maya, engineReady: true)),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Confirmar ação'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.text(
+        'Não foi possível concluir a ação da Maya. '
+        'O estado persistido foi preservado.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('secret'), findsNothing);
+    expect(find.textContaining(r'C:\Users'), findsNothing);
+  });
+
+  testWidgets('Maya shows sanitized legacy migration blocked state', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    const reason =
+        'A migração do histórico da Maya foi bloqueada. '
+        'O arquivo original foi preservado.';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: const Scaffold(
+          body: MayaScreen(
+            service: null,
+            engineReady: true,
+            unavailableReason: reason,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Histórico da Maya indisponível'), findsOneWidget);
+    expect(find.text(reason), findsOneWidget);
+    expect(find.text('Biblioteca · conectada'), findsOneWidget);
+    expect(find.textContaining('maya_chat.json'), findsNothing);
+    expect(find.textContaining(r'C:\'), findsNothing);
   });
 }
 
@@ -450,8 +645,12 @@ class _FakeSuwayomiApi extends SuwayomiApi {
 }
 
 class _NoopMayaPort implements MayaLibraryPort {
+  final downloads = <int>[];
+
   @override
-  Future<void> enqueueChapterDownload(int chapterId) async {}
+  Future<void> enqueueChapterDownload(int chapterId) async {
+    downloads.add(chapterId);
+  }
 
   @override
   Future<List<MayaLibraryItem>> listLibrary() async => const [];

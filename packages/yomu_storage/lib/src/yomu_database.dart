@@ -73,10 +73,166 @@ class DeviceSessions extends Table {
   ];
 }
 
+/// Plain-Dart input for a Maya message.
+///
+/// SQL `sort_order` is deliberately assigned by storage so concurrent append
+/// operations cannot create duplicate or unstable ordering.
+@immutable
+class NewMayaMessage {
+  const NewMayaMessage({
+    required this.messageId,
+    required this.role,
+    required this.text,
+    required this.createdAtMs,
+  });
+
+  final String messageId;
+  final String role;
+  final String text;
+  final int createdAtMs;
+}
+
+/// Plain-Dart input for a Maya action proposal.
+///
+/// Storage intentionally keeps enum values as strings so this package never
+/// depends on `yomu_ai`. The database checks the supported values.
+@immutable
+class NewMayaProposal {
+  const NewMayaProposal({
+    required this.proposalId,
+    required this.messageId,
+    required this.proposalOrder,
+    required this.kind,
+    required this.title,
+    required this.description,
+    required this.payloadJson,
+    required this.status,
+    required this.createdAtMs,
+    this.confirmedAtMs,
+    this.completedAtMs,
+    this.error,
+  });
+
+  final String proposalId;
+  final String? messageId;
+  final int? proposalOrder;
+  final String kind;
+  final String title;
+  final String description;
+
+  /// Canonical JSON object validated by the domain adapter before storage.
+  final String payloadJson;
+  final String status;
+  final int createdAtMs;
+  final int? confirmedAtMs;
+  final int? completedAtMs;
+
+  /// Caller-sanitized diagnostic text; never persist raw exception output.
+  final String? error;
+}
+
+/// Ordered Maya messages plus their persisted action proposals.
+@immutable
+class MayaStorageSnapshot {
+  const MayaStorageSnapshot({required this.messages, required this.proposals});
+
+  final List<StoredMayaMessage> messages;
+  final List<StoredMayaProposal> proposals;
+}
+
+/// Lightweight persisted-row counts used by migration and lifecycle checks.
+@immutable
+class MayaDataCounts {
+  const MayaDataCounts({
+    required this.messageCount,
+    required this.proposalCount,
+  });
+
+  final int messageCount;
+  final int proposalCount;
+
+  bool get isEmpty => messageCount == 0 && proposalCount == 0;
+}
+
+/// Yomu-owned Maya chat messages. Ordering is explicit and never inferred
+/// from timestamps, which may collide or arrive out of order.
+@DataClassName('StoredMayaMessage')
+class MayaMessages extends Table {
+  TextColumn get messageId => text()();
+  IntColumn get sortOrder => integer().unique()();
+  TextColumn get role => text()();
+  TextColumn get content => text().named('text')();
+  IntColumn get createdAtMs => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {messageId};
+
+  @override
+  List<String> get customConstraints => const [
+    "CHECK (role IN ('system', 'user', 'assistant'))",
+    'CHECK (sort_order >= 0)',
+    'CHECK (created_at_ms >= 0)',
+  ];
+}
+
+/// Yomu-owned ActionProposal audit state.
+///
+/// Suwayomi identifiers inside [payloadJson] are an intention snapshot only;
+/// they are never catalog or reading facts and have no cross-database FK.
+@DataClassName('StoredMayaProposal')
+class MayaActionProposals extends Table {
+  TextColumn get proposalId => text()();
+  TextColumn get messageId => text().nullable().references(
+    MayaMessages,
+    #messageId,
+    onDelete: KeyAction.cascade,
+  )();
+  IntColumn get proposalOrder => integer().nullable()();
+  TextColumn get kind => text()();
+  TextColumn get title => text()();
+  TextColumn get description => text()();
+  TextColumn get payloadJson => text()();
+  TextColumn get status => text()();
+  IntColumn get createdAtMs => integer()();
+  IntColumn get confirmedAtMs => integer().nullable()();
+  IntColumn get completedAtMs => integer().nullable()();
+  TextColumn get error => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {proposalId};
+
+  @override
+  List<String> get customConstraints => const [
+    "CHECK (kind IN ('openManga', 'downloadChapter', 'setInLibrary'))",
+    "CHECK (status IN ('pending', 'confirmed', 'rejected', 'executed', 'failed'))",
+    'CHECK (created_at_ms >= 0)',
+    'CHECK (proposal_order IS NULL OR proposal_order >= 0)',
+    'CHECK ((message_id IS NULL AND proposal_order IS NULL) OR '
+        '(message_id IS NOT NULL AND proposal_order IS NOT NULL))',
+    'CHECK (confirmed_at_ms IS NULL OR confirmed_at_ms >= created_at_ms)',
+    'CHECK (completed_at_ms IS NULL OR completed_at_ms >= created_at_ms)',
+    'CHECK (confirmed_at_ms IS NULL OR completed_at_ms IS NULL OR '
+        'completed_at_ms >= confirmed_at_ms)',
+    "CHECK ((status = 'pending' AND confirmed_at_ms IS NULL AND "
+        "completed_at_ms IS NULL) OR "
+        "(status = 'confirmed' AND confirmed_at_ms IS NOT NULL AND "
+        "completed_at_ms IS NULL) OR "
+        "(status = 'rejected' AND confirmed_at_ms IS NULL AND "
+        "completed_at_ms IS NOT NULL) OR "
+        "(status = 'executed' AND confirmed_at_ms IS NOT NULL AND "
+        "completed_at_ms IS NOT NULL) OR "
+        "(status = 'failed' AND completed_at_ms IS NOT NULL))",
+    'UNIQUE (message_id, proposal_order)',
+  ];
+}
+
 /// Single-process Yomu SQLite database (Drift).
 ///
-/// Schema v1 contains [AppMeta]. Schema v2 adds [DeviceSessions].
-@DriftDatabase(tables: [AppMeta, DeviceSessions])
+/// Schema v1 contains [AppMeta]. Schema v2 adds [DeviceSessions]. Schema v3
+/// adds [MayaMessages] and [MayaActionProposals].
+@DriftDatabase(
+  tables: [AppMeta, DeviceSessions, MayaMessages, MayaActionProposals],
+)
 class YomuDatabase extends _$YomuDatabase {
   YomuDatabase._(
     super.e,
@@ -112,7 +268,7 @@ class YomuDatabase extends _$YomuDatabase {
   static Future<void> Function(YomuDatabase db)? debugAfterCreated;
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -120,11 +276,19 @@ class YomuDatabase extends _$YomuDatabase {
       await m.createAll();
     },
     onUpgrade: (m, from, to) async {
-      if (from == 1 && to == 2) {
-        await m.createTable(deviceSessions);
-        return;
+      if (from < 1 || from >= to || to != 3) {
+        throw StateError('Unsupported Yomu database migration: $from -> $to');
       }
-      throw StateError('Unsupported Yomu database migration: $from -> $to');
+      // Run forward steps in order so an installation may safely upgrade from
+      // the P0 binary (v1) directly to the current schema without skipping the
+      // v2 session table.
+      if (from < 2) {
+        await m.createTable(deviceSessions);
+      }
+      if (from < 3) {
+        await m.createTable(mayaMessages);
+        await m.createTable(mayaActionProposals);
+      }
     },
   );
 
@@ -291,7 +455,7 @@ class YomuDatabase extends _$YomuDatabase {
     return '$v' == '1' || '$v'.toLowerCase() == 'true';
   }
 
-  /// Prove FK enforcement without adding P1 tables to the schema.
+  /// Prove FK enforcement with temporary tables, without touching app data.
   Future<bool> foreignKeysEnforcedWithTempTables() async {
     await customStatement('DROP TABLE IF EXISTS _p0_fk_child');
     await customStatement('DROP TABLE IF EXISTS _p0_fk_parent');
@@ -336,12 +500,309 @@ class YomuDatabase extends _$YomuDatabase {
 
   /// Run [action] atomically on this database connection.
   ///
-  /// The legacy-session importer uses this to persist imported sessions and
-  /// its [AppMeta] marker in the same transaction.
+  /// Importers use this to persist domain rows and their [AppMeta] marker in
+  /// the same transaction.
   Future<T> runInTransaction<T>(
     Future<T> Function(YomuDatabase database) action,
   ) {
     return transaction(() => action(this));
+  }
+
+  /// Load the complete Maya snapshot with stable explicit ordering.
+  Future<MayaStorageSnapshot> loadMayaSnapshot() async {
+    final messages = await (select(
+      mayaMessages,
+    )..orderBy([(t) => OrderingTerm.asc(t.sortOrder)])).get();
+
+    final proposalQuery = select(mayaActionProposals).join([
+      leftOuterJoin(
+        mayaMessages,
+        mayaMessages.messageId.equalsExp(mayaActionProposals.messageId),
+      ),
+    ]);
+    proposalQuery.orderBy([
+      // Associated proposals first, in parent-message and proposal order.
+      OrderingTerm.asc(mayaActionProposals.messageId.isNull()),
+      OrderingTerm.asc(mayaMessages.sortOrder),
+      OrderingTerm.asc(mayaActionProposals.proposalOrder),
+      // Standalone proposals remain deterministic too.
+      OrderingTerm.asc(mayaActionProposals.createdAtMs),
+      OrderingTerm.asc(mayaActionProposals.proposalId),
+    ]);
+    final proposalRows = await proposalQuery.get();
+    final proposals = proposalRows
+        .map((row) => row.readTable(mayaActionProposals))
+        .toList(growable: false);
+
+    return MayaStorageSnapshot(
+      messages: List.unmodifiable(messages),
+      proposals: List.unmodifiable(proposals),
+    );
+  }
+
+  /// Import a legacy Maya snapshot exactly once.
+  ///
+  /// Existing Maya rows are never replaced. Optional [markerKey] and
+  /// [markerValue] are written in the same SQLite transaction as all imported
+  /// rows, which lets the caller make a fingerprint marker authoritative over
+  /// a still-present source file after a crash.
+  Future<void> importMayaSnapshot({
+    required List<NewMayaMessage> messages,
+    required List<NewMayaProposal> proposals,
+    String? markerKey,
+    String? markerValue,
+    Future<void> Function()? afterRowsInsertedBeforeMarker,
+  }) {
+    if ((markerKey == null) != (markerValue == null)) {
+      throw ArgumentError(
+        'markerKey and markerValue must either both be set or both be null',
+      );
+    }
+    return transaction(() async {
+      final existing = await countMayaData();
+      if (!existing.isEmpty) {
+        throw StateError('Maya storage is not empty');
+      }
+      await _insertMayaMessages(messages, firstSortOrder: 0);
+      await _insertMayaProposals(proposals);
+      await afterRowsInsertedBeforeMarker?.call();
+      if (markerKey != null) {
+        await setMeta(markerKey, markerValue!);
+      }
+    });
+  }
+
+  /// Append one complete Maya turn atomically and allocate contiguous ordering.
+  Future<void> appendMayaTurn({
+    required List<NewMayaMessage> messages,
+    required List<NewMayaProposal> proposals,
+  }) {
+    if (messages.isEmpty) {
+      throw ArgumentError.value(messages, 'messages', 'must not be empty');
+    }
+    return transaction(() async {
+      final firstSortOrder = await _nextMayaSortOrder();
+      await _insertMayaMessages(messages, firstSortOrder: firstSortOrder);
+      await _insertMayaProposals(proposals);
+    });
+  }
+
+  /// Compare-and-set a proposal from pending to the durable confirmation
+  /// barrier. A crash after this returns leaves `confirmed`, which callers must
+  /// never automatically execute again.
+  Future<bool> confirmMayaProposal(String proposalId, int confirmedAtMs) async {
+    final count =
+        await (update(mayaActionProposals)..where(
+              (t) =>
+                  t.proposalId.equals(proposalId) & t.status.equals('pending'),
+            ))
+            .write(
+              MayaActionProposalsCompanion(
+                status: const Value('confirmed'),
+                confirmedAtMs: Value(confirmedAtMs),
+                completedAtMs: const Value(null),
+                error: const Value(null),
+              ),
+            );
+    return count == 1;
+  }
+
+  /// Resolve a confirmed proposal and optionally append its audit message in
+  /// the same transaction. [status] must be `executed` or `failed`. A `failed`
+  /// transition is only valid when the caller knows no external effect was
+  /// applied; ambiguous post-dispatch outcomes must remain `confirmed` through
+  /// [markConfirmedMayaProposalOutcomeUncertain].
+  Future<bool> completeConfirmedMayaProposal(
+    String proposalId, {
+    required String status,
+    required int completedAtMs,
+    String? error,
+    NewMayaMessage? outcomeMessage,
+  }) {
+    if (status != 'executed' && status != 'failed') {
+      throw ArgumentError.value(status, 'status', 'must be executed or failed');
+    }
+    return transaction(() async {
+      final count =
+          await (update(mayaActionProposals)..where(
+                (t) =>
+                    t.proposalId.equals(proposalId) &
+                    t.status.equals('confirmed'),
+              ))
+              .write(
+                MayaActionProposalsCompanion(
+                  status: Value(status),
+                  completedAtMs: Value(completedAtMs),
+                  error: Value(error),
+                ),
+              );
+      if (count != 1) return false;
+      if (outcomeMessage != null) {
+        await _appendMayaMessage(outcomeMessage);
+      }
+      return true;
+    });
+  }
+
+  /// Resolve a proposal before an external effect starts. [status] must be
+  /// `rejected` or `failed`; the optional message is committed atomically.
+  Future<bool> resolvePendingMayaProposal(
+    String proposalId, {
+    required String status,
+    required int completedAtMs,
+    String? error,
+    NewMayaMessage? outcomeMessage,
+  }) {
+    if (status != 'rejected' && status != 'failed') {
+      throw ArgumentError.value(status, 'status', 'must be rejected or failed');
+    }
+    return transaction(() async {
+      final count =
+          await (update(mayaActionProposals)..where(
+                (t) =>
+                    t.proposalId.equals(proposalId) &
+                    t.status.equals('pending'),
+              ))
+              .write(
+                MayaActionProposalsCompanion(
+                  status: Value(status),
+                  confirmedAtMs: const Value(null),
+                  completedAtMs: Value(completedAtMs),
+                  error: Value(error),
+                ),
+              );
+      if (count != 1) return false;
+      if (outcomeMessage != null) {
+        await _appendMayaMessage(outcomeMessage);
+      }
+      return true;
+    });
+  }
+
+  /// Record diagnostic context while deliberately retaining the durable
+  /// `confirmed` state. This never makes the proposal executable again.
+  Future<bool> markConfirmedMayaProposalOutcomeUncertain(
+    String proposalId, {
+    String? error,
+    NewMayaMessage? outcomeMessage,
+  }) {
+    return transaction(() async {
+      final count =
+          await (update(mayaActionProposals)..where(
+                (t) =>
+                    t.proposalId.equals(proposalId) &
+                    t.status.equals('confirmed'),
+              ))
+              .write(MayaActionProposalsCompanion(error: Value(error)));
+      if (count != 1) return false;
+      if (outcomeMessage != null) {
+        await _appendMayaMessage(outcomeMessage);
+      }
+      return true;
+    });
+  }
+
+  /// Remove all Maya messages and proposals in one transaction unless a
+  /// durable confirmation barrier exists.
+  ///
+  /// The check and deletes share the same transaction so a stale MayaStore
+  /// cannot erase a proposal confirmed by another store instance.
+  Future<bool> clearMayaData() {
+    return transaction(() async {
+      if (await hasConfirmedMayaProposal()) return false;
+
+      // Delete proposals explicitly because standalone proposals have no FK
+      // parent and therefore are not reached by message cascade.
+      await delete(mayaActionProposals).go();
+      await delete(mayaMessages).go();
+      return true;
+    });
+  }
+
+  Future<bool> hasConfirmedMayaProposal() async {
+    final confirmed =
+        await (selectOnly(mayaActionProposals)
+              ..addColumns([mayaActionProposals.proposalId])
+              ..where(mayaActionProposals.status.equals('confirmed'))
+              ..limit(1))
+            .getSingleOrNull();
+    return confirmed != null;
+  }
+
+  Future<MayaDataCounts> countMayaData() async {
+    final row = await customSelect(
+      'SELECT '
+      '(SELECT COUNT(*) FROM maya_messages) AS message_count, '
+      '(SELECT COUNT(*) FROM maya_action_proposals) AS proposal_count',
+      readsFrom: {mayaMessages, mayaActionProposals},
+    ).getSingle();
+    return MayaDataCounts(
+      messageCount: row.read<int>('message_count'),
+      proposalCount: row.read<int>('proposal_count'),
+    );
+  }
+
+  Future<bool> isMayaDataEmpty() async => (await countMayaData()).isEmpty;
+
+  Future<int> _nextMayaSortOrder() async {
+    final row = await customSelect(
+      'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_sort_order '
+      'FROM maya_messages',
+      readsFrom: {mayaMessages},
+    ).getSingle();
+    return row.read<int>('next_sort_order');
+  }
+
+  Future<void> _insertMayaMessages(
+    List<NewMayaMessage> messages, {
+    required int firstSortOrder,
+  }) async {
+    for (var index = 0; index < messages.length; index++) {
+      await _insertMayaMessage(
+        messages[index],
+        sortOrder: firstSortOrder + index,
+      );
+    }
+  }
+
+  Future<void> _insertMayaMessage(
+    NewMayaMessage message, {
+    required int sortOrder,
+  }) {
+    return into(mayaMessages).insert(
+      MayaMessagesCompanion.insert(
+        messageId: message.messageId,
+        sortOrder: sortOrder,
+        role: message.role,
+        content: message.text,
+        createdAtMs: message.createdAtMs,
+      ),
+    );
+  }
+
+  Future<void> _appendMayaMessage(NewMayaMessage message) async {
+    await _insertMayaMessage(message, sortOrder: await _nextMayaSortOrder());
+  }
+
+  Future<void> _insertMayaProposals(List<NewMayaProposal> proposals) async {
+    for (final proposal in proposals) {
+      await into(mayaActionProposals).insert(
+        MayaActionProposalsCompanion.insert(
+          proposalId: proposal.proposalId,
+          messageId: Value(proposal.messageId),
+          proposalOrder: Value(proposal.proposalOrder),
+          kind: proposal.kind,
+          title: proposal.title,
+          description: proposal.description,
+          payloadJson: proposal.payloadJson,
+          status: proposal.status,
+          createdAtMs: proposal.createdAtMs,
+          confirmedAtMs: Value(proposal.confirmedAtMs),
+          completedAtMs: Value(proposal.completedAtMs),
+          error: Value(proposal.error),
+        ),
+      );
+    }
   }
 
   Future<List<StoredDeviceSession>> listDeviceSessions() {

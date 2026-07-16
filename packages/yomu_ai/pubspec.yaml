@@ -11,6 +11,9 @@ resolution: workspace
 dependencies:
   yomu_core:
     path: ../yomu_core
+  yomu_storage:
+    path: ../yomu_storage
+  crypto: ^3.0.6
   meta: ^1.16.0
 
 dev_dependencies:

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:yomu_ai/yomu_ai.dart';
+
 /// Holds the native desktop exit response until owned resources are torn down.
 ///
 /// Windows waits for this response before completing a close request. Repeated
@@ -105,7 +107,8 @@ class HttpServerRestartCoordinator {
   }
 }
 
-/// Resource teardown order: subscription → Core HTTP → Auth → Suwayomi → DB.
+/// Resource teardown order:
+/// subscription → Core HTTP → Maya → Auth → Suwayomi → DB.
 ///
 /// [closeServer] always runs even if [stopServer] throws.
 class ResourceTeardown {
@@ -113,6 +116,8 @@ class ResourceTeardown {
     Future<void> Function()? cancelSubscription,
     Future<void> Function()? stopServer,
     Future<void> Function()? closeServer,
+    Future<void> Function()? closeMaya,
+    Future<void> Function()? releaseMayaPort,
     Future<void> Function()? closeAuth,
     Future<void> Function()? disposeManager,
     Future<void> Function()? closeDb,
@@ -125,6 +130,12 @@ class ResourceTeardown {
     } catch (_) {}
     try {
       await closeServer?.call();
+    } catch (_) {}
+    try {
+      await closeMaya?.call();
+    } catch (_) {}
+    try {
+      await releaseMayaPort?.call();
     } catch (_) {}
     try {
       await closeAuth?.call();
@@ -140,19 +151,31 @@ class ResourceTeardown {
 
 /// Storage-first bootstrap phases used by HomeShell and unit tests.
 ///
-/// Ensures Auth is initialized only after storage opens, and remaining services
-/// are initialized only after Auth loading / legacy migration succeeds.
+/// Ensures Auth is initialized only after storage opens, optional Maya is
+/// initialized only after Auth, and remaining services start last.
 class StorageFirstBootstrap {
   /// [openStorage] must acquire lock + open DB (or throw).
   /// [initializeAuth] loads Auth from SQLite and migrates legacy sessions.
-  /// [startRemainingServices] creates Maya, Suwayomi manager, and Core HTTP.
+  /// [initializeOptionalMaya] loads Maya from SQLite and may migrate its legacy
+  /// JSON. Only [LegacyMayaMigrationException] degrades Maya; storage failures
+  /// continue to fail bootstrap.
+  /// [onMayaUnavailable] receives the typed legacy failure for sanitization.
+  /// [startRemainingServices] creates Suwayomi manager and Core HTTP.
   static Future<void> run({
     required Future<void> Function() openStorage,
     required Future<void> Function() initializeAuth,
+    required Future<void> Function() initializeOptionalMaya,
+    required void Function(LegacyMayaMigrationException error)
+    onMayaUnavailable,
     required Future<void> Function() startRemainingServices,
   }) async {
     await openStorage();
     await initializeAuth();
+    try {
+      await initializeOptionalMaya();
+    } on LegacyMayaMigrationException catch (error) {
+      onMayaUnavailable(error);
+    }
     await startRemainingServices();
   }
 }
