@@ -182,6 +182,23 @@ void main() {
     expect(unavailableCalled, isFalse);
   });
 
+  test('optional Maya provider failure degrades to local Maya', () async {
+    final provider = await OptionalMayaProviderBootstrap.open<Object>(() async {
+      throw StateError('credential manager unavailable');
+    });
+
+    expect(provider, isNull);
+  });
+
+  test('optional Maya provider transfers a successful instance', () async {
+    final instance = Object();
+    final provider = await OptionalMayaProviderBootstrap.open<Object>(
+      () async => instance,
+    );
+
+    expect(identical(provider, instance), isTrue);
+  });
+
   test(
     'HttpServerRestartCoordinator disposes new server on abort after start',
     () async {

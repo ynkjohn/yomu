@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui' show SemanticsAction, SemanticsFlag;
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,9 @@ import 'package:yomu_desktop/screens/library_screen.dart';
 import 'package:yomu_desktop/screens/manga_detail_screen.dart';
 import 'package:yomu_desktop/screens/maya_screen.dart';
 import 'package:yomu_desktop/screens/server_screen.dart';
+import 'package:yomu_desktop/services/maya_credential_store.dart';
+import 'package:yomu_desktop/services/maya_provider_controller.dart';
+import 'package:yomu_storage/yomu_storage.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
@@ -378,6 +382,235 @@ void main() {
     expect(find.textContaining('apagável, item a item'), findsNothing);
   });
 
+  testWidgets('Maya keeps local chat usable while the engine is offline', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    final maya = MayaService(
+      store: MayaStore.inMemory(),
+      libraryPort: _NoopMayaPort(),
+    );
+    addMayaTearDown(tester, maya);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(body: MayaScreen(service: maya, engineReady: false)),
+      ),
+    );
+    await tester.pump();
+
+    final composer = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.hintText == 'Pergunte à Maya…',
+    );
+    expect(composer, findsOneWidget);
+    expect(tester.widget<TextField>(composer).enabled, isTrue);
+    expect(find.text('Biblioteca · offline'), findsOneWidget);
+
+    await tester.enterText(composer, 'ajuda');
+    await tester.tap(find.bySemanticsLabel('Enviar mensagem'));
+    await maya.drain();
+    await tester.pump();
+
+    expect(find.text('ajuda'), findsOneWidget);
+    expect(
+      find.textContaining('Sou a Maya (modo local). Posso:'),
+      findsOneWidget,
+    );
+    expect(maya.messages, hasLength(2));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Maya provider dialog protects API key and separates cloud consent',
+    (tester) async {
+      await setDesktopSurface(tester);
+      final fixture = (await tester.runAsync(_MayaProviderUiFixture.create))!;
+      addTearDown(() async {
+        await tester.runAsync(fixture.close);
+      });
+      final provider = (await tester.runAsync(fixture.openController))!;
+      final maya = MayaService(
+        store: MayaStore.inMemory(),
+        libraryPort: _NoopMayaPort(),
+      );
+      addMayaTearDown(tester, maya);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildYomuTheme(),
+          home: Scaffold(
+            body: MayaScreen(
+              service: maya,
+              engineReady: false,
+              providerController: provider,
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('IA · não configurada'), findsOneWidget);
+      await tester.tap(find.byTooltip('Configurar IA da Maya'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('IA da Maya'), findsOneWidget);
+      expect(find.text('Limpar credenciais cloud'), findsOneWidget);
+      expect(
+        find.textContaining('histórico e biblioteca exigem consentimentos'),
+        findsOneWidget,
+      );
+      final modelField = _mayaTextFieldWithHint(
+        'ID exato do modelo do provider',
+      );
+      final apiKeyField = _mayaTextFieldWithHint('Cole uma nova chave');
+      expect(modelField, findsOneWidget);
+      expect(apiKeyField, findsOneWidget);
+      final initialApiKey = tester.widget<TextField>(apiKeyField);
+      expect(initialApiKey.obscureText, isTrue);
+      expect(initialApiKey.enableInteractiveSelection, isFalse);
+      expect(initialApiKey.controller?.text, isEmpty);
+
+      const secret = 'sk-ui-secret-never-render';
+      await tester.enterText(modelField, 'gpt-ui-test');
+      await tester.enterText(apiKeyField, secret);
+      await tester.tap(find.widgetWithText(FilledButton, 'Salvar e ativar'));
+      await tester.pump();
+
+      expect(
+        find.text('Confirme o envio da mensagem atual antes de ativar a IA.'),
+        findsOneWidget,
+      );
+      expect(provider.settings, isNull);
+      expect(
+        _mayaCheckbox(tester, 'Compartilhar histórico recente').value,
+        isFalse,
+      );
+      expect(
+        _mayaCheckbox(tester, 'Compartilhar contexto da biblioteca').value,
+        isFalse,
+      );
+
+      await tester.tap(
+        _mayaCheckboxFinder('Autorizo enviar a mensagem atual a este provider'),
+      );
+      await tester.tap(_mayaCheckboxFinder('Compartilhar histórico recente'));
+      await tester.pump();
+
+      expect(
+        _mayaCheckbox(
+          tester,
+          'Autorizo enviar a mensagem atual a este provider',
+        ).value,
+        isTrue,
+      );
+      expect(
+        _mayaCheckbox(tester, 'Compartilhar histórico recente').value,
+        isTrue,
+      );
+      expect(
+        _mayaCheckbox(tester, 'Compartilhar contexto da biblioteca').value,
+        isFalse,
+      );
+
+      await _invokeAsyncFilledButton(
+        tester,
+        find.widgetWithText(FilledButton, 'Salvar e ativar'),
+      );
+      await tester.pumpAndSettle();
+
+      expect(provider.status, MayaProviderControllerStatus.cloudReady);
+      expect(provider.settings?.providerId, 'openai');
+      expect(provider.settings?.modelId, 'gpt-ui-test');
+      expect(provider.settings?.shareRecentHistory, isTrue);
+      expect(provider.settings?.shareLibraryContext, isFalse);
+      expect(find.text('OpenAI · gpt-ui-test'), findsOneWidget);
+      expect(find.textContaining(secret), findsNothing);
+
+      await tester.tap(find.byTooltip('Configurar IA da Maya'));
+      await tester.pumpAndSettle();
+
+      final reopenedApiKey = tester.widget<TextField>(
+        _mayaTextFieldWithHint('Cole uma nova chave'),
+      );
+      expect(reopenedApiKey.obscureText, isTrue);
+      expect(reopenedApiKey.enableInteractiveSelection, isFalse);
+      expect(reopenedApiKey.controller?.text, isEmpty);
+      expect(find.textContaining(secret), findsNothing);
+      expect(
+        _mayaCheckbox(
+          tester,
+          'Autorizo enviar a mensagem atual a este provider',
+        ).value,
+        isTrue,
+      );
+      expect(
+        _mayaCheckbox(tester, 'Compartilhar histórico recente').value,
+        isTrue,
+      );
+      expect(
+        _mayaCheckbox(tester, 'Compartilhar contexto da biblioteca').value,
+        isFalse,
+      );
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('Maya exposes a sanitized degraded provider status', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    final fixture = (await tester.runAsync(_MayaProviderUiFixture.create))!;
+    addTearDown(() async {
+      await tester.runAsync(fixture.close);
+    });
+    await tester.runAsync(fixture.persistCloudWithoutCredential);
+    final provider = (await tester.runAsync(fixture.openController))!;
+    final maya = MayaService(
+      store: MayaStore.inMemory(),
+      libraryPort: _NoopMayaPort(),
+    );
+    addMayaTearDown(tester, maya);
+
+    expect(provider.status, MayaProviderControllerStatus.missingCredential);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(
+          body: MayaScreen(
+            service: maya,
+            engineReady: false,
+            providerController: provider,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('OpenAI · chave ausente'), findsOneWidget);
+    expect(
+      find.text('IA por provider · ações só após confirmação'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('credencial'), findsNothing);
+    expect(
+      tester
+          .widget<TextField>(
+            find.byWidgetPredicate(
+              (widget) =>
+                  widget is TextField &&
+                  widget.decoration?.hintText == 'Pergunte à Maya…',
+            ),
+          )
+          .enabled,
+      isTrue,
+    );
+  });
+
   testWidgets('Maya clears history only after explicit confirmation', (
     tester,
   ) async {
@@ -460,6 +693,11 @@ void main() {
     );
     expect(confirm.onPressed, isNull);
     expect(reject.onPressed, isNotNull);
+    expect(
+      store.proposalById('p-pending')?.status,
+      ActionProposalStatus.pending,
+    );
+    expect(port.downloads, isEmpty);
 
     await tester.tap(find.widgetWithText(OutlinedButton, 'Ignorar'));
     await tester.pump();
@@ -657,4 +895,115 @@ class _NoopMayaPort implements MayaLibraryPort {
 
   @override
   Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
+}
+
+Finder _mayaTextFieldWithHint(String hint) => find.byWidgetPredicate(
+  (widget) => widget is TextField && widget.decoration?.hintText == hint,
+);
+
+Finder _mayaCheckboxFinder(String label) => find.ancestor(
+  of: find.text(label),
+  matching: find.byType(CheckboxListTile),
+);
+
+CheckboxListTile _mayaCheckbox(WidgetTester tester, String label) =>
+    tester.widget<CheckboxListTile>(_mayaCheckboxFinder(label));
+
+Future<void> _invokeAsyncFilledButton(
+  WidgetTester tester,
+  Finder finder,
+) async {
+  final callback = tester.widget<FilledButton>(finder).onPressed;
+  if (callback == null) {
+    throw StateError('Expected an enabled async button.');
+  }
+  await tester.runAsync(() async {
+    final result = Function.apply(callback, const <Object?>[]);
+    if (result is! Future<void>) {
+      throw StateError('Expected the button callback to return Future<void>.');
+    }
+    await result;
+  });
+}
+
+final class _MayaProviderUiFixture {
+  _MayaProviderUiFixture._({
+    required this.root,
+    required this.database,
+    required this.credentials,
+  });
+
+  static Future<_MayaProviderUiFixture> create() async {
+    final root = Directory.systemTemp.createTempSync(
+      'yomu-promoted-provider-ui-',
+    );
+    final database = await YomuDatabase.openForTest(
+      root,
+      useProcessLock: false,
+    );
+    return _MayaProviderUiFixture._(
+      root: root,
+      database: database,
+      credentials: FakeMayaCredentialStore(),
+    );
+  }
+
+  final Directory root;
+  final YomuDatabase database;
+  final FakeMayaCredentialStore credentials;
+  final List<MayaProviderController> _controllers = <MayaProviderController>[];
+
+  Future<MayaProviderController> openController() async {
+    final controller = await MayaProviderController.open(
+      database: database,
+      credentialStore: credentials,
+      adapterFactory: _createAdapter,
+      clock: () => DateTime.utc(2026, 7, 16, 18),
+    );
+    _controllers.add(controller);
+    return controller;
+  }
+
+  Future<void> persistCloudWithoutCredential() {
+    return database.setMayaProviderSettings(
+      MayaProviderSettings.cloud(
+        providerId: 'openai',
+        modelPolicy: MayaProviderModelPolicy.explicit,
+        modelId: 'gpt-degraded-test',
+        shareRecentHistory: false,
+        shareLibraryContext: false,
+        consentVersion: kCurrentMayaProviderConsentVersion,
+        consentedAtMs: 1,
+        updatedAtMs: 1,
+      ),
+    );
+  }
+
+  Future<MayaLlmProvider> _createAdapter({
+    required MayaProviderAdapterSettings settings,
+    required MayaProviderCredentialReader readCredential,
+  }) async {
+    return _MayaProviderUiAdapter();
+  }
+
+  Future<void> close() async {
+    for (final controller in _controllers.reversed) {
+      await controller.close();
+    }
+    await database.close();
+    if (root.existsSync()) root.deleteSync(recursive: true);
+  }
+}
+
+final class _MayaProviderUiAdapter implements MayaLlmProvider {
+  @override
+  MayaLlmContextPolicy get contextPolicy =>
+      const MayaLlmContextPolicy.disabled();
+
+  @override
+  Future<MayaLlmResponse> complete(MayaLlmRequest request) async =>
+      MayaLlmResponse(text: 'Resposta de teste do provider.');
+
+  @override
+  Future<void> close() async {}
 }

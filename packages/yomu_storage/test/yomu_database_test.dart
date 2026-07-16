@@ -13,7 +13,7 @@ void main() {
   late Directory root;
 
   setUp(() async {
-    root = Directory.systemTemp.createTempSync('yomu-storage-p2a-');
+    root = Directory.systemTemp.createTempSync('yomu-storage-p2b-');
     YomuDatabase.debugAfterCreated = null;
   });
 
@@ -29,48 +29,60 @@ void main() {
     } catch (_) {}
   });
 
-  test('create schema v3, reopen, WAL, FK, and empty Maya data', () async {
-    final db = await YomuDatabase.openForTest(root);
-    expect(db.schemaVersion, 3);
-    await db.validateDatabaseSchema();
+  test(
+    'create schema v4, reopen, WAL, FK, and unset provider settings',
+    () async {
+      final db = await YomuDatabase.openForTest(root);
+      expect(db.schemaVersion, 4);
+      await db.validateDatabaseSchema();
 
-    await db.setMeta('p0.probe', 'ok');
-    expect(await db.getMeta('p0.probe'), 'ok');
-    await db.insertDeviceSession(
-      _newSession(
-        sessionId: 'clean-session',
-        tokenHash: _hash('a'),
-        deviceName: 'iPhone',
-      ),
-    );
-    expect(
-      (await db.getDeviceSessionById('clean-session'))?.tokenHash,
-      _hash('a'),
-    );
+      await db.setMeta('p0.probe', 'ok');
+      expect(await db.getMeta('p0.probe'), 'ok');
+      await db.insertDeviceSession(
+        _newSession(
+          sessionId: 'clean-session',
+          tokenHash: _hash('a'),
+          deviceName: 'iPhone',
+        ),
+      );
+      expect(
+        (await db.getDeviceSessionById('clean-session'))?.tokenHash,
+        _hash('a'),
+      );
 
-    final version = await db.sqliteVersion();
-    expect(version, isNotEmpty);
-    expect(int.tryParse(version.split('.').first), greaterThanOrEqualTo(3));
+      final version = await db.sqliteVersion();
+      expect(version, isNotEmpty);
+      expect(int.tryParse(version.split('.').first), greaterThanOrEqualTo(3));
 
-    expect(await db.journalMode(), 'wal');
-    expect(await db.foreignKeysEnabled(), isTrue);
-    expect(await db.foreignKeysEnforcedWithTempTables(), isTrue);
-    expect(await db.isMayaDataEmpty(), isTrue);
+      expect(await db.journalMode(), 'wal');
+      expect(await db.foreignKeysEnabled(), isTrue);
+      expect(await db.foreignKeysEnforcedWithTempTables(), isTrue);
+      expect(await db.isMayaDataEmpty(), isTrue);
+      expect(await db.getMayaProviderSettings(), isNull);
+      final providerColumns = await db
+          .customSelect('PRAGMA table_info(maya_provider_settings)')
+          .get();
+      final enabledColumn = providerColumns.singleWhere(
+        (row) => row.read<String>('name') == 'is_enabled',
+      );
+      expect(enabledColumn.read<int>('notnull'), 1);
 
-    final path = db.paths.databaseFile.path;
-    await db.close();
+      final path = db.paths.databaseFile.path;
+      await db.close();
 
-    final db2 = await YomuDatabase.openForTest(root);
-    expect(await db2.getMeta('p0.probe'), 'ok');
-    expect(await db2.getDeviceSessionById('clean-session'), isNotNull);
-    expect(File(path).existsSync(), isTrue);
-    final header = await File(path).openRead(0, 16).first;
-    expect(String.fromCharCodes(header.take(15)), 'SQLite format 3');
-    await db2.close();
-  });
+      final db2 = await YomuDatabase.openForTest(root);
+      expect(await db2.getMeta('p0.probe'), 'ok');
+      expect(await db2.getDeviceSessionById('clean-session'), isNotNull);
+      expect(await db2.getMayaProviderSettings(), isNull);
+      expect(File(path).existsSync(), isTrue);
+      final header = await File(path).openRead(0, 16).first;
+      expect(String.fromCharCodes(header.take(15)), 'SQLite format 3');
+      await db2.close();
+    },
+  );
 
   test(
-    'migrates real schema v1 through v2 to v3 and preserves app_meta',
+    'migrates real schema v1 through v2/v3 to v4 and preserves app_meta',
     () async {
       final verifier = SchemaVerifier(GeneratedHelper());
       final v1 = await verifier.schemaAt(1);
@@ -98,12 +110,13 @@ void main() {
       );
       expect(await db.listDeviceSessions(), isEmpty);
       expect(await db.isMayaDataEmpty(), isTrue);
+      expect(await db.getMayaProviderSettings(), isNull);
       expect(
         (await db.customSelect('PRAGMA user_version').getSingle())
             .data
             .values
             .single,
-        3,
+        4,
       );
 
       await db.insertDeviceSession(
@@ -119,7 +132,7 @@ void main() {
   );
 
   test(
-    'migrates real schema v2 to v3 and preserves meta and sessions',
+    'migrates real schema v2 through v3 to v4 preserving meta and sessions',
     () async {
       final verifier = SchemaVerifier(GeneratedHelper());
       final v2 = await verifier.schemaAt(2);
@@ -147,13 +160,366 @@ void main() {
         _hash('2'),
       );
       expect(await db.isMayaDataEmpty(), isTrue);
+      expect(await db.getMayaProviderSettings(), isNull);
       expect(
         (await db.customSelect('PRAGMA user_version').getSingle())
             .data
             .values
             .single,
-        3,
+        4,
       );
+      await db.close();
+    },
+  );
+
+  test(
+    'migrates real schema v3 to v4 preserving meta, sessions, and Maya data',
+    () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final v3 = await verifier.schemaAt(3);
+      addTearDown(v3.close);
+      v3.rawDatabase.execute(
+        'INSERT INTO app_meta(key, value, updated_at_ms) VALUES (?, ?, ?)',
+        ['p2a.preserved', 'yes', 333444],
+      );
+      v3.rawDatabase.execute(
+        'INSERT INTO device_sessions('
+        'session_id, token_hash, device_name, created_at_ms, expires_at_ms'
+        ') VALUES (?, ?, ?, ?, ?)',
+        ['v3-session', _hash('3'), 'iPhone', 1000, 3000],
+      );
+      v3.rawDatabase.execute(
+        'INSERT INTO maya_messages('
+        'message_id, sort_order, role, text, created_at_ms'
+        ') VALUES (?, ?, ?, ?, ?)',
+        ['v3-message', 0, 'assistant', 'preserved', 1200],
+      );
+      v3.rawDatabase.execute(
+        'INSERT INTO maya_action_proposals('
+        'proposal_id, message_id, proposal_order, kind, title, description, '
+        'payload_json, status, created_at_ms, confirmed_at_ms, '
+        'completed_at_ms, error'
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          'v3-proposal',
+          'v3-message',
+          0,
+          'openManga',
+          'Abrir preserved',
+          'Preservar proposta confirmada',
+          jsonEncode({'mangaId': 7, 'title': 'Preserved'}),
+          'confirmed',
+          1200,
+          1300,
+          null,
+          null,
+        ],
+      );
+
+      final paths = YomuStoragePaths(root);
+      await paths.ensureLayout();
+      v3.rawDatabase.execute('VACUUM INTO ?', [paths.databaseFile.path]);
+
+      final db = await YomuDatabase.openForTest(root);
+      await db.validateDatabaseSchema();
+      expect(await db.getMeta('p2a.preserved'), 'yes');
+      expect(
+        (await db.getDeviceSessionById('v3-session'))?.tokenHash,
+        _hash('3'),
+      );
+      final maya = await db.loadMayaSnapshot();
+      expect(maya.messages.single.messageId, 'v3-message');
+      expect(maya.messages.single.content, 'preserved');
+      expect(maya.proposals.single.proposalId, 'v3-proposal');
+      expect(maya.proposals.single.status, 'confirmed');
+      expect(maya.proposals.single.confirmedAtMs, 1300);
+      expect(await db.getMayaProviderSettings(), isNull);
+      final disabledCloud = MayaProviderSettings.cloud(
+        providerId: 'openai',
+        modelPolicy: MayaProviderModelPolicy.explicit,
+        modelId: 'gpt-migrated',
+        isEnabled: false,
+        shareRecentHistory: false,
+        shareLibraryContext: false,
+        consentVersion: 1,
+        consentedAtMs: 1400,
+        updatedAtMs: 1500,
+      );
+      await db.setMayaProviderSettings(disabledCloud);
+      expect(await db.getMayaProviderSettings(), disabledCloud);
+      expect(
+        (await db
+                .customSelect(
+                  'SELECT is_enabled FROM maya_provider_settings '
+                  'WHERE settings_id = 1',
+                )
+                .getSingle())
+            .read<int>('is_enabled'),
+        0,
+      );
+      expect(await db.resetMayaProviderSettings(), isTrue);
+      expect(
+        (await db.customSelect('PRAGMA user_version').getSingle())
+            .data
+            .values
+            .single,
+        4,
+      );
+      await db.close();
+    },
+  );
+
+  test(
+    'provider settings distinguish unset, explicit defaults, restart, and reset',
+    () async {
+      var db = await YomuDatabase.openForTest(root);
+      expect(await db.getMayaProviderSettings(), isNull);
+
+      final local = MayaProviderSettings.local(updatedAtMs: 1000);
+      expect(local.isEnabled, isFalse);
+      await db.setMayaProviderSettings(local);
+      expect(await db.getMayaProviderSettings(), local);
+
+      final providerDefault = MayaProviderSettings.cloud(
+        providerId: 'openai',
+        modelPolicy: MayaProviderModelPolicy.providerDefault,
+        shareRecentHistory: true,
+        shareLibraryContext: false,
+        consentVersion: 1,
+        consentedAtMs: 1100,
+        updatedAtMs: 1200,
+      );
+      expect(providerDefault.isEnabled, isTrue);
+      await db.setMayaProviderSettings(providerDefault);
+      expect(await db.getMayaProviderSettings(), providerDefault);
+
+      await db.close();
+      db = await YomuDatabase.openForTest(root);
+      expect(await db.getMayaProviderSettings(), providerDefault);
+
+      final explicitModel = MayaProviderSettings.cloud(
+        providerId: 'openai',
+        modelPolicy: MayaProviderModelPolicy.explicit,
+        modelId: 'gpt-test',
+        isEnabled: false,
+        shareRecentHistory: false,
+        shareLibraryContext: true,
+        consentVersion: 2,
+        consentedAtMs: 1300,
+        updatedAtMs: 1400,
+      );
+      await db.setMayaProviderSettings(explicitModel);
+      expect(await db.getMayaProviderSettings(), explicitModel);
+
+      await db.close();
+      db = await YomuDatabase.openForTest(root);
+      final reopenedDisabled = await db.getMayaProviderSettings();
+      expect(reopenedDisabled, explicitModel);
+      expect(reopenedDisabled?.isEnabled, isFalse);
+      expect(await db.resetMayaProviderSettings(), isTrue);
+      expect(await db.resetMayaProviderSettings(), isFalse);
+      expect(await db.getMayaProviderSettings(), isNull);
+
+      await db.close();
+      db = await YomuDatabase.openForTest(root);
+      expect(await db.getMayaProviderSettings(), isNull);
+      await db.close();
+    },
+  );
+
+  test(
+    'provider settings typed input and SQLite constraints fail closed',
+    () async {
+      expect(
+        () => MayaProviderSettings.local(updatedAtMs: -1),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaProviderSettings.cloud(
+          providerId: ' openai',
+          modelPolicy: MayaProviderModelPolicy.providerDefault,
+          shareRecentHistory: false,
+          shareLibraryContext: false,
+          consentVersion: 1,
+          consentedAtMs: 1,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaProviderSettings.cloud(
+          providerId: 'openai',
+          modelPolicy: MayaProviderModelPolicy.providerDefault,
+          modelId: 'must-not-exist',
+          shareRecentHistory: false,
+          shareLibraryContext: false,
+          consentVersion: 1,
+          consentedAtMs: 1,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaProviderSettings.cloud(
+          providerId: 'openai',
+          modelPolicy: MayaProviderModelPolicy.explicit,
+          shareRecentHistory: false,
+          shareLibraryContext: false,
+          consentVersion: 1,
+          consentedAtMs: 1,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaProviderSettings.cloud(
+          providerId: 'openai',
+          modelPolicy: MayaProviderModelPolicy.providerDefault,
+          shareRecentHistory: false,
+          shareLibraryContext: false,
+          consentVersion: 0,
+          consentedAtMs: 1,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaProviderSettings.cloud(
+          providerId: 'openai',
+          modelPolicy: MayaProviderModelPolicy.providerDefault,
+          shareRecentHistory: false,
+          shareLibraryContext: false,
+          consentVersion: 1,
+          consentedAtMs: 2,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+
+      final db = await YomuDatabase.openForTest(root);
+      const insert =
+          'INSERT INTO maya_provider_settings('
+          'settings_id, mode, is_enabled, provider_id, model_policy, model_id, '
+          'share_recent_history, share_library_context, consent_version, '
+          'consented_at_ms, updated_at_ms'
+          ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+
+      await expectLater(
+        db.customStatement(insert, [
+          2,
+          'local',
+          0,
+          null,
+          null,
+          null,
+          0,
+          0,
+          null,
+          null,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [
+          1,
+          'local',
+          0,
+          'openai',
+          null,
+          null,
+          0,
+          0,
+          null,
+          null,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [
+          1,
+          'cloud',
+          1,
+          'openai',
+          'provider_default',
+          'unexpected-model',
+          0,
+          0,
+          1,
+          1,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [
+          1,
+          'cloud',
+          1,
+          'openai',
+          'explicit',
+          'gpt-test',
+          0,
+          0,
+          0,
+          1,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [
+          1,
+          'local',
+          1,
+          null,
+          null,
+          null,
+          0,
+          0,
+          null,
+          null,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [
+          1,
+          'cloud',
+          2,
+          'openai',
+          'explicit',
+          'gpt-test',
+          0,
+          0,
+          1,
+          1,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      expect(await db.getMayaProviderSettings(), isNull);
+
+      final local = MayaProviderSettings.local(updatedAtMs: 10);
+      final cloud = MayaProviderSettings.cloud(
+        providerId: 'openai',
+        modelPolicy: MayaProviderModelPolicy.explicit,
+        modelId: 'gpt-test',
+        isEnabled: false,
+        shareRecentHistory: true,
+        shareLibraryContext: true,
+        consentVersion: 1,
+        consentedAtMs: 10,
+        updatedAtMs: 11,
+      );
+      await Future.wait([
+        db.setMayaProviderSettings(local),
+        db.setMayaProviderSettings(cloud),
+      ]);
+      final stored = await db.getMayaProviderSettings();
+      expect(stored == local || stored == cloud, isTrue);
       await db.close();
     },
   );

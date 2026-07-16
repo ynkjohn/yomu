@@ -21,7 +21,11 @@ import '../screens/manga_detail_screen.dart';
 import '../screens/maya_screen.dart';
 import '../screens/placeholder_screen.dart';
 import '../screens/server_screen.dart';
+import '../services/maya_credential_store.dart';
+import '../services/maya_provider_adapters.dart';
+import '../services/maya_provider_controller.dart';
 import '../services/suwayomi_maya_port.dart';
+import '../services/windows_maya_credential_store.dart';
 import 'desktop_lifecycle.dart';
 
 Color _motorStateColor(SuwayomiProcessState state) => switch (state) {
@@ -104,6 +108,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
   MayaService? _maya;
+  MayaProviderController? _mayaProvider;
   String? _mayaUnavailableReason;
   Directory? _pwaDir;
   String? _bootstrapError;
@@ -157,6 +162,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       YomuDatabase? db;
       DeviceAuthStore? auth;
       MayaService? maya;
+      MayaProviderController? mayaProvider;
       SuwayomiProcessManager? manager;
       YomuServer? server;
       StreamSubscription<SuwayomiStatus>? statusSub;
@@ -199,13 +205,28 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               database: db!,
               legacyFile: File(p.join(root.path, 'maya_chat.json')),
             );
+            MayaCredentialStore credentialStore;
+            try {
+              credentialStore = WindowsMayaCredentialStore();
+            } catch (_) {
+              credentialStore = const UnavailableMayaCredentialStore();
+            }
+            mayaProvider = await OptionalMayaProviderBootstrap.open(
+              () => MayaProviderController.open(
+                database: db!,
+                credentialStore: credentialStore,
+                adapterFactory: createMayaProviderAdapterFactory(),
+              ),
+            );
             maya = MayaService(
               store: store,
               libraryPort: SuwayomiMayaPort(() => _api),
+              llm: mayaProvider,
             );
             if (!mounted || _lifecycle.shuttingDown) {
               await _teardownResources(maya: maya, auth: auth, db: db);
               maya = null;
+              mayaProvider = null;
               auth = null;
               db = null;
               _db = null;
@@ -283,6 +304,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             final liveDb = db!;
             final liveAuth = auth!;
             final liveMaya = maya;
+            final liveMayaProvider = mayaProvider;
             final liveMayaUnavailableReason = mayaUnavailableReason;
             _statusSub = liveSub;
             _manager = liveManager;
@@ -293,6 +315,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             setState(() {
               _api = SuwayomiApi(liveManager.createClient());
               _maya = liveMaya;
+              _mayaProvider = liveMayaProvider;
               _mayaUnavailableReason = liveMayaUnavailableReason;
               _pwaDir = pwaDir;
               _suwayomiStatus = liveManager.status;
@@ -305,6 +328,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             server = null;
             statusSub = null;
             maya = null;
+            mayaProvider = null;
           },
         );
       } on _BootstrapAborted {
@@ -324,6 +348,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _db = null;
         _auth = null;
         _maya = null;
+        _mayaProvider = null;
         _mayaUnavailableReason = null;
         _api = null;
         if (!mounted) return;
@@ -389,6 +414,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     _statusSub = null;
     _yomuServer = null;
     _maya = null;
+    _mayaProvider = null;
     _mayaUnavailableReason = null;
     _auth = null;
     _manager = null;
@@ -833,6 +859,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       'maya' => MayaScreen(
         service: _maya,
         engineReady: _engineReady,
+        providerController: _mayaProvider,
         unavailableReason: _mayaUnavailableReason,
         onOpenManga: (id, title) {
           final api = _api;

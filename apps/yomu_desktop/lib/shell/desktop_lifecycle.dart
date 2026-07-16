@@ -179,3 +179,15 @@ class StorageFirstBootstrap {
     await startRemainingServices();
   }
 }
+
+/// Opens the optional cloud-provider layer without making Maya history or the
+/// deterministic local assistant depend on Credential Manager or networking.
+class OptionalMayaProviderBootstrap {
+  static Future<T?> open<T>(Future<T> Function() initialize) async {
+    try {
+      return await initialize();
+    } catch (_) {
+      return null;
+    }
+  }
+}

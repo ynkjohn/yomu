@@ -20,6 +20,10 @@ enum MayaActionKind {
   setInLibrary,
 }
 
+/// Origin of a freshly generated turn. This is transient UI/audit metadata;
+/// message content and proposals remain the durable source of truth.
+enum MayaResponseOrigin { local, cloud, localFallback }
+
 const int kMayaMaxIdChars = 200;
 const int kMayaMaxMessageChars = 1024 * 1024;
 const int kMayaMaxTitleChars = 500;
@@ -356,10 +360,15 @@ String _requireBoundedString(
 /// One assistant turn after processing a user message.
 @immutable
 class MayaTurn {
-  const MayaTurn({required this.assistantMessage, this.proposals = const []});
+  const MayaTurn({
+    required this.assistantMessage,
+    this.proposals = const [],
+    this.origin = MayaResponseOrigin.local,
+  });
 
   final MayaMessage assistantMessage;
   final List<ActionProposal> proposals;
+  final MayaResponseOrigin origin;
 }
 
 /// Library row for Maya tools (decoupled from Suwayomi DTOs).

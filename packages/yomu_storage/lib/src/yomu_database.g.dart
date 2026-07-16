@@ -1831,6 +1831,713 @@ class MayaActionProposalsCompanion extends UpdateCompanion<StoredMayaProposal> {
   }
 }
 
+class $MayaProviderSettingsTableTable extends MayaProviderSettingsTable
+    with
+        TableInfo<$MayaProviderSettingsTableTable, StoredMayaProviderSettings> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MayaProviderSettingsTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _settingsIdMeta = const VerificationMeta(
+    'settingsId',
+  );
+  @override
+  late final GeneratedColumn<int> settingsId = GeneratedColumn<int>(
+    'settings_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _modeMeta = const VerificationMeta('mode');
+  @override
+  late final GeneratedColumn<String> mode = GeneratedColumn<String>(
+    'mode',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _isEnabledMeta = const VerificationMeta(
+    'isEnabled',
+  );
+  @override
+  late final GeneratedColumn<bool> isEnabled = GeneratedColumn<bool>(
+    'is_enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_enabled" IN (0, 1))',
+    ),
+  );
+  static const VerificationMeta _providerIdMeta = const VerificationMeta(
+    'providerId',
+  );
+  @override
+  late final GeneratedColumn<String> providerId = GeneratedColumn<String>(
+    'provider_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _modelPolicyMeta = const VerificationMeta(
+    'modelPolicy',
+  );
+  @override
+  late final GeneratedColumn<String> modelPolicy = GeneratedColumn<String>(
+    'model_policy',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _modelIdMeta = const VerificationMeta(
+    'modelId',
+  );
+  @override
+  late final GeneratedColumn<String> modelId = GeneratedColumn<String>(
+    'model_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _shareRecentHistoryMeta =
+      const VerificationMeta('shareRecentHistory');
+  @override
+  late final GeneratedColumn<bool> shareRecentHistory = GeneratedColumn<bool>(
+    'share_recent_history',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("share_recent_history" IN (0, 1))',
+    ),
+  );
+  static const VerificationMeta _shareLibraryContextMeta =
+      const VerificationMeta('shareLibraryContext');
+  @override
+  late final GeneratedColumn<bool> shareLibraryContext = GeneratedColumn<bool>(
+    'share_library_context',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("share_library_context" IN (0, 1))',
+    ),
+  );
+  static const VerificationMeta _consentVersionMeta = const VerificationMeta(
+    'consentVersion',
+  );
+  @override
+  late final GeneratedColumn<int> consentVersion = GeneratedColumn<int>(
+    'consent_version',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _consentedAtMsMeta = const VerificationMeta(
+    'consentedAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> consentedAtMs = GeneratedColumn<int>(
+    'consented_at_ms',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _updatedAtMsMeta = const VerificationMeta(
+    'updatedAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAtMs = GeneratedColumn<int>(
+    'updated_at_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    settingsId,
+    mode,
+    isEnabled,
+    providerId,
+    modelPolicy,
+    modelId,
+    shareRecentHistory,
+    shareLibraryContext,
+    consentVersion,
+    consentedAtMs,
+    updatedAtMs,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'maya_provider_settings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<StoredMayaProviderSettings> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('settings_id')) {
+      context.handle(
+        _settingsIdMeta,
+        settingsId.isAcceptableOrUnknown(data['settings_id']!, _settingsIdMeta),
+      );
+    }
+    if (data.containsKey('mode')) {
+      context.handle(
+        _modeMeta,
+        mode.isAcceptableOrUnknown(data['mode']!, _modeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_modeMeta);
+    }
+    if (data.containsKey('is_enabled')) {
+      context.handle(
+        _isEnabledMeta,
+        isEnabled.isAcceptableOrUnknown(data['is_enabled']!, _isEnabledMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_isEnabledMeta);
+    }
+    if (data.containsKey('provider_id')) {
+      context.handle(
+        _providerIdMeta,
+        providerId.isAcceptableOrUnknown(data['provider_id']!, _providerIdMeta),
+      );
+    }
+    if (data.containsKey('model_policy')) {
+      context.handle(
+        _modelPolicyMeta,
+        modelPolicy.isAcceptableOrUnknown(
+          data['model_policy']!,
+          _modelPolicyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('model_id')) {
+      context.handle(
+        _modelIdMeta,
+        modelId.isAcceptableOrUnknown(data['model_id']!, _modelIdMeta),
+      );
+    }
+    if (data.containsKey('share_recent_history')) {
+      context.handle(
+        _shareRecentHistoryMeta,
+        shareRecentHistory.isAcceptableOrUnknown(
+          data['share_recent_history']!,
+          _shareRecentHistoryMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_shareRecentHistoryMeta);
+    }
+    if (data.containsKey('share_library_context')) {
+      context.handle(
+        _shareLibraryContextMeta,
+        shareLibraryContext.isAcceptableOrUnknown(
+          data['share_library_context']!,
+          _shareLibraryContextMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_shareLibraryContextMeta);
+    }
+    if (data.containsKey('consent_version')) {
+      context.handle(
+        _consentVersionMeta,
+        consentVersion.isAcceptableOrUnknown(
+          data['consent_version']!,
+          _consentVersionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('consented_at_ms')) {
+      context.handle(
+        _consentedAtMsMeta,
+        consentedAtMs.isAcceptableOrUnknown(
+          data['consented_at_ms']!,
+          _consentedAtMsMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at_ms')) {
+      context.handle(
+        _updatedAtMsMeta,
+        updatedAtMs.isAcceptableOrUnknown(
+          data['updated_at_ms']!,
+          _updatedAtMsMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMsMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {settingsId};
+  @override
+  StoredMayaProviderSettings map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return StoredMayaProviderSettings(
+      settingsId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}settings_id'],
+      )!,
+      mode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mode'],
+      )!,
+      isEnabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_enabled'],
+      )!,
+      providerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}provider_id'],
+      ),
+      modelPolicy: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model_policy'],
+      ),
+      modelId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model_id'],
+      ),
+      shareRecentHistory: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}share_recent_history'],
+      )!,
+      shareLibraryContext: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}share_library_context'],
+      )!,
+      consentVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}consent_version'],
+      ),
+      consentedAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}consented_at_ms'],
+      ),
+      updatedAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at_ms'],
+      )!,
+    );
+  }
+
+  @override
+  $MayaProviderSettingsTableTable createAlias(String alias) {
+    return $MayaProviderSettingsTableTable(attachedDatabase, alias);
+  }
+}
+
+class StoredMayaProviderSettings extends DataClass
+    implements Insertable<StoredMayaProviderSettings> {
+  final int settingsId;
+  final String mode;
+  final bool isEnabled;
+  final String? providerId;
+  final String? modelPolicy;
+  final String? modelId;
+  final bool shareRecentHistory;
+  final bool shareLibraryContext;
+  final int? consentVersion;
+  final int? consentedAtMs;
+  final int updatedAtMs;
+  const StoredMayaProviderSettings({
+    required this.settingsId,
+    required this.mode,
+    required this.isEnabled,
+    this.providerId,
+    this.modelPolicy,
+    this.modelId,
+    required this.shareRecentHistory,
+    required this.shareLibraryContext,
+    this.consentVersion,
+    this.consentedAtMs,
+    required this.updatedAtMs,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['settings_id'] = Variable<int>(settingsId);
+    map['mode'] = Variable<String>(mode);
+    map['is_enabled'] = Variable<bool>(isEnabled);
+    if (!nullToAbsent || providerId != null) {
+      map['provider_id'] = Variable<String>(providerId);
+    }
+    if (!nullToAbsent || modelPolicy != null) {
+      map['model_policy'] = Variable<String>(modelPolicy);
+    }
+    if (!nullToAbsent || modelId != null) {
+      map['model_id'] = Variable<String>(modelId);
+    }
+    map['share_recent_history'] = Variable<bool>(shareRecentHistory);
+    map['share_library_context'] = Variable<bool>(shareLibraryContext);
+    if (!nullToAbsent || consentVersion != null) {
+      map['consent_version'] = Variable<int>(consentVersion);
+    }
+    if (!nullToAbsent || consentedAtMs != null) {
+      map['consented_at_ms'] = Variable<int>(consentedAtMs);
+    }
+    map['updated_at_ms'] = Variable<int>(updatedAtMs);
+    return map;
+  }
+
+  MayaProviderSettingsTableCompanion toCompanion(bool nullToAbsent) {
+    return MayaProviderSettingsTableCompanion(
+      settingsId: Value(settingsId),
+      mode: Value(mode),
+      isEnabled: Value(isEnabled),
+      providerId: providerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(providerId),
+      modelPolicy: modelPolicy == null && nullToAbsent
+          ? const Value.absent()
+          : Value(modelPolicy),
+      modelId: modelId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(modelId),
+      shareRecentHistory: Value(shareRecentHistory),
+      shareLibraryContext: Value(shareLibraryContext),
+      consentVersion: consentVersion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(consentVersion),
+      consentedAtMs: consentedAtMs == null && nullToAbsent
+          ? const Value.absent()
+          : Value(consentedAtMs),
+      updatedAtMs: Value(updatedAtMs),
+    );
+  }
+
+  factory StoredMayaProviderSettings.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return StoredMayaProviderSettings(
+      settingsId: serializer.fromJson<int>(json['settingsId']),
+      mode: serializer.fromJson<String>(json['mode']),
+      isEnabled: serializer.fromJson<bool>(json['isEnabled']),
+      providerId: serializer.fromJson<String?>(json['providerId']),
+      modelPolicy: serializer.fromJson<String?>(json['modelPolicy']),
+      modelId: serializer.fromJson<String?>(json['modelId']),
+      shareRecentHistory: serializer.fromJson<bool>(json['shareRecentHistory']),
+      shareLibraryContext: serializer.fromJson<bool>(
+        json['shareLibraryContext'],
+      ),
+      consentVersion: serializer.fromJson<int?>(json['consentVersion']),
+      consentedAtMs: serializer.fromJson<int?>(json['consentedAtMs']),
+      updatedAtMs: serializer.fromJson<int>(json['updatedAtMs']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'settingsId': serializer.toJson<int>(settingsId),
+      'mode': serializer.toJson<String>(mode),
+      'isEnabled': serializer.toJson<bool>(isEnabled),
+      'providerId': serializer.toJson<String?>(providerId),
+      'modelPolicy': serializer.toJson<String?>(modelPolicy),
+      'modelId': serializer.toJson<String?>(modelId),
+      'shareRecentHistory': serializer.toJson<bool>(shareRecentHistory),
+      'shareLibraryContext': serializer.toJson<bool>(shareLibraryContext),
+      'consentVersion': serializer.toJson<int?>(consentVersion),
+      'consentedAtMs': serializer.toJson<int?>(consentedAtMs),
+      'updatedAtMs': serializer.toJson<int>(updatedAtMs),
+    };
+  }
+
+  StoredMayaProviderSettings copyWith({
+    int? settingsId,
+    String? mode,
+    bool? isEnabled,
+    Value<String?> providerId = const Value.absent(),
+    Value<String?> modelPolicy = const Value.absent(),
+    Value<String?> modelId = const Value.absent(),
+    bool? shareRecentHistory,
+    bool? shareLibraryContext,
+    Value<int?> consentVersion = const Value.absent(),
+    Value<int?> consentedAtMs = const Value.absent(),
+    int? updatedAtMs,
+  }) => StoredMayaProviderSettings(
+    settingsId: settingsId ?? this.settingsId,
+    mode: mode ?? this.mode,
+    isEnabled: isEnabled ?? this.isEnabled,
+    providerId: providerId.present ? providerId.value : this.providerId,
+    modelPolicy: modelPolicy.present ? modelPolicy.value : this.modelPolicy,
+    modelId: modelId.present ? modelId.value : this.modelId,
+    shareRecentHistory: shareRecentHistory ?? this.shareRecentHistory,
+    shareLibraryContext: shareLibraryContext ?? this.shareLibraryContext,
+    consentVersion: consentVersion.present
+        ? consentVersion.value
+        : this.consentVersion,
+    consentedAtMs: consentedAtMs.present
+        ? consentedAtMs.value
+        : this.consentedAtMs,
+    updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+  );
+  StoredMayaProviderSettings copyWithCompanion(
+    MayaProviderSettingsTableCompanion data,
+  ) {
+    return StoredMayaProviderSettings(
+      settingsId: data.settingsId.present
+          ? data.settingsId.value
+          : this.settingsId,
+      mode: data.mode.present ? data.mode.value : this.mode,
+      isEnabled: data.isEnabled.present ? data.isEnabled.value : this.isEnabled,
+      providerId: data.providerId.present
+          ? data.providerId.value
+          : this.providerId,
+      modelPolicy: data.modelPolicy.present
+          ? data.modelPolicy.value
+          : this.modelPolicy,
+      modelId: data.modelId.present ? data.modelId.value : this.modelId,
+      shareRecentHistory: data.shareRecentHistory.present
+          ? data.shareRecentHistory.value
+          : this.shareRecentHistory,
+      shareLibraryContext: data.shareLibraryContext.present
+          ? data.shareLibraryContext.value
+          : this.shareLibraryContext,
+      consentVersion: data.consentVersion.present
+          ? data.consentVersion.value
+          : this.consentVersion,
+      consentedAtMs: data.consentedAtMs.present
+          ? data.consentedAtMs.value
+          : this.consentedAtMs,
+      updatedAtMs: data.updatedAtMs.present
+          ? data.updatedAtMs.value
+          : this.updatedAtMs,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('StoredMayaProviderSettings(')
+          ..write('settingsId: $settingsId, ')
+          ..write('mode: $mode, ')
+          ..write('isEnabled: $isEnabled, ')
+          ..write('providerId: $providerId, ')
+          ..write('modelPolicy: $modelPolicy, ')
+          ..write('modelId: $modelId, ')
+          ..write('shareRecentHistory: $shareRecentHistory, ')
+          ..write('shareLibraryContext: $shareLibraryContext, ')
+          ..write('consentVersion: $consentVersion, ')
+          ..write('consentedAtMs: $consentedAtMs, ')
+          ..write('updatedAtMs: $updatedAtMs')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    settingsId,
+    mode,
+    isEnabled,
+    providerId,
+    modelPolicy,
+    modelId,
+    shareRecentHistory,
+    shareLibraryContext,
+    consentVersion,
+    consentedAtMs,
+    updatedAtMs,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is StoredMayaProviderSettings &&
+          other.settingsId == this.settingsId &&
+          other.mode == this.mode &&
+          other.isEnabled == this.isEnabled &&
+          other.providerId == this.providerId &&
+          other.modelPolicy == this.modelPolicy &&
+          other.modelId == this.modelId &&
+          other.shareRecentHistory == this.shareRecentHistory &&
+          other.shareLibraryContext == this.shareLibraryContext &&
+          other.consentVersion == this.consentVersion &&
+          other.consentedAtMs == this.consentedAtMs &&
+          other.updatedAtMs == this.updatedAtMs);
+}
+
+class MayaProviderSettingsTableCompanion
+    extends UpdateCompanion<StoredMayaProviderSettings> {
+  final Value<int> settingsId;
+  final Value<String> mode;
+  final Value<bool> isEnabled;
+  final Value<String?> providerId;
+  final Value<String?> modelPolicy;
+  final Value<String?> modelId;
+  final Value<bool> shareRecentHistory;
+  final Value<bool> shareLibraryContext;
+  final Value<int?> consentVersion;
+  final Value<int?> consentedAtMs;
+  final Value<int> updatedAtMs;
+  const MayaProviderSettingsTableCompanion({
+    this.settingsId = const Value.absent(),
+    this.mode = const Value.absent(),
+    this.isEnabled = const Value.absent(),
+    this.providerId = const Value.absent(),
+    this.modelPolicy = const Value.absent(),
+    this.modelId = const Value.absent(),
+    this.shareRecentHistory = const Value.absent(),
+    this.shareLibraryContext = const Value.absent(),
+    this.consentVersion = const Value.absent(),
+    this.consentedAtMs = const Value.absent(),
+    this.updatedAtMs = const Value.absent(),
+  });
+  MayaProviderSettingsTableCompanion.insert({
+    this.settingsId = const Value.absent(),
+    required String mode,
+    required bool isEnabled,
+    this.providerId = const Value.absent(),
+    this.modelPolicy = const Value.absent(),
+    this.modelId = const Value.absent(),
+    required bool shareRecentHistory,
+    required bool shareLibraryContext,
+    this.consentVersion = const Value.absent(),
+    this.consentedAtMs = const Value.absent(),
+    required int updatedAtMs,
+  }) : mode = Value(mode),
+       isEnabled = Value(isEnabled),
+       shareRecentHistory = Value(shareRecentHistory),
+       shareLibraryContext = Value(shareLibraryContext),
+       updatedAtMs = Value(updatedAtMs);
+  static Insertable<StoredMayaProviderSettings> custom({
+    Expression<int>? settingsId,
+    Expression<String>? mode,
+    Expression<bool>? isEnabled,
+    Expression<String>? providerId,
+    Expression<String>? modelPolicy,
+    Expression<String>? modelId,
+    Expression<bool>? shareRecentHistory,
+    Expression<bool>? shareLibraryContext,
+    Expression<int>? consentVersion,
+    Expression<int>? consentedAtMs,
+    Expression<int>? updatedAtMs,
+  }) {
+    return RawValuesInsertable({
+      if (settingsId != null) 'settings_id': settingsId,
+      if (mode != null) 'mode': mode,
+      if (isEnabled != null) 'is_enabled': isEnabled,
+      if (providerId != null) 'provider_id': providerId,
+      if (modelPolicy != null) 'model_policy': modelPolicy,
+      if (modelId != null) 'model_id': modelId,
+      if (shareRecentHistory != null)
+        'share_recent_history': shareRecentHistory,
+      if (shareLibraryContext != null)
+        'share_library_context': shareLibraryContext,
+      if (consentVersion != null) 'consent_version': consentVersion,
+      if (consentedAtMs != null) 'consented_at_ms': consentedAtMs,
+      if (updatedAtMs != null) 'updated_at_ms': updatedAtMs,
+    });
+  }
+
+  MayaProviderSettingsTableCompanion copyWith({
+    Value<int>? settingsId,
+    Value<String>? mode,
+    Value<bool>? isEnabled,
+    Value<String?>? providerId,
+    Value<String?>? modelPolicy,
+    Value<String?>? modelId,
+    Value<bool>? shareRecentHistory,
+    Value<bool>? shareLibraryContext,
+    Value<int?>? consentVersion,
+    Value<int?>? consentedAtMs,
+    Value<int>? updatedAtMs,
+  }) {
+    return MayaProviderSettingsTableCompanion(
+      settingsId: settingsId ?? this.settingsId,
+      mode: mode ?? this.mode,
+      isEnabled: isEnabled ?? this.isEnabled,
+      providerId: providerId ?? this.providerId,
+      modelPolicy: modelPolicy ?? this.modelPolicy,
+      modelId: modelId ?? this.modelId,
+      shareRecentHistory: shareRecentHistory ?? this.shareRecentHistory,
+      shareLibraryContext: shareLibraryContext ?? this.shareLibraryContext,
+      consentVersion: consentVersion ?? this.consentVersion,
+      consentedAtMs: consentedAtMs ?? this.consentedAtMs,
+      updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (settingsId.present) {
+      map['settings_id'] = Variable<int>(settingsId.value);
+    }
+    if (mode.present) {
+      map['mode'] = Variable<String>(mode.value);
+    }
+    if (isEnabled.present) {
+      map['is_enabled'] = Variable<bool>(isEnabled.value);
+    }
+    if (providerId.present) {
+      map['provider_id'] = Variable<String>(providerId.value);
+    }
+    if (modelPolicy.present) {
+      map['model_policy'] = Variable<String>(modelPolicy.value);
+    }
+    if (modelId.present) {
+      map['model_id'] = Variable<String>(modelId.value);
+    }
+    if (shareRecentHistory.present) {
+      map['share_recent_history'] = Variable<bool>(shareRecentHistory.value);
+    }
+    if (shareLibraryContext.present) {
+      map['share_library_context'] = Variable<bool>(shareLibraryContext.value);
+    }
+    if (consentVersion.present) {
+      map['consent_version'] = Variable<int>(consentVersion.value);
+    }
+    if (consentedAtMs.present) {
+      map['consented_at_ms'] = Variable<int>(consentedAtMs.value);
+    }
+    if (updatedAtMs.present) {
+      map['updated_at_ms'] = Variable<int>(updatedAtMs.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MayaProviderSettingsTableCompanion(')
+          ..write('settingsId: $settingsId, ')
+          ..write('mode: $mode, ')
+          ..write('isEnabled: $isEnabled, ')
+          ..write('providerId: $providerId, ')
+          ..write('modelPolicy: $modelPolicy, ')
+          ..write('modelId: $modelId, ')
+          ..write('shareRecentHistory: $shareRecentHistory, ')
+          ..write('shareLibraryContext: $shareLibraryContext, ')
+          ..write('consentVersion: $consentVersion, ')
+          ..write('consentedAtMs: $consentedAtMs, ')
+          ..write('updatedAtMs: $updatedAtMs')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$YomuDatabase extends GeneratedDatabase {
   _$YomuDatabase(QueryExecutor e) : super(e);
   $YomuDatabaseManager get managers => $YomuDatabaseManager(this);
@@ -1839,6 +2546,8 @@ abstract class _$YomuDatabase extends GeneratedDatabase {
   late final $MayaMessagesTable mayaMessages = $MayaMessagesTable(this);
   late final $MayaActionProposalsTable mayaActionProposals =
       $MayaActionProposalsTable(this);
+  late final $MayaProviderSettingsTableTable mayaProviderSettingsTable =
+      $MayaProviderSettingsTableTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1848,6 +2557,7 @@ abstract class _$YomuDatabase extends GeneratedDatabase {
     deviceSessions,
     mayaMessages,
     mayaActionProposals,
+    mayaProviderSettingsTable,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -3070,6 +3780,349 @@ typedef $$MayaActionProposalsTableProcessedTableManager =
       StoredMayaProposal,
       PrefetchHooks Function({bool messageId})
     >;
+typedef $$MayaProviderSettingsTableTableCreateCompanionBuilder =
+    MayaProviderSettingsTableCompanion Function({
+      Value<int> settingsId,
+      required String mode,
+      required bool isEnabled,
+      Value<String?> providerId,
+      Value<String?> modelPolicy,
+      Value<String?> modelId,
+      required bool shareRecentHistory,
+      required bool shareLibraryContext,
+      Value<int?> consentVersion,
+      Value<int?> consentedAtMs,
+      required int updatedAtMs,
+    });
+typedef $$MayaProviderSettingsTableTableUpdateCompanionBuilder =
+    MayaProviderSettingsTableCompanion Function({
+      Value<int> settingsId,
+      Value<String> mode,
+      Value<bool> isEnabled,
+      Value<String?> providerId,
+      Value<String?> modelPolicy,
+      Value<String?> modelId,
+      Value<bool> shareRecentHistory,
+      Value<bool> shareLibraryContext,
+      Value<int?> consentVersion,
+      Value<int?> consentedAtMs,
+      Value<int> updatedAtMs,
+    });
+
+class $$MayaProviderSettingsTableTableFilterComposer
+    extends Composer<_$YomuDatabase, $MayaProviderSettingsTableTable> {
+  $$MayaProviderSettingsTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get settingsId => $composableBuilder(
+    column: $table.settingsId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mode => $composableBuilder(
+    column: $table.mode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isEnabled => $composableBuilder(
+    column: $table.isEnabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get providerId => $composableBuilder(
+    column: $table.providerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get modelPolicy => $composableBuilder(
+    column: $table.modelPolicy,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get modelId => $composableBuilder(
+    column: $table.modelId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get shareRecentHistory => $composableBuilder(
+    column: $table.shareRecentHistory,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get shareLibraryContext => $composableBuilder(
+    column: $table.shareLibraryContext,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get consentVersion => $composableBuilder(
+    column: $table.consentVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get consentedAtMs => $composableBuilder(
+    column: $table.consentedAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$MayaProviderSettingsTableTableOrderingComposer
+    extends Composer<_$YomuDatabase, $MayaProviderSettingsTableTable> {
+  $$MayaProviderSettingsTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get settingsId => $composableBuilder(
+    column: $table.settingsId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mode => $composableBuilder(
+    column: $table.mode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isEnabled => $composableBuilder(
+    column: $table.isEnabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get providerId => $composableBuilder(
+    column: $table.providerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get modelPolicy => $composableBuilder(
+    column: $table.modelPolicy,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get modelId => $composableBuilder(
+    column: $table.modelId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get shareRecentHistory => $composableBuilder(
+    column: $table.shareRecentHistory,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get shareLibraryContext => $composableBuilder(
+    column: $table.shareLibraryContext,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get consentVersion => $composableBuilder(
+    column: $table.consentVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get consentedAtMs => $composableBuilder(
+    column: $table.consentedAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$MayaProviderSettingsTableTableAnnotationComposer
+    extends Composer<_$YomuDatabase, $MayaProviderSettingsTableTable> {
+  $$MayaProviderSettingsTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get settingsId => $composableBuilder(
+    column: $table.settingsId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mode =>
+      $composableBuilder(column: $table.mode, builder: (column) => column);
+
+  GeneratedColumn<bool> get isEnabled =>
+      $composableBuilder(column: $table.isEnabled, builder: (column) => column);
+
+  GeneratedColumn<String> get providerId => $composableBuilder(
+    column: $table.providerId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get modelPolicy => $composableBuilder(
+    column: $table.modelPolicy,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get modelId =>
+      $composableBuilder(column: $table.modelId, builder: (column) => column);
+
+  GeneratedColumn<bool> get shareRecentHistory => $composableBuilder(
+    column: $table.shareRecentHistory,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get shareLibraryContext => $composableBuilder(
+    column: $table.shareLibraryContext,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get consentVersion => $composableBuilder(
+    column: $table.consentVersion,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get consentedAtMs => $composableBuilder(
+    column: $table.consentedAtMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => column,
+  );
+}
+
+class $$MayaProviderSettingsTableTableTableManager
+    extends
+        RootTableManager<
+          _$YomuDatabase,
+          $MayaProviderSettingsTableTable,
+          StoredMayaProviderSettings,
+          $$MayaProviderSettingsTableTableFilterComposer,
+          $$MayaProviderSettingsTableTableOrderingComposer,
+          $$MayaProviderSettingsTableTableAnnotationComposer,
+          $$MayaProviderSettingsTableTableCreateCompanionBuilder,
+          $$MayaProviderSettingsTableTableUpdateCompanionBuilder,
+          (
+            StoredMayaProviderSettings,
+            BaseReferences<
+              _$YomuDatabase,
+              $MayaProviderSettingsTableTable,
+              StoredMayaProviderSettings
+            >,
+          ),
+          StoredMayaProviderSettings,
+          PrefetchHooks Function()
+        > {
+  $$MayaProviderSettingsTableTableTableManager(
+    _$YomuDatabase db,
+    $MayaProviderSettingsTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MayaProviderSettingsTableTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$MayaProviderSettingsTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$MayaProviderSettingsTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> settingsId = const Value.absent(),
+                Value<String> mode = const Value.absent(),
+                Value<bool> isEnabled = const Value.absent(),
+                Value<String?> providerId = const Value.absent(),
+                Value<String?> modelPolicy = const Value.absent(),
+                Value<String?> modelId = const Value.absent(),
+                Value<bool> shareRecentHistory = const Value.absent(),
+                Value<bool> shareLibraryContext = const Value.absent(),
+                Value<int?> consentVersion = const Value.absent(),
+                Value<int?> consentedAtMs = const Value.absent(),
+                Value<int> updatedAtMs = const Value.absent(),
+              }) => MayaProviderSettingsTableCompanion(
+                settingsId: settingsId,
+                mode: mode,
+                isEnabled: isEnabled,
+                providerId: providerId,
+                modelPolicy: modelPolicy,
+                modelId: modelId,
+                shareRecentHistory: shareRecentHistory,
+                shareLibraryContext: shareLibraryContext,
+                consentVersion: consentVersion,
+                consentedAtMs: consentedAtMs,
+                updatedAtMs: updatedAtMs,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> settingsId = const Value.absent(),
+                required String mode,
+                required bool isEnabled,
+                Value<String?> providerId = const Value.absent(),
+                Value<String?> modelPolicy = const Value.absent(),
+                Value<String?> modelId = const Value.absent(),
+                required bool shareRecentHistory,
+                required bool shareLibraryContext,
+                Value<int?> consentVersion = const Value.absent(),
+                Value<int?> consentedAtMs = const Value.absent(),
+                required int updatedAtMs,
+              }) => MayaProviderSettingsTableCompanion.insert(
+                settingsId: settingsId,
+                mode: mode,
+                isEnabled: isEnabled,
+                providerId: providerId,
+                modelPolicy: modelPolicy,
+                modelId: modelId,
+                shareRecentHistory: shareRecentHistory,
+                shareLibraryContext: shareLibraryContext,
+                consentVersion: consentVersion,
+                consentedAtMs: consentedAtMs,
+                updatedAtMs: updatedAtMs,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$MayaProviderSettingsTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$YomuDatabase,
+      $MayaProviderSettingsTableTable,
+      StoredMayaProviderSettings,
+      $$MayaProviderSettingsTableTableFilterComposer,
+      $$MayaProviderSettingsTableTableOrderingComposer,
+      $$MayaProviderSettingsTableTableAnnotationComposer,
+      $$MayaProviderSettingsTableTableCreateCompanionBuilder,
+      $$MayaProviderSettingsTableTableUpdateCompanionBuilder,
+      (
+        StoredMayaProviderSettings,
+        BaseReferences<
+          _$YomuDatabase,
+          $MayaProviderSettingsTableTable,
+          StoredMayaProviderSettings
+        >,
+      ),
+      StoredMayaProviderSettings,
+      PrefetchHooks Function()
+    >;
 
 class $YomuDatabaseManager {
   final _$YomuDatabase _db;
@@ -3082,4 +4135,9 @@ class $YomuDatabaseManager {
       $$MayaMessagesTableTableManager(_db, _db.mayaMessages);
   $$MayaActionProposalsTableTableManager get mayaActionProposals =>
       $$MayaActionProposalsTableTableManager(_db, _db.mayaActionProposals);
+  $$MayaProviderSettingsTableTableTableManager get mayaProviderSettingsTable =>
+      $$MayaProviderSettingsTableTableTableManager(
+        _db,
+        _db.mayaProviderSettingsTable,
+      );
 }

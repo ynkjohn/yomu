@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'heuristic_engine.dart';
 import 'maya_port.dart';
@@ -45,6 +46,7 @@ class MayaService {
   Future<void>? _closeFuture;
   bool _accepting = true;
   int _messageSequence = 0;
+  MayaLlmCancellationToken? _activeLlmCancellation;
 
   List<MayaMessage> get messages => store.messages;
 
@@ -70,7 +72,11 @@ class MayaService {
   /// The shared [YomuDatabase] remains owned by desktop lifecycle teardown.
   Future<void> close() {
     _accepting = false;
-    return _closeFuture ??= _tail;
+    _activeLlmCancellation?.cancel();
+    return _closeFuture ??= Future.wait<void>(<Future<void>>[
+      _tail,
+      if (llm != null) llm!.close(),
+    ]);
   }
 
   /// Process user text into one atomic user + assistant turn.
@@ -80,6 +86,9 @@ class MayaService {
       if (userText.isEmpty) {
         throw ArgumentError.value(text, 'text', 'não pode ser vazio');
       }
+      if (userText.length > kMayaMaxMessageChars) {
+        throw ArgumentError.value(text, 'text', 'excede o limite da Maya');
+      }
       final user = MayaMessage(
         id: _freshMessageId('u'),
         role: MayaRole.user,
@@ -87,28 +96,80 @@ class MayaService {
         createdAt: DateTime.now().toUtc(),
       );
 
-      MayaTurn turn;
-      List<MayaLibraryItem> library;
-      try {
-        library = await libraryPort.listLibrary();
-      } catch (_) {
-        turn = MayaTurn(
-          assistantMessage: MayaMessage(
-            id: _freshMessageId('m-library-unavailable'),
-            role: MayaRole.assistant,
-            text:
-                'Não consegui consultar a biblioteca agora. '
-                'Verifique se o motor local está disponível e tente novamente.',
-            createdAt: DateTime.now().toUtc(),
-          ),
-        );
-        await store.appendTurn(
-          messages: <MayaMessage>[user, turn.assistantMessage],
-          proposals: const <ActionProposal>[],
-        );
-        return _storedTurn(turn);
+      final policy =
+          llm?.contextPolicy ?? const MayaLlmContextPolicy.disabled();
+      var library = const <MayaLibraryItem>[];
+      var libraryAvailable = false;
+      var cloudAttempted = false;
+
+      if (policy.enabled) {
+        cloudAttempted = true;
+        if (policy.shareLibraryContext) {
+          try {
+            library = List<MayaLibraryItem>.unmodifiable(
+              await libraryPort.listLibrary(),
+            );
+            libraryAvailable = true;
+          } catch (_) {
+            // Cloud chat remains available without Suwayomi. No library data or
+            // tools are exposed when the snapshot cannot be obtained.
+          }
+        }
+
+        if (utf8.encode(userText).length <= kMayaLlmMaxCurrentInputBytes) {
+          final cancellation = MayaLlmCancellationToken();
+          _activeLlmCancellation = cancellation;
+          try {
+            final request = _llmRequest(
+              policy: policy,
+              currentUserText: userText,
+              library: library,
+              libraryAvailable: libraryAvailable,
+              cancellation: cancellation,
+            );
+            final response = await llm!.complete(request);
+            cancellation.throwIfCancelled();
+            final cloudTurn = _cloudTurn(
+              response,
+              library: request.library,
+              availableTools: request.availableTools,
+            );
+            if (cloudTurn != null) {
+              await store.appendTurn(
+                messages: <MayaMessage>[user, cloudTurn.assistantMessage],
+                proposals: cloudTurn.proposals,
+              );
+              return _storedTurn(cloudTurn);
+            }
+          } on MayaLlmException {
+            // Sanitized provider failures fall through to the local engine.
+          } catch (_) {
+            // Adapters are an untrusted boundary. Never surface raw errors.
+          } finally {
+            if (identical(_activeLlmCancellation, cancellation)) {
+              _activeLlmCancellation = null;
+            }
+          }
+        }
       }
 
+      if (!libraryAvailable) {
+        try {
+          library = List<MayaLibraryItem>.unmodifiable(
+            await libraryPort.listLibrary(),
+          );
+          libraryAvailable = true;
+        } catch (_) {
+          final turn = _libraryUnavailableTurn(cloudFallback: cloudAttempted);
+          await store.appendTurn(
+            messages: <MayaMessage>[user, turn.assistantMessage],
+            proposals: const <ActionProposal>[],
+          );
+          return _storedTurn(turn);
+        }
+      }
+
+      MayaTurn turn;
       try {
         turn = engine.handle(userText: userText, library: library);
       } catch (_) {
@@ -124,34 +185,7 @@ class MayaService {
         );
       }
 
-      if (llm != null &&
-          turn.proposals.isEmpty &&
-          _looksLikeChitchat(userText) &&
-          !_isStructuredCommand(userText)) {
-        try {
-          final llmText = await llm!.complete(
-            history: List<MayaMessage>.unmodifiable(<MayaMessage>[
-              ...store.messages,
-              user,
-            ]),
-            userText: userText,
-            toolContext: _toolContext(library),
-          );
-          final normalized = _boundedMessageText(llmText.trim());
-          if (normalized.isNotEmpty) {
-            turn = MayaTurn(
-              assistantMessage: MayaMessage(
-                id: _freshMessageId('m-llm'),
-                role: MayaRole.assistant,
-                text: normalized,
-                createdAt: DateTime.now().toUtc(),
-              ),
-            );
-          }
-        } catch (_) {
-          // The deterministic local turn remains authoritative.
-        }
-      }
+      if (cloudAttempted) turn = _asLocalFallback(turn);
 
       await store.appendTurn(
         messages: <MayaMessage>[user, turn.assistantMessage],
@@ -300,6 +334,7 @@ class MayaService {
           return stored;
         }),
       ),
+      origin: turn.origin,
     );
   }
 
@@ -327,36 +362,205 @@ class MayaService {
     }
   }
 
-  bool _isStructuredCommand(String text) {
-    final lower = text.toLowerCase();
-    const keys = <String>[
-      'biblioteca',
-      'continuar',
-      'busca',
-      'buscar',
-      'baixar',
-      'download',
-      'ajuda',
-      'listar',
-      'retomar',
-    ];
-    return keys.any(lower.contains);
-  }
-
-  bool _looksLikeChitchat(String text) => text.trim().length > 12;
-
   String _boundedMessageText(String value) {
     if (value.length <= kMayaMaxMessageChars) return value;
     return value.substring(0, kMayaMaxMessageChars);
   }
 
-  String _toolContext(List<MayaLibraryItem> library) {
-    final buffer = StringBuffer('library_count=${library.length}\n');
-    for (final manga in library.take(30)) {
-      buffer.writeln(
-        '- id=${manga.id} title=${manga.title} unread=${manga.unreadCount}',
-      );
+  MayaLlmRequest _llmRequest({
+    required MayaLlmContextPolicy policy,
+    required String currentUserText,
+    required List<MayaLibraryItem> library,
+    required bool libraryAvailable,
+    required MayaLlmCancellationToken cancellation,
+  }) {
+    final sharedLibrary = policy.shareLibraryContext && libraryAvailable
+        ? _boundedLibraryContext(library)
+        : const <MayaLlmLibraryItem>[];
+    final tools = <MayaLlmTool>{};
+    if (sharedLibrary.isNotEmpty) {
+      tools.add(MayaLlmTool.openManga);
+      if (sharedLibrary.any((item) => item.lastChapterId != null)) {
+        tools.add(MayaLlmTool.downloadChapter);
+      }
     }
-    return buffer.toString();
+    return MayaLlmRequest(
+      currentUserText: currentUserText,
+      history: policy.shareRecentHistory
+          ? _boundedRecentHistory()
+          : const <MayaLlmMessage>[],
+      library: sharedLibrary,
+      availableTools: tools,
+      libraryAvailable: policy.shareLibraryContext && libraryAvailable,
+      cancellation: cancellation,
+      contextLease: policy.contextLease,
+    );
+  }
+
+  List<MayaLlmMessage> _boundedRecentHistory() {
+    final selected = <MayaLlmMessage>[];
+    var bytes = 0;
+    for (final message in store.messages.reversed) {
+      if (selected.length >= kMayaLlmMaxHistoryMessages) break;
+      if (message.role == MayaRole.system) continue;
+      final messageBytes = utf8.encode(message.text).length;
+      if (messageBytes > kMayaLlmMaxHistoryBytes - bytes) continue;
+      selected.add(MayaLlmMessage(role: message.role, text: message.text));
+      bytes += messageBytes;
+    }
+    return List<MayaLlmMessage>.unmodifiable(selected.reversed);
+  }
+
+  List<MayaLlmLibraryItem> _boundedLibraryContext(
+    List<MayaLibraryItem> library,
+  ) {
+    final selected = <MayaLlmLibraryItem>[];
+    var bytes = 0;
+    for (final item in library.take(kMayaLlmMaxLibraryItems)) {
+      final candidate = MayaLlmLibraryItem(
+        mangaId: item.id,
+        title: item.title,
+        unreadCount: item.unreadCount,
+        lastChapterId: item.lastChapterId,
+        lastChapterName: item.lastChapterName,
+      );
+      final candidateBytes = utf8.encode(jsonEncode(candidate.toJson())).length;
+      if (candidateBytes > kMayaLlmMaxLibraryBytes - bytes) break;
+      selected.add(candidate);
+      bytes += candidateBytes;
+    }
+    return List<MayaLlmLibraryItem>.unmodifiable(selected);
+  }
+
+  MayaTurn? _cloudTurn(
+    MayaLlmResponse response, {
+    required List<MayaLlmLibraryItem> library,
+    required Set<MayaLlmTool> availableTools,
+  }) {
+    final proposals = _validatedLlmProposals(
+      response.intents,
+      library: library,
+      availableTools: availableTools,
+    );
+    var text = _boundedMessageText((response.text ?? '').trim());
+    if (text.isEmpty && proposals.isNotEmpty) {
+      text = proposals.length == 1
+          ? 'Preparei uma ação segura para você confirmar.'
+          : 'Preparei ${proposals.length} ações seguras para você confirmar.';
+    }
+    if (text.isEmpty) return null;
+    return MayaTurn(
+      assistantMessage: MayaMessage(
+        id: _freshMessageId('m-cloud'),
+        role: MayaRole.assistant,
+        text: text,
+        createdAt: DateTime.now().toUtc(),
+        proposalIds: proposals.map((proposal) => proposal.id).toList(),
+      ),
+      proposals: proposals,
+      origin: MayaResponseOrigin.cloud,
+    );
+  }
+
+  List<ActionProposal> _validatedLlmProposals(
+    List<MayaLlmIntent> intents, {
+    required List<MayaLlmLibraryItem> library,
+    required Set<MayaLlmTool> availableTools,
+  }) {
+    final itemsById = <int, MayaLlmLibraryItem>{
+      for (final item in library) item.mangaId: item,
+    };
+    final proposals = <ActionProposal>[];
+    final seen = <String>{};
+    for (final intent in intents.take(kMayaLlmMaxIntents)) {
+      if (!availableTools.contains(intent.tool)) continue;
+      final item = itemsById[intent.mangaId];
+      if (item == null) continue;
+      final key = '${intent.tool.name}:${intent.mangaId}:${intent.chapterId}';
+      if (!seen.add(key)) continue;
+      final now = DateTime.now().toUtc();
+      switch (intent.tool) {
+        case MayaLlmTool.openManga:
+          proposals.add(
+            ActionProposal(
+              id: _freshProposalId('p-cloud-open'),
+              kind: MayaActionKind.openManga,
+              title: 'Abrir ${item.title}',
+              description: 'Abrir a obra selecionada na biblioteca.',
+              payload: <String, dynamic>{
+                'mangaId': item.mangaId,
+                'title': item.title,
+                if (item.lastChapterId != null) 'chapterId': item.lastChapterId,
+              },
+              status: ActionProposalStatus.pending,
+              createdAt: now,
+            ),
+          );
+        case MayaLlmTool.downloadChapter:
+          final chapterId = intent.chapterId;
+          if (chapterId == null || chapterId != item.lastChapterId) continue;
+          proposals.add(
+            ActionProposal(
+              id: _freshProposalId('p-cloud-download'),
+              kind: MayaActionKind.downloadChapter,
+              title: 'Baixar capítulo de ${item.title}',
+              description:
+                  'Enfileirar download de '
+                  '${item.lastChapterName ?? 'capítulo $chapterId'}.',
+              payload: <String, dynamic>{
+                'mangaId': item.mangaId,
+                'chapterId': chapterId,
+                'title': item.title,
+              },
+              status: ActionProposalStatus.pending,
+              createdAt: now,
+            ),
+          );
+      }
+    }
+    return List<ActionProposal>.unmodifiable(proposals);
+  }
+
+  String _freshProposalId(String prefix) {
+    while (true) {
+      final id =
+          '$prefix-${DateTime.now().microsecondsSinceEpoch}-'
+          '${_messageSequence++}';
+      if (store.proposalById(id) == null) return id;
+    }
+  }
+
+  MayaTurn _asLocalFallback(MayaTurn turn) {
+    final text = _boundedMessageText(
+      'Modo local (fallback): ${turn.assistantMessage.text}',
+    );
+    return MayaTurn(
+      assistantMessage: MayaMessage(
+        id: turn.assistantMessage.id,
+        role: turn.assistantMessage.role,
+        text: text,
+        createdAt: turn.assistantMessage.createdAt,
+        proposalIds: turn.assistantMessage.proposalIds,
+      ),
+      proposals: turn.proposals,
+      origin: MayaResponseOrigin.localFallback,
+    );
+  }
+
+  MayaTurn _libraryUnavailableTurn({required bool cloudFallback}) {
+    final prefix = cloudFallback ? 'Modo local (fallback): ' : '';
+    return MayaTurn(
+      assistantMessage: MayaMessage(
+        id: _freshMessageId('m-library-unavailable'),
+        role: MayaRole.assistant,
+        text:
+            '${prefix}Não consegui consultar a biblioteca agora. '
+            'Verifique se o motor local está disponível e tente novamente.',
+        createdAt: DateTime.now().toUtc(),
+      ),
+      origin: cloudFallback
+          ? MayaResponseOrigin.localFallback
+          : MayaResponseOrigin.local,
+    );
   }
 }

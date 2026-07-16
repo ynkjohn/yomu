@@ -15,7 +15,8 @@
 | **P0 — storage foundation (schema v1 `app_meta`)** | ✅ HEAD `941c4e8` |
 | **Pós-P0 — promoção visual desktop + correções funcionais** | ✅ conteúdo deste checkpoint |
 | **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
-| **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ validação concluída |
+| **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ commit `d200521` |
+| **P2B — providers Maya (schema v4)** | ✅ gates aprovados |
 
 ## Phases
 
@@ -27,9 +28,66 @@
 | P0 storage foundation | ✅ |
 | Pós-P0 desktop visual + reader/explore/repos fixes | ✅ conteúdo deste checkpoint |
 | P1 sessions/auth schema bump | ✅ commit `c9d51d3` |
-| P2A Maya persistence schema bump | ✅ validação concluída |
+| P2A Maya persistence schema bump | ✅ commit `d200521` |
+| P2B Maya providers schema bump | ✅ validada |
 | Source Builder | bloqueado |
 | Histórico / settings / backup completos | placeholders |
+
+## P2B — providers da Maya (2026-07-16, validada)
+
+- Baseline separado: `master` / `d200521aa2735c9c245fe53123afe66208fc7404`
+  (`feat(maya): persist history in SQLite`). A P2B contém somente o bump
+  `3 → 4` e não mistura outra área de persistência.
+- Drift migra explicitamente `3 → 4` e adiciona somente o singleton
+  `maya_provider_settings`. A row contém modo, provider, modelo, flags e
+  consentimento; nenhuma credencial entra no SQLite.
+- A allowlist atual é OpenAI, Anthropic, Gemini e Ollama. A UI e os adapters
+  exigem modelo explícito e usam endpoints fixos. OpenAI, Anthropic e Gemini
+  guardam chaves no Windows Credential Manager; Ollama usa apenas
+  `127.0.0.1:11434` sem credencial.
+- Mensagem corrente exige consentimento cloud. Histórico recente e contexto da
+  biblioteca possuem flags independentes e limites próprios. Falha de cofre,
+  adapter, transporte ou provider não expõe erro cru e retorna ao engine local
+  com fallback explícito.
+- Intenções remotas são validadas contra o snapshot compartilhado e viram
+  somente `ActionProposal` pendente. A confirmação explícita e a barreira
+  durável at-most-once da P2A permanecem obrigatórias.
+- A implementação inclui storage, WinCred, controlador, codecs/transport,
+  adapters, UI e wiring do desktop. O `home_shell` cria o controlador com a
+  factory real, injeta-o em `MayaService.llm` e `MayaScreen`, e o fecha pelo
+  teardown da Maya. `OptionalMayaProviderBootstrap` preserva a Maya local se a
+  camada opcional falhar.
+- Falha ao carregar WinCred usa `UnavailableMayaCredentialStore`: modo local e
+  Ollama continuam disponíveis, enquanto operações de chave cloud falham
+  fechadas sem store alternativo inseguro. Trocas bloqueiam novas admissões
+  antes de qualquer await; falhas de save restauram a chave anterior quando
+  possível, e a remoção verifica todos os targets cloud antes de persistir o
+  modo local.
+- Validação atual: controller 22/22; conjunto de controller, adapters, codecs,
+  transporte e WinCred 82/82; regressões promovidas da UI 17/17; `yomu_ai`
+  62/62; `yomu_storage` 36/36; local server/Auth 38/38; desktop 171/171.
+  Analyzer integral e `git diff --check` passaram. O
+  `tool\verify_workspace.ps1` foi aprovado em 227,5 s e gerou o build Windows
+  Debug em
+  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`.
+- `cmdkey /list` não encontrou target `app.yomu/maya/provider/*`. A auditoria
+  adicional de 49 arquivos de DB/WAL/SHM/log/JSON e temporários de teste não
+  encontrou padrões de API key plaintext; os testes direcionados também
+  verificam bytes conhecidos no SQLite, WAL, SHM, lock e logs.
+- Evidência visual externa:
+  `%USERPROFILE%\Downloads\yomu-sol-final\2026-07-16\01-p2b-maya-provider-dialog.png`.
+  É uma captura determinística do diálogo Flutter real antes de inserir chave;
+  comprova layout, campos protegidos e separação dos consentimentos. O binding
+  usa fonte de teste, portanto o PNG não é alegado como screenshot runtime com
+  tipografia legível; o conteúdo textual é coberto pelas 17 regressões de UI.
+- A referência desktop permaneceu imutável, SHA-256
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
+- Não houve chamada live a conta ou modelo externo. A validação dos providers
+  usa transports determinísticos; disponibilidade, cobrança e política de
+  retenção de contas reais não são certificadas por esta fase.
+- Memória nova, autonomia, streaming, PWA/mobile e endpoints customizados
+  permanecem fora desta subfase. O contrato factual completo está em
+  `docs/p2b-maya-providers.md`.
 
 ## P2A — persistência da Maya (2026-07-15)
 

@@ -3,6 +3,7 @@
 /// **P0:** process lock and [AppMeta] flags (schemaVersion **1**).
 /// **P1:** hashed device sessions (schemaVersion **2**).
 /// **P2A:** Maya messages and ActionProposal audit state (schemaVersion **3**).
+/// **P2B:** non-secret Maya provider preferences (schemaVersion **4**).
 ///
 /// Suwayomi keeps its own database for library/progress/downloads.
 ///

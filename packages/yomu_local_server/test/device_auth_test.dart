@@ -127,7 +127,7 @@ void main() {
   );
 
   test(
-    'real schema v1 upgrades through v2 to v3 then imports JSON preserving app_meta',
+    'real schema v1 upgrades through v2/v3 to v4 then imports JSON preserving app_meta',
     () async {
       final root = await Directory.systemTemp.createTemp('yomu-auth-v1-');
       final paths = YomuStoragePaths(root);
@@ -182,7 +182,7 @@ void main() {
               .data
               .values
               .single,
-          3,
+          4,
         );
         expect(await database.getMeta('p0.preserved'), 'yes');
         expect(

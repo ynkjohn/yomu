@@ -1,18 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:yomu_ai/yomu_ai.dart';
+import 'package:yomu_storage/yomu_storage.dart';
 import 'package:yomu_ui/yomu_ui.dart';
+
+import '../services/maya_provider_controller.dart';
 
 class MayaScreen extends StatefulWidget {
   const MayaScreen({
     super.key,
     required this.service,
     required this.engineReady,
+    this.providerController,
     this.unavailableReason,
     this.onOpenManga,
   });
 
   final MayaService? service;
   final bool engineReady;
+  final MayaProviderController? providerController;
   final String? unavailableReason;
   final void Function(int mangaId, String title)? onOpenManga;
 
@@ -27,7 +32,7 @@ class _MayaScreenState extends State<MayaScreen> {
   String? _error;
 
   MayaService? get _maya => widget.service;
-  bool get _available => widget.engineReady && _maya != null;
+  bool get _available => _maya != null;
 
   @override
   void dispose() {
@@ -58,6 +63,12 @@ class _MayaScreenState extends State<MayaScreen> {
   Future<void> _confirm(ActionProposal proposal) async {
     final maya = _maya;
     if (!_available || maya == null || _busy) return;
+    if (!widget.engineReady) {
+      setState(() {
+        _error = 'Inicie o motor local antes de confirmar uma ação da Maya.';
+      });
+      return;
+    }
     setState(() => _busy = true);
     try {
       final done = await maya.confirmProposal(proposal.id);
@@ -125,6 +136,21 @@ class _MayaScreenState extends State<MayaScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  Future<void> _configureProvider() async {
+    final controller = widget.providerController;
+    if (controller == null || _busy) return;
+    final changed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _MayaProviderDialog(controller: controller),
+    );
+    if (mounted) {
+      setState(() {
+        if (changed == true) _error = null;
+      });
+    }
+  }
+
   void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
@@ -150,6 +176,10 @@ class _MayaScreenState extends State<MayaScreen> {
               _MayaHeader(
                 engineReady: widget.engineReady,
                 messageCount: messages.length,
+                providerController: widget.providerController,
+                onConfigureProvider: widget.providerController == null || _busy
+                    ? null
+                    : _configureProvider,
                 onClearHistory: messages.isEmpty || _busy
                     ? null
                     : _clearHistory,
@@ -220,16 +250,16 @@ class _MayaScreenState extends State<MayaScreen> {
         ),
       );
     }
-    if (!_available && messages.isEmpty) {
-      return const Center(
-        child: Padding(padding: EdgeInsets.all(28), child: _MayaUnavailable()),
-      );
-    }
     if (messages.isEmpty) {
-      return const Center(
+      final cloudReady =
+          widget.providerController?.status ==
+          MayaProviderControllerStatus.cloudReady;
+      return Center(
         child: Text(
-          'Diga “ajuda”, “biblioteca” ou “continuar”.',
-          style: TextStyle(color: YomuTokens.textMuted, fontSize: 13.5),
+          cloudReady
+              ? 'Pergunte à Maya ou peça uma ação sobre a biblioteca.'
+              : 'Diga “ajuda”, “biblioteca” ou configure um provider.',
+          style: const TextStyle(color: YomuTokens.textMuted, fontSize: 13.5),
         ),
       );
     }
@@ -259,7 +289,7 @@ class _MayaScreenState extends State<MayaScreen> {
                     _ProposalCard(
                       proposal: proposal,
                       busy: _busy,
-                      canConfirm: _available,
+                      canConfirm: widget.engineReady,
                       onConfirm: () => _confirm(proposal),
                       onReject: () => _reject(proposal),
                     ),
@@ -278,73 +308,553 @@ class _MayaHeader extends StatelessWidget {
   const _MayaHeader({
     required this.engineReady,
     required this.messageCount,
+    required this.providerController,
+    required this.onConfigureProvider,
     required this.onClearHistory,
   });
 
   final bool engineReady;
   final int messageCount;
+  final MayaProviderController? providerController;
+  final VoidCallback? onConfigureProvider;
   final VoidCallback? onClearHistory;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(28, 20, 28, 8),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const _MayaFace(size: 40),
-        const SizedBox(width: 12),
-        Expanded(
+  Widget build(BuildContext context) {
+    final provider = _mayaProviderPresentation(providerController);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 20, 28, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _MayaFace(size: 40),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Maya',
+                  style: TextStyle(
+                    color: YomuTokens.text,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                Text(
+                  provider.cloudConfigured
+                      ? 'IA por provider · ações só após confirmação'
+                      : 'assistente local · ações só após confirmação',
+                  style: const TextStyle(
+                    color: YomuTokens.textSubtle,
+                    fontSize: 10.5,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _ContextChip(
+                      label: engineReady
+                          ? 'Biblioteca · conectada'
+                          : 'Biblioteca · offline',
+                      dot: true,
+                      dotColor: engineReady
+                          ? YomuTokens.success
+                          : YomuTokens.danger,
+                    ),
+                    _ContextChip(label: 'Histórico · $messageCount mensagens'),
+                    _ContextChip(
+                      label: provider.label,
+                      dot: true,
+                      dotColor: provider.color,
+                    ),
+                    const Tooltip(
+                      message: 'Esta função ainda não foi implementada.',
+                      child: _ContextChip(
+                        label: 'Perfil de gosto',
+                        disabled: true,
+                      ),
+                    ),
+                    YomuIconButton(
+                      tooltip: 'Configurar IA da Maya',
+                      icon: YomuIcons.settings,
+                      color: YomuTokens.textMuted,
+                      onTap: onConfigureProvider,
+                    ),
+                    YomuIconButton(
+                      tooltip: 'Limpar histórico da Maya',
+                      icon: YomuIcons.close,
+                      color: YomuTokens.danger,
+                      onTap: onClearHistory,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+({String label, Color color, bool cloudConfigured}) _mayaProviderPresentation(
+  MayaProviderController? controller,
+) {
+  if (controller == null) {
+    return (
+      label: 'IA · indisponível',
+      color: YomuTokens.textSubtle,
+      cloudConfigured: false,
+    );
+  }
+  final settings = controller.settings;
+  final providerId = settings?.providerId;
+  final provider = _mayaProviderLabel(providerId);
+  return switch (controller.status) {
+    MayaProviderControllerStatus.unset => (
+      label: 'IA · não configurada',
+      color: YomuTokens.textSubtle,
+      cloudConfigured: false,
+    ),
+    MayaProviderControllerStatus.local => (
+      label: 'Maya · local',
+      color: YomuTokens.success,
+      cloudConfigured: false,
+    ),
+    MayaProviderControllerStatus.disabled => (
+      label: '$provider · desativada',
+      color: YomuTokens.warning,
+      cloudConfigured: true,
+    ),
+    MayaProviderControllerStatus.cloudReady => (
+      label: '$provider · ${settings?.modelId ?? 'modelo pendente'}',
+      color: YomuTokens.success,
+      cloudConfigured: true,
+    ),
+    MayaProviderControllerStatus.missingCredential => (
+      label: '$provider · chave ausente',
+      color: YomuTokens.warning,
+      cloudConfigured: true,
+    ),
+    MayaProviderControllerStatus.credentialUnavailable => (
+      label: '$provider · cofre indisponível',
+      color: YomuTokens.danger,
+      cloudConfigured: true,
+    ),
+    MayaProviderControllerStatus.consentRequired => (
+      label: '$provider · novo consentimento',
+      color: YomuTokens.warning,
+      cloudConfigured: true,
+    ),
+    MayaProviderControllerStatus.unsupportedProvider ||
+    MayaProviderControllerStatus.adapterUnavailable => (
+      label: '$provider · fallback local',
+      color: YomuTokens.warning,
+      cloudConfigured: true,
+    ),
+    MayaProviderControllerStatus.closed => (
+      label: 'IA · encerrada',
+      color: YomuTokens.textSubtle,
+      cloudConfigured: false,
+    ),
+  };
+}
+
+String _mayaProviderLabel(String? providerId) => switch (providerId) {
+  'openai' => 'OpenAI',
+  'anthropic' => 'Anthropic',
+  'gemini' => 'Gemini',
+  'ollama' => 'Ollama local',
+  null => 'Provider',
+  _ => providerId,
+};
+
+const List<(String, String)> _mayaProviderChoices = <(String, String)>[
+  ('openai', 'OpenAI'),
+  ('anthropic', 'Anthropic'),
+  ('gemini', 'Google Gemini'),
+  ('ollama', 'Ollama local'),
+];
+
+class _MayaProviderDialog extends StatefulWidget {
+  const _MayaProviderDialog({required this.controller});
+
+  final MayaProviderController controller;
+
+  @override
+  State<_MayaProviderDialog> createState() => _MayaProviderDialogState();
+}
+
+class _MayaProviderDialogState extends State<_MayaProviderDialog> {
+  late String _providerId;
+  late final TextEditingController _modelController;
+  late final TextEditingController _apiKeyController;
+  late bool _shareRecentHistory;
+  late bool _shareLibraryContext;
+  late bool _cloudConsent;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final settings = widget.controller.settings;
+    final persistedProvider = settings?.providerId;
+    _providerId = kSupportedMayaProviderIds.contains(persistedProvider)
+        ? persistedProvider!
+        : 'openai';
+    _modelController = TextEditingController(text: settings?.modelId ?? '');
+    _apiKeyController = TextEditingController();
+    _shareRecentHistory = settings?.shareRecentHistory ?? false;
+    _shareLibraryContext = settings?.shareLibraryContext ?? false;
+    _cloudConsent =
+        settings?.mode == MayaProviderMode.cloud &&
+        settings?.isEnabled == true &&
+        settings?.consentVersion == kCurrentMayaProviderConsentVersion;
+  }
+
+  @override
+  void dispose() {
+    _apiKeyController.clear();
+    _apiKeyController.dispose();
+    _modelController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveCloud() async {
+    if (_saving) return;
+    final model = _modelController.text.trim();
+    if (model.isEmpty) {
+      setState(() => _error = 'Informe o ID exato do modelo.');
+      return;
+    }
+    if (!_cloudConsent) {
+      setState(() {
+        _error = 'Confirme o envio da mensagem atual antes de ativar a IA.';
+      });
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    final apiKey = _apiKeyController.text;
+    try {
+      await widget.controller.saveCloud(
+        providerId: _providerId,
+        modelPolicy: MayaProviderModelPolicy.explicit,
+        modelId: model,
+        apiKey: apiKey.trim().isEmpty ? null : apiKey,
+        shareRecentHistory: _shareRecentHistory,
+        shareLibraryContext: _shareLibraryContext,
+      );
+      _apiKeyController.clear();
+      if (mounted) Navigator.of(context).pop(true);
+    } on MayaProviderControllerException catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = error.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = 'Não foi possível salvar a configuração da Maya.';
+        });
+      }
+    }
+  }
+
+  Future<void> _saveLocal() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.controller.saveLocal();
+      _apiKeyController.clear();
+      if (mounted) Navigator.of(context).pop(true);
+    } on MayaProviderControllerException catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = error.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = 'Não foi possível ativar o modo local.';
+        });
+      }
+    }
+  }
+
+  Future<void> _removeProvider() async {
+    if (_saving) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Limpar credenciais cloud da Maya?'),
+        content: const Text(
+          'As requisições serão canceladas e todas as credenciais cloud da '
+          'Maya (OpenAI, Anthropic e Gemini) serão removidas do Windows '
+          'Credential Manager antes de ativar o modo local. O histórico '
+          'continuará disponível.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: YomuTokens.danger),
+            child: const Text('Remover com segurança'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.controller.removeProvider(
+        resetToUnset: widget.controller.settings == null,
+      );
+      _apiKeyController.clear();
+      if (mounted) Navigator.of(context).pop(true);
+    } on MayaProviderControllerException catch (error) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = error.message;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = 'Não foi possível remover o provider com segurança.';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isOllama = _providerId == 'ollama';
+    return AlertDialog(
+      title: const Text('IA da Maya'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Maya',
+                'A Maya continua segura e local por padrão. Ao ativar cloud, '
+                'somente a mensagem atual é obrigatória; histórico e '
+                'biblioteca exigem consentimentos separados.',
                 style: TextStyle(
-                  color: YomuTokens.text,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.3,
+                  color: YomuTokens.textMuted,
+                  fontSize: 12.5,
+                  height: 1.5,
                 ),
               ),
-              const Text(
-                'assistente local · ações só após confirmação',
-                style: TextStyle(color: YomuTokens.textSubtle, fontSize: 10.5),
-              ),
+              const SizedBox(height: 18),
+              const _MayaFieldLabel('Provider'),
               const SizedBox(height: 7),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  _ContextChip(
-                    label: engineReady
-                        ? 'Biblioteca · conectada'
-                        : 'Biblioteca · offline',
-                    dot: true,
-                    dotColor: engineReady
-                        ? YomuTokens.success
-                        : YomuTokens.danger,
-                  ),
-                  _ContextChip(label: 'Histórico · $messageCount mensagens'),
-                  const Tooltip(
-                    message: 'Esta função ainda não foi implementada.',
-                    child: _ContextChip(
-                      label: 'Perfil de gosto',
-                      disabled: true,
+              DropdownButtonFormField<String>(
+                value: _providerId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  hintText: 'Selecione o provider',
+                ),
+                items: [
+                  for (final choice in _mayaProviderChoices)
+                    DropdownMenuItem<String>(
+                      value: choice.$1,
+                      child: Text(choice.$2),
                     ),
-                  ),
-                  YomuIconButton(
-                    tooltip: 'Limpar histórico da Maya',
-                    icon: YomuIcons.close,
-                    color: YomuTokens.danger,
-                    onTap: onClearHistory,
-                  ),
                 ],
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        if (value == null || value == _providerId) return;
+                        setState(() {
+                          _providerId = value;
+                          _modelController.clear();
+                          _apiKeyController.clear();
+                          _cloudConsent = false;
+                          _error = null;
+                        });
+                      },
               ),
+              const SizedBox(height: 15),
+              const _MayaFieldLabel('Modelo'),
+              const SizedBox(height: 7),
+              TextField(
+                controller: _modelController,
+                enabled: !_saving,
+                autocorrect: false,
+                enableSuggestions: false,
+                decoration: InputDecoration(
+                  hintText: isOllama
+                      ? 'Nome exato do modelo instalado no Ollama'
+                      : 'ID exato do modelo do provider',
+                  helperText: isOllama
+                      ? 'Ollama permanece em 127.0.0.1:11434.'
+                      : 'O Yomu não escolhe modelo ou custo automaticamente.',
+                ),
+              ),
+              if (!isOllama) ...[
+                const SizedBox(height: 15),
+                const _MayaFieldLabel('API key'),
+                const SizedBox(height: 7),
+                TextField(
+                  controller: _apiKeyController,
+                  enabled: !_saving,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  enableInteractiveSelection: false,
+                  keyboardType: TextInputType.visiblePassword,
+                  autofillHints: const <String>[],
+                  decoration: const InputDecoration(
+                    hintText: 'Cole uma nova chave',
+                    helperText:
+                        'Nunca é exibida ou salva no SQLite. Deixe vazio para '
+                        'manter a credencial já configurada.',
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              CheckboxListTile(
+                value: _cloudConsent,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() {
+                        _cloudConsent = value ?? false;
+                        _error = null;
+                      }),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text(
+                  'Autorizo enviar a mensagem atual a este provider',
+                  style: TextStyle(fontSize: 12.5),
+                ),
+                subtitle: const Text(
+                  'Obrigatório para cada ativação cloud.',
+                  style: TextStyle(color: YomuTokens.textSubtle, fontSize: 11),
+                ),
+              ),
+              CheckboxListTile(
+                value: _shareRecentHistory,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() {
+                        _shareRecentHistory = value ?? false;
+                      }),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text(
+                  'Compartilhar histórico recente',
+                  style: TextStyle(fontSize: 12.5),
+                ),
+                subtitle: const Text(
+                  'No máximo 12 mensagens, dentro de um orçamento limitado.',
+                  style: TextStyle(color: YomuTokens.textSubtle, fontSize: 11),
+                ),
+              ),
+              CheckboxListTile(
+                value: _shareLibraryContext,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() {
+                        _shareLibraryContext = value ?? false;
+                      }),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text(
+                  'Compartilhar contexto da biblioteca',
+                  style: TextStyle(fontSize: 12.5),
+                ),
+                subtitle: const Text(
+                  'Snapshot transitório e limitado; o banco Suwayomi não é '
+                  'copiado para o SQLite Yomu.',
+                  style: TextStyle(color: YomuTokens.textSubtle, fontSize: 11),
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error!,
+                  style: const TextStyle(
+                    color: YomuTokens.danger,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : _removeProvider,
+          style: TextButton.styleFrom(foregroundColor: YomuTokens.danger),
+          child: const Text('Limpar credenciais cloud'),
+        ),
+        TextButton(
+          onPressed: _saving ? null : _saveLocal,
+          child: const Text('Usar modo local'),
+        ),
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _saveCloud,
+          child: _saving
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Salvar e ativar'),
+        ),
       ],
+    );
+  }
+}
+
+class _MayaFieldLabel extends StatelessWidget {
+  const _MayaFieldLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    text,
+    style: const TextStyle(
+      color: YomuTokens.text,
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
     ),
   );
 }

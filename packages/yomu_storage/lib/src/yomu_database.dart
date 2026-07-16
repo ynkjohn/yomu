@@ -154,6 +154,178 @@ class MayaDataCounts {
   bool get isEmpty => messageCount == 0 && proposalCount == 0;
 }
 
+/// Whether Maya remains fully local or may use a configured cloud provider.
+enum MayaProviderMode { local, cloud }
+
+/// How the model is selected for a cloud Maya provider.
+enum MayaProviderModelPolicy { providerDefault, explicit }
+
+const int kMayaProviderIdMaxChars = 64;
+const int kMayaProviderModelIdMaxChars = 200;
+
+/// Typed, non-secret Maya provider preferences.
+///
+/// A missing database row means that the user has never configured a provider.
+/// In that state callers must preserve the legacy local/offline behavior. API
+/// keys and other credentials never belong in this object or in Yomu SQLite.
+@immutable
+class MayaProviderSettings {
+  const MayaProviderSettings._({
+    required this.mode,
+    required this.isEnabled,
+    required this.providerId,
+    required this.modelPolicy,
+    required this.modelId,
+    required this.shareRecentHistory,
+    required this.shareLibraryContext,
+    required this.consentVersion,
+    required this.consentedAtMs,
+    required this.updatedAtMs,
+  });
+
+  factory MayaProviderSettings.local({required int updatedAtMs}) {
+    _requireNonNegativeTimestamp(updatedAtMs, 'updatedAtMs');
+    return MayaProviderSettings._(
+      mode: MayaProviderMode.local,
+      isEnabled: false,
+      providerId: null,
+      modelPolicy: null,
+      modelId: null,
+      shareRecentHistory: false,
+      shareLibraryContext: false,
+      consentVersion: null,
+      consentedAtMs: null,
+      updatedAtMs: updatedAtMs,
+    );
+  }
+
+  factory MayaProviderSettings.cloud({
+    required String providerId,
+    required MayaProviderModelPolicy modelPolicy,
+    String? modelId,
+    bool isEnabled = true,
+    required bool shareRecentHistory,
+    required bool shareLibraryContext,
+    required int consentVersion,
+    required int consentedAtMs,
+    required int updatedAtMs,
+  }) {
+    final normalizedProviderId = _requireBoundedSettingId(
+      providerId,
+      'providerId',
+      kMayaProviderIdMaxChars,
+    );
+    final normalizedModelId = switch (modelPolicy) {
+      MayaProviderModelPolicy.providerDefault =>
+        modelId == null
+            ? null
+            : throw ArgumentError.value(
+                modelId,
+                'modelId',
+                'must be null when modelPolicy is providerDefault',
+              ),
+      MayaProviderModelPolicy.explicit => _requireBoundedSettingId(
+        modelId,
+        'modelId',
+        kMayaProviderModelIdMaxChars,
+      ),
+    };
+    if (consentVersion <= 0) {
+      throw ArgumentError.value(
+        consentVersion,
+        'consentVersion',
+        'must be positive',
+      );
+    }
+    _requireNonNegativeTimestamp(consentedAtMs, 'consentedAtMs');
+    _requireNonNegativeTimestamp(updatedAtMs, 'updatedAtMs');
+    if (consentedAtMs > updatedAtMs) {
+      throw ArgumentError.value(
+        consentedAtMs,
+        'consentedAtMs',
+        'must not be after updatedAtMs',
+      );
+    }
+    return MayaProviderSettings._(
+      mode: MayaProviderMode.cloud,
+      isEnabled: isEnabled,
+      providerId: normalizedProviderId,
+      modelPolicy: modelPolicy,
+      modelId: normalizedModelId,
+      shareRecentHistory: shareRecentHistory,
+      shareLibraryContext: shareLibraryContext,
+      consentVersion: consentVersion,
+      consentedAtMs: consentedAtMs,
+      updatedAtMs: updatedAtMs,
+    );
+  }
+
+  int get settingsId => 1;
+
+  final MayaProviderMode mode;
+
+  /// Durable admission switch. A cloud snapshot may remain configured while
+  /// disabled so restart cannot reactivate it during recovery or cleanup.
+  final bool isEnabled;
+  final String? providerId;
+  final MayaProviderModelPolicy? modelPolicy;
+  final String? modelId;
+  final bool shareRecentHistory;
+  final bool shareLibraryContext;
+  final int? consentVersion;
+  final int? consentedAtMs;
+  final int updatedAtMs;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MayaProviderSettings &&
+          mode == other.mode &&
+          isEnabled == other.isEnabled &&
+          providerId == other.providerId &&
+          modelPolicy == other.modelPolicy &&
+          modelId == other.modelId &&
+          shareRecentHistory == other.shareRecentHistory &&
+          shareLibraryContext == other.shareLibraryContext &&
+          consentVersion == other.consentVersion &&
+          consentedAtMs == other.consentedAtMs &&
+          updatedAtMs == other.updatedAtMs;
+
+  @override
+  int get hashCode => Object.hash(
+    mode,
+    isEnabled,
+    providerId,
+    modelPolicy,
+    modelId,
+    shareRecentHistory,
+    shareLibraryContext,
+    consentVersion,
+    consentedAtMs,
+    updatedAtMs,
+  );
+}
+
+String _requireBoundedSettingId(Object? value, String name, int maxChars) {
+  if (value is! String ||
+      value.isEmpty ||
+      value.length > maxChars ||
+      value.trim() != value) {
+    throw ArgumentError.value(
+      value,
+      name,
+      'must be non-empty, trimmed, and at most $maxChars characters',
+    );
+  }
+  return value;
+}
+
+void _requireNonNegativeTimestamp(int value, String name) {
+  if (value < 0) {
+    throw ArgumentError.value(value, name, 'must be non-negative');
+  }
+}
+
 /// Yomu-owned Maya chat messages. Ordering is explicit and never inferred
 /// from timestamps, which may collide or arrive out of order.
 @DataClassName('StoredMayaMessage')
@@ -226,12 +398,67 @@ class MayaActionProposals extends Table {
   ];
 }
 
+/// Singleton, non-secret provider configuration for Maya.
+///
+/// The absence of row `settings_id = 1` is semantically distinct from an
+/// explicit `local` row. Credentials remain in the operating-system vault.
+@DataClassName('StoredMayaProviderSettings')
+class MayaProviderSettingsTable extends Table {
+  @override
+  String get tableName => 'maya_provider_settings';
+
+  IntColumn get settingsId => integer()();
+  TextColumn get mode => text()();
+  BoolColumn get isEnabled => boolean()();
+  TextColumn get providerId => text().nullable()();
+  TextColumn get modelPolicy => text().nullable()();
+  TextColumn get modelId => text().nullable()();
+  BoolColumn get shareRecentHistory => boolean()();
+  BoolColumn get shareLibraryContext => boolean()();
+  IntColumn get consentVersion => integer().nullable()();
+  IntColumn get consentedAtMs => integer().nullable()();
+  IntColumn get updatedAtMs => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {settingsId};
+
+  @override
+  List<String> get customConstraints => const [
+    'CHECK (settings_id = 1)',
+    "CHECK (mode IN ('local', 'cloud'))",
+    "CHECK (model_policy IS NULL OR model_policy IN ('provider_default', 'explicit'))",
+    'CHECK (updated_at_ms >= 0)',
+    'CHECK (consented_at_ms IS NULL OR consented_at_ms >= 0)',
+    'CHECK (consented_at_ms IS NULL OR consented_at_ms <= updated_at_ms)',
+    'CHECK (provider_id IS NULL OR '
+        '(length(provider_id) BETWEEN 1 AND 64 AND provider_id = trim(provider_id)))',
+    'CHECK (model_id IS NULL OR '
+        '(length(model_id) BETWEEN 1 AND 200 AND model_id = trim(model_id)))',
+    "CHECK ((mode = 'local' AND is_enabled = 0 AND provider_id IS NULL AND "
+        'model_policy IS NULL AND model_id IS NULL AND '
+        'share_recent_history = 0 AND share_library_context = 0 AND '
+        'consent_version IS NULL AND consented_at_ms IS NULL) OR '
+        "(mode = 'cloud' AND provider_id IS NOT NULL AND "
+        'model_policy IS NOT NULL AND consent_version IS NOT NULL AND '
+        'consent_version > 0 AND consented_at_ms IS NOT NULL AND '
+        "((model_policy = 'provider_default' AND model_id IS NULL) OR "
+        "(model_policy = 'explicit' AND model_id IS NOT NULL))))",
+  ];
+}
+
 /// Single-process Yomu SQLite database (Drift).
 ///
 /// Schema v1 contains [AppMeta]. Schema v2 adds [DeviceSessions]. Schema v3
-/// adds [MayaMessages] and [MayaActionProposals].
+/// adds [MayaMessages] and [MayaActionProposals]. Schema v4 adds the non-secret
+/// singleton [MayaProviderSettingsTable].
 @DriftDatabase(
-  tables: [AppMeta, DeviceSessions, MayaMessages, MayaActionProposals],
+  tables: [
+    AppMeta,
+    DeviceSessions,
+    MayaMessages,
+    MayaActionProposals,
+    MayaProviderSettingsTable,
+  ],
 )
 class YomuDatabase extends _$YomuDatabase {
   YomuDatabase._(
@@ -268,7 +495,7 @@ class YomuDatabase extends _$YomuDatabase {
   static Future<void> Function(YomuDatabase db)? debugAfterCreated;
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -276,7 +503,7 @@ class YomuDatabase extends _$YomuDatabase {
       await m.createAll();
     },
     onUpgrade: (m, from, to) async {
-      if (from < 1 || from >= to || to != 3) {
+      if (from < 1 || from >= to || to != 4) {
         throw StateError('Unsupported Yomu database migration: $from -> $to');
       }
       // Run forward steps in order so an installation may safely upgrade from
@@ -288,6 +515,9 @@ class YomuDatabase extends _$YomuDatabase {
       if (from < 3) {
         await m.createTable(mayaMessages);
         await m.createTable(mayaActionProposals);
+      }
+      if (from < 4) {
+        await m.createTable(mayaProviderSettingsTable);
       }
     },
   );
@@ -805,6 +1035,44 @@ class YomuDatabase extends _$YomuDatabase {
     }
   }
 
+  /// Returns null when Maya provider preferences have never been configured.
+  Future<MayaProviderSettings?> getMayaProviderSettings() async {
+    final row = await select(mayaProviderSettingsTable).getSingleOrNull();
+    if (row == null) return null;
+    return _decodeMayaProviderSettings(row);
+  }
+
+  /// Atomically replaces the complete non-secret Maya provider snapshot.
+  Future<void> setMayaProviderSettings(MayaProviderSettings settings) async {
+    await into(mayaProviderSettingsTable).insertOnConflictUpdate(
+      MayaProviderSettingsTableCompanion.insert(
+        settingsId: Value(settings.settingsId),
+        mode: settings.mode.name,
+        isEnabled: settings.isEnabled,
+        providerId: Value(settings.providerId),
+        modelPolicy: Value(switch (settings.modelPolicy) {
+          MayaProviderModelPolicy.providerDefault => 'provider_default',
+          MayaProviderModelPolicy.explicit => 'explicit',
+          null => null,
+        }),
+        modelId: Value(settings.modelId),
+        shareRecentHistory: settings.shareRecentHistory,
+        shareLibraryContext: settings.shareLibraryContext,
+        consentVersion: Value(settings.consentVersion),
+        consentedAtMs: Value(settings.consentedAtMs),
+        updatedAtMs: settings.updatedAtMs,
+      ),
+    );
+  }
+
+  /// Restores the semantically distinct, never-configured state.
+  Future<bool> resetMayaProviderSettings() async {
+    final deleted = await (delete(
+      mayaProviderSettingsTable,
+    )..where((t) => t.settingsId.equals(1))).go();
+    return deleted > 0;
+  }
+
   Future<List<StoredDeviceSession>> listDeviceSessions() {
     return (select(
       deviceSessions,
@@ -925,6 +1193,36 @@ class YomuDatabase extends _$YomuDatabase {
 
     return _closeFuture!;
   }
+}
+
+MayaProviderSettings _decodeMayaProviderSettings(
+  StoredMayaProviderSettings row,
+) {
+  final mode = switch (row.mode) {
+    'local' => MayaProviderMode.local,
+    'cloud' => MayaProviderMode.cloud,
+    _ => throw StateError('Invalid persisted Maya provider mode.'),
+  };
+  if (mode == MayaProviderMode.local) {
+    return MayaProviderSettings.local(updatedAtMs: row.updatedAtMs);
+  }
+
+  final modelPolicy = switch (row.modelPolicy) {
+    'provider_default' => MayaProviderModelPolicy.providerDefault,
+    'explicit' => MayaProviderModelPolicy.explicit,
+    _ => throw StateError('Invalid persisted Maya model policy.'),
+  };
+  return MayaProviderSettings.cloud(
+    providerId: row.providerId!,
+    modelPolicy: modelPolicy,
+    modelId: row.modelId,
+    isEnabled: row.isEnabled,
+    shareRecentHistory: row.shareRecentHistory,
+    shareLibraryContext: row.shareLibraryContext,
+    consentVersion: row.consentVersion!,
+    consentedAtMs: row.consentedAtMs!,
+    updatedAtMs: row.updatedAtMs,
+  );
 }
 
 /// Convenience: yomu root = `{appSupport}/yomu`.
