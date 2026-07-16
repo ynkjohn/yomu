@@ -14,7 +14,7 @@
 | **2D.2 — JRE bundle + lifecycle/LAN/PWA edges** | ✅ código |
 | **P0 — storage foundation (schema v1 `app_meta`)** | ✅ HEAD `941c4e8` |
 | **Pós-P0 — promoção visual desktop + correções funcionais** | ✅ conteúdo deste checkpoint |
-| **P1 — sessões/Auth no SQLite (schema v2)** | ✅ código e gates; aguardando commit |
+| **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
 
 ## Phases
 
@@ -25,15 +25,15 @@
 | 2D / 2D.1 hardening | ✅ |
 | P0 storage foundation | ✅ |
 | Pós-P0 desktop visual + reader/explore/repos fixes | ✅ conteúdo deste checkpoint |
-| P1 sessions/auth schema bump | ✅ código validado; não commitado |
+| P1 sessions/auth schema bump | ✅ commit `c9d51d3` |
 | Source Builder | bloqueado |
 | Histórico / settings / backup completos | placeholders |
 
 ## P1 — sessões e autenticação (2026-07-15)
 
 - Baseline separado: `master` / `3615126762a07427930d5579774d6b7941780baa`
-  (`feat: finalize post-p0 desktop checkpoint`), filho direto do P0. O conteúdo
-  P1 permanece uncommitted e sem staging.
+  (`feat: finalize post-p0 desktop checkpoint`), filho direto do P0. P1 foi
+  commitada separadamente em `c9d51d3`.
 - Drift migra explicitamente `1 → 2`, preserva `app_meta` e adiciona somente
   `device_sessions`. `session_id` é a primary key; `token_hash` é `NOT NULL`,
   `UNIQUE` e protegido no próprio SQLite por `CHECK` de SHA-256 lowercase.
@@ -89,7 +89,6 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 - PWA HTTP só em LAN confiável (HTTPS na fase PWA final)
 - A evidência visual atual cobre telas e modos principais, mas não todos os estados de loading/erro, menus, tooltips, foco e animações; não há alegação de fidelidade 1:1.
 - O painel de fim do leitor tem prova widget, não prova runtime atual; evitou-se alterar progresso/`isRead` real apenas para produzir screenshot.
-- P1 aguarda autorização separada para staging e commit.
 - Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
   correto, com custo de write a observar em uso LAN intenso.
 - Source Builder permanece fora de escopo e na última fase.
