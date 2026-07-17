@@ -9,8 +9,8 @@ Suwayomi-Server, o Yomu Core HTTP, autenticação local e a Maya.
 - Suwayomi permanece somente em `127.0.0.1:14567`.
 - Yomu Core usa `127.0.0.1:8787` por padrão; LAN/PWA exige opt-in.
 - Catálogo, capítulos, downloads e fatos de leitura pertencem ao Suwayomi.
-- O SQLite Yomu guarda somente extras do app; a P2C no working tree usa schema
-  v5, ainda sem commit.
+- O SQLite Yomu guarda somente extras do app; a P2C usa schema v5 no commit
+  local `eda852b`, ainda sem push.
 - Ações sensíveis da Maya exigem `ActionProposal` e confirmação explícita.
 - O provider personalizado usa Chat Completions, endpoint explícito, HTTPS
   público ou HTTP em loopback literal e chave opcional somente no WinCred.

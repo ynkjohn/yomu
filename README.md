@@ -96,7 +96,7 @@ aberto; em `LNK1168`, peça fechamento normal ao usuário.
 | Hard gate (biblioteca + salvar/retomar progresso + downloads) | ✅ (Fase 2C) |
 | PWA LAN real | ✅ (opt-in + pairing + proxy) |
 | Maya persistente + providers OpenAI/Anthropic/Gemini/Ollama | ✅ (schema v4) |
-| Provider OpenAI-compatible personalizado | ✅ P2C no working tree (schema v5; commit pendente) |
+| Provider OpenAI-compatible personalizado | ✅ commit `eda852b` (schema v5; push pendente) |
 | Source Builder | reservado para a última fase |
 
 Yomu HTTP default: `http://127.0.0.1:8787`; LAN só com opt-in. Suwayomi: `http://127.0.0.1:14567` apenas.
@@ -112,10 +112,10 @@ JAR may live under `vendor/` (gitignored if large) or downloaded on first start 
 
 ## Estado e arquitetura
 
-O baseline committed atual é `master` em
-`d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`: P0, checkpoint pós-P0, P1, P2A,
-P2B e o handoff pós-P2B estão publicados. A P2C está implementada no working
-tree com schema v5 e stageada seletivamente, mas ainda não foi commitada.
+A P2C está concluída no commit local
+`eda852bcc17f1b04c5045e32388bf6c78a6945fb`, com schema v5. `origin/master`
+permanece em
+`d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a` até autorização separada de push.
 Consulte
 `docs/current-handoff.md`, `docs/p2c-maya-custom-provider.md` e
 `docs/architecture.md` antes de continuar.

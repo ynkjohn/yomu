@@ -2,12 +2,17 @@
 
 ## Baseline atual
 
-- Branch `master`, HEAD local/remoto
-  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a` em 2026-07-16.
+- Branch `master`; a linha local contém o commit P2C
+  `eda852bcc17f1b04c5045e32388bf6c78a6945fb` e este checkpoint documental
+  posterior. Revalide o HEAD efetivo no Git.
+- `origin/master` e o remoto permanecem em
+  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`; nenhum push foi autorizado.
 - P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão commitados
-  separadamente.
-- A P2C está implementada no working tree com schema SQLite Yomu v5, mas ainda
-  não foi commitada ou publicada. O staging seletivo foi concluído.
+  e publicados separadamente.
+- A P2C está commitada localmente em `eda852b`, com schema SQLite Yomu v5, mas
+  ainda não foi publicada.
+- Este fechamento documental pós-commit altera somente seis documentos, sem
+  código ou schema.
 - A prova runtime isolada e a captura visual externa da P2C foram concluídas sem
   tocar o perfil real do usuário.
 - Handoff operacional: `docs/current-handoff.md`.
@@ -29,7 +34,7 @@
 | **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
 | **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ commit `d200521` |
 | **P2B — providers Maya (schema v4)** | ✅ commit `7a35094` |
-| **P2C — provider personalizado OpenAI-compatible** | ✅ implementação/gates/evidência runtime; commit pendente |
+| **P2C — provider personalizado OpenAI-compatible** | ✅ commit `eda852b`; push pendente |
 
 ## Phases
 
@@ -43,12 +48,12 @@
 | P1 sessions/auth schema bump | ✅ commit `c9d51d3` |
 | P2A Maya persistence schema bump | ✅ commit `d200521` |
 | P2B Maya providers schema bump | ✅ commit `7a35094` |
-| P2C provider personalizado | ✅ schema v5 stageado; commit não autorizado |
+| P2C provider personalizado | ✅ commit `eda852b` (schema v5) |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |
 
-## P2C — provider personalizado OpenAI-compatible (2026-07-16, working tree)
+## P2C — provider personalizado OpenAI-compatible (commit local `eda852b`)
 
 - Baseline committed separado: `master` /
   `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`
@@ -267,7 +272,6 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 - Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
   correto, com custo de write a observar em uso LAN intenso.
 - Source Builder permanece fora de escopo e na última fase.
-- P2C possui staging seletivo validado, mas ainda não possui commit ou push;
-  essas operações continuam condicionadas a autorizações explícitas próprias.
-  Consulte
+- P2C está commitada localmente, mas ainda não possui push; publicação continua
+  condicionada a autorização explícita própria. Consulte
   `docs/current-handoff.md`.

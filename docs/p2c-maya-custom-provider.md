@@ -2,9 +2,10 @@
 
 ## Estado
 
-A P2C está implementada no working tree sobre o baseline committed
+A P2C está concluída no commit local
+`eda852bcc17f1b04c5045e32388bf6c78a6945fb`, sobre o parent
 `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`. Ela contém um único bump Drift
-`4 → 5`, está stageada seletivamente e ainda não foi commitada ou publicada.
+`4 → 5` e ainda não foi publicada.
 
 O escopo permanece exclusivamente no desktop Flutter nativo, no boundary de
 provider da Maya e no SQLite específico do Yomu. `MayaService`,

@@ -24,38 +24,47 @@ Também autorizou encerrar somente processos órfãos criados pelas tentativas d
 captura visual P2C, sempre após ownership exato, e executar a prova runtime com
 perfil isolado. A prova runtime autorizada já foi concluída. Em 2026-07-17, o
 usuário autorizou e foi concluído o staging seletivo da allowlist nominal de 32
-arquivos.
+arquivos. O commit P2C também foi autorizado e concluído:
+`eda852bcc17f1b04c5045e32388bf6c78a6945fb`.
+O staging seletivo do checkpoint documental pós-P2C, limitado aos seis arquivos
+registrados adiante, também foi autorizado. Essa autorização não inclui o
+commit documental nem o push.
 
 Ainda não há autorização para:
 
-- commit;
 - push.
 
-Não faça nenhuma dessas operações sem autorização explícita própria. Nunca use
-`git add .`; staging deve seguir a allowlist nominal deste handoff.
+Não faça push sem autorização explícita própria. Nunca use `git add .`; qualquer
+novo staging deve seguir uma allowlist nominal revisada.
 
 ## Repositório e baseline committed
 
 - Repositório: `C:\Users\joaop\Projetos\yomu`.
 - Branch: `master`.
 - Remoto: `https://github.com/ynkjohn/yomu.git`.
-- HEAD local, `origin/master` e `ls-remote origin master`:
+- A linha local contém o commit P2C
+  `eda852bcc17f1b04c5045e32388bf6c78a6945fb` e este checkpoint documental
+  posterior; revalide o HEAD efetivo no Git.
+- `origin/master` e `ls-remote origin master`:
   `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`.
-- Divergência: zero ahead, zero behind.
-- Commit atual: `docs: record post-P2B handoff`.
+- Nenhum push foi autorizado; revalide a divergência local/remota.
+- O commit P2C é `feat(maya): add OpenAI-compatible provider`; o checkpoint
+  documental pós-P2C é o commit seguinte e deve ter o hash lido do Git.
 - P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão publicados.
-- O baseline committed continua no schema v4; o working tree P2C está no
-  schema v5.
+- A P2C está commitada apenas localmente; o schema local é v5 e o remoto ainda
+  aponta para o checkpoint pós-P2B/schema v4.
 
-Commits de persistência publicados, em ordem:
+Commits de persistência em ordem; os quatro primeiros estão publicados e o
+quinto ainda é local:
 
 1. `941c4e84efc78f5e082abd817d9790b8694dd12a` — P0 schema v1;
 2. `c9d51d3e94589ddb72a5d099d208cb66d25a0572` — P1 schema v2;
 3. `d200521aa2735c9c245fe53123afe66208fc7404` — P2A schema v3;
-4. `7a35094b80b9359327c49e198258fc3c3d255571` — P2B schema v4.
+4. `7a35094b80b9359327c49e198258fc3c3d255571` — P2B schema v4;
+5. `eda852bcc17f1b04c5045e32388bf6c78a6945fb` — P2C schema v5.
 
-A P2C deve formar um único checkpoint/commit próprio com o bump v5. Não a
-misture com outra fase de persistência.
+A P2C formou um único checkpoint/commit próprio com o bump v5 e não foi
+misturada com outra fase de persistência.
 
 ## Working tree e proteções
 
@@ -64,6 +73,11 @@ Antes da implementação P2C, o baseline material estava limpo e preservava:
 - zero staged;
 - 15 tracked status-only/EOL;
 - 180 untracked protegidos.
+
+Imediatamente após o commit P2C, a auditoria confirmou zero staged, zero diff
+material, os mesmos 15 tracked status-only/EOL e os mesmos 180 untracked
+protegidos. Este checkpoint documental pós-P2C altera somente os seis documentos
+listados adiante, sem tocar código ou schema.
 
 Os 180 protegidos são:
 
@@ -172,6 +186,8 @@ Contrato completo: `docs/p2c-maya-custom-provider.md`.
 - build Windows Debug:
   `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`;
 - `git diff --check`: limpo após o fechamento documental;
+- commit P2C `eda852b`: 32 arquivos, parent `d4d6d5b`, committed diff check
+  limpo;
 - nenhuma chamada live a provider externo foi realizada.
 
 O verificador inicialmente detectou dois problemas reais, ambos corrigidos:
@@ -216,10 +232,9 @@ Evidência P2B preservada:
 Não abra o build contra o `%APPDATA%` real: isso aplicaria o schema v5 ao banco
 real e impediria rollback simples para um binário v4.
 
-## Allowlist nominal stageada para P2C
+## Allowlist nominal usada no commit P2C
 
-O staging seletivo desta allowlist foi autorizado e concluído. Não amplie o
-índice sem nova autorização explícita:
+O commit `eda852b` contém exatamente esta allowlist de 32 arquivos:
 
 - `README.md`;
 - `apps/yomu_desktop/README.md`;
@@ -262,9 +277,20 @@ Ficam explicitamente fora:
 - os 15 tracked status-only/EOL;
 - qualquer build, `.dart_tool`, banco, WAL, SHM, log ou artefato temporário.
 
-Antes de pedir staging, reexecute hash, processos/portas, analyzer proporcional,
-`git diff --check`, status, diff integral e confira que a allowlist acima é
-idêntica ao diff material atual.
+## Allowlist proposta para o checkpoint documental pós-P2C
+
+Este fechamento factual altera somente:
+
+- `README.md`;
+- `apps/yomu_desktop/README.md`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/p2c-maya-custom-provider.md`;
+- `docs/status.md`.
+
+O staging desta allowlist de seis documentos foi autorizado em 2026-07-17. Não
+amplie o índice sem nova autorização explícita. Antes de pedir o commit, mostre
+o staged diff e revalide hash, processos/portas, `git diff --check` e status.
 
 ## Limitações e próximo passo
 
@@ -275,6 +301,6 @@ idêntica ao diff material atual.
 - OpenRouter, Groq, Together, vLLM, LM Studio e LocalAI não foram testados live;
 - PWA/mobile, memória nova, autonomia e Source Builder permanecem fora.
 
-Os checks finais, o staged diff e a igualdade da allowlist foram revalidados.
-Próximo passo seguro: pedir autorização separada de commit. Push exige
+Staging, commit e push permanecem operações com autorizações próprias. Após o
+staging documental, mostre o staged diff antes de pedir o commit; push exige
 autorização posterior própria.
