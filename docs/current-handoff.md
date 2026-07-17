@@ -27,41 +27,38 @@ usuário autorizou e foi concluído o staging seletivo da allowlist nominal de 3
 arquivos. O commit P2C também foi autorizado e concluído:
 `eda852bcc17f1b04c5045e32388bf6c78a6945fb`.
 O staging seletivo do checkpoint documental pós-P2C, limitado aos seis arquivos
-registrados adiante, também foi autorizado. Essa autorização não inclui o
-commit documental nem o push.
-
-Ainda não há autorização para:
-
-- push.
-
-Não faça push sem autorização explícita própria. Nunca use `git add .`; qualquer
-novo staging deve seguir uma allowlist nominal revisada.
+registrados adiante, também foi autorizado. O commit documental foi concluído
+em `673734b742c9b0fac99f4090ba0eb14a4d15f175`; o push normal dos dois commits
+foi autorizado e concluído. Qualquer nova operação de staging, commit ou push
+exige autorização própria. Nunca use `git add .`.
 
 ## Repositório e baseline committed
 
 - Repositório: `C:\Users\joaop\Projetos\yomu`.
 - Branch: `master`.
 - Remoto: `https://github.com/ynkjohn/yomu.git`.
-- A linha local contém o commit P2C
-  `eda852bcc17f1b04c5045e32388bf6c78a6945fb` e este checkpoint documental
-  posterior; revalide o HEAD efetivo no Git.
-- `origin/master` e `ls-remote origin master`:
-  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`.
-- Nenhum push foi autorizado; revalide a divergência local/remota.
-- O commit P2C é `feat(maya): add OpenAI-compatible provider`; o checkpoint
-  documental pós-P2C é o commit seguinte e deve ter o hash lido do Git.
-- P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão publicados.
-- A P2C está commitada apenas localmente; o schema local é v5 e o remoto ainda
-  aponta para o checkpoint pós-P2B/schema v4.
+- Na auditoria imediatamente após o push, HEAD local, `origin/master` e
+  `ls-remote origin master` estavam em
+  `673734b742c9b0fac99f4090ba0eb14a4d15f175`, divergência zero. Revalide o
+  estado efetivo em qualquer retomada.
+- O commit P2C é `eda852bcc17f1b04c5045e32388bf6c78a6945fb`
+  (`feat(maya): add OpenAI-compatible provider`).
+- O handoff pós-P2C é `673734b742c9b0fac99f4090ba0eb14a4d15f175`
+  (`docs: record post-P2C handoff`).
+- P0, checkpoint pós-P0, P1, P2A, P2B, P2C e seus handoffs estão publicados.
+- O schema publicado do SQLite Yomu é v5.
 
-Commits de persistência em ordem; os quatro primeiros estão publicados e o
-quinto ainda é local:
+Commits de persistência publicados, em ordem:
 
 1. `941c4e84efc78f5e082abd817d9790b8694dd12a` — P0 schema v1;
 2. `c9d51d3e94589ddb72a5d099d208cb66d25a0572` — P1 schema v2;
 3. `d200521aa2735c9c245fe53123afe66208fc7404` — P2A schema v3;
 4. `7a35094b80b9359327c49e198258fc3c3d255571` — P2B schema v4;
 5. `eda852bcc17f1b04c5045e32388bf6c78a6945fb` — P2C schema v5.
+
+Checkpoint documental publicado após P2C:
+
+`673734b742c9b0fac99f4090ba0eb14a4d15f175` — handoff pós-P2C.
 
 A P2C formou um único checkpoint/commit próprio com o bump v5 e não foi
 misturada com outra fase de persistência.
@@ -277,9 +274,9 @@ Ficam explicitamente fora:
 - os 15 tracked status-only/EOL;
 - qualquer build, `.dart_tool`, banco, WAL, SHM, log ou artefato temporário.
 
-## Allowlist proposta para o checkpoint documental pós-P2C
+## Allowlist da sincronização factual de publicação
 
-Este fechamento factual altera somente:
+Esta sincronização pós-push altera somente:
 
 - `README.md`;
 - `apps/yomu_desktop/README.md`;
@@ -288,9 +285,9 @@ Este fechamento factual altera somente:
 - `docs/p2c-maya-custom-provider.md`;
 - `docs/status.md`.
 
-O staging desta allowlist de seis documentos foi autorizado em 2026-07-17. Não
-amplie o índice sem nova autorização explícita. Antes de pedir o commit, mostre
-o staged diff e revalide hash, processos/portas, `git diff --check` e status.
+Qualquer staging desta allowlist de seis documentos exige nova autorização
+explícita. Não amplie a lista. Antes de pedir commit ou push, mostre os diffs
+correspondentes e revalide hash, processos/portas, status e remoto.
 
 ## Limitações e próximo passo
 
@@ -301,6 +298,5 @@ o staged diff e revalide hash, processos/portas, `git diff --check` e status.
 - OpenRouter, Groq, Together, vLLM, LM Studio e LocalAI não foram testados live;
 - PWA/mobile, memória nova, autonomia e Source Builder permanecem fora.
 
-Staging, commit e push permanecem operações com autorizações próprias. Após o
-staging documental, mostre o staged diff antes de pedir o commit; push exige
-autorização posterior própria.
+O ciclo P2C está publicado. Esta sincronização factual final permanece separada
+de código e schema; staging, commit e eventual push exigem autorizações próprias.

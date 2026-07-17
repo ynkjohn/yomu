@@ -2,16 +2,14 @@
 
 ## Baseline atual
 
-- Branch `master`; a linha local contém o commit P2C
-  `eda852bcc17f1b04c5045e32388bf6c78a6945fb` e este checkpoint documental
-  posterior. Revalide o HEAD efetivo no Git.
-- `origin/master` e o remoto permanecem em
-  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`; nenhum push foi autorizado.
+- Na auditoria de publicação de 2026-07-17, `master`, `origin/master` e o remoto
+  estavam sincronizados em `673734b742c9b0fac99f4090ba0eb14a4d15f175`.
+  Revalide o HEAD efetivo no Git.
 - P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão commitados
   e publicados separadamente.
-- A P2C está commitada localmente em `eda852b`, com schema SQLite Yomu v5, mas
-  ainda não foi publicada.
-- Este fechamento documental pós-commit altera somente seis documentos, sem
+- A P2C está publicada em `eda852b`, com schema SQLite Yomu v5; o handoff
+  pós-P2C está publicado em `673734b`.
+- Esta sincronização factual de publicação altera somente seis documentos, sem
   código ou schema.
 - A prova runtime isolada e a captura visual externa da P2C foram concluídas sem
   tocar o perfil real do usuário.
@@ -34,7 +32,7 @@
 | **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
 | **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ commit `d200521` |
 | **P2B — providers Maya (schema v4)** | ✅ commit `7a35094` |
-| **P2C — provider personalizado OpenAI-compatible** | ✅ commit `eda852b`; push pendente |
+| **P2C — provider personalizado OpenAI-compatible** | ✅ publicado em `eda852b` |
 
 ## Phases
 
@@ -272,6 +270,4 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 - Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
   correto, com custo de write a observar em uso LAN intenso.
 - Source Builder permanece fora de escopo e na última fase.
-- P2C está commitada localmente, mas ainda não possui push; publicação continua
-  condicionada a autorização explícita própria. Consulte
-  `docs/current-handoff.md`.
+- P2C e o handoff pós-P2C estão publicados. Consulte `docs/current-handoff.md`.

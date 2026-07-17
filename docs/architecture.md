@@ -84,6 +84,6 @@ indisponível mantém local/Ollama e bloqueia credenciais cloud sem fallback
 inseguro. A prova live de compatibilidade com cada serviço externo não faz
 parte dos gates certificados desta fase.
 
-A P2C foi concluída no commit local separado `eda852b`, com o único bump
-`4 → 5`; a publicação ainda exige autorização de push. Source Builder
-permanece reservado para a última fase.
+A P2C foi concluída e publicada no commit separado `eda852b`, com o único bump
+`4 → 5`; o handoff pós-P2C foi publicado em `673734b`. Source Builder permanece
+reservado para a última fase.

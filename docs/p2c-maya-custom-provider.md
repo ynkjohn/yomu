@@ -2,10 +2,11 @@
 
 ## Estado
 
-A P2C está concluída no commit local
+A P2C está concluída e publicada no commit
 `eda852bcc17f1b04c5045e32388bf6c78a6945fb`, sobre o parent
 `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`. Ela contém um único bump Drift
-`4 → 5` e ainda não foi publicada.
+`4 → 5`. O handoff pós-P2C foi publicado em
+`673734b742c9b0fac99f4090ba0eb14a4d15f175`.
 
 O escopo permanece exclusivamente no desktop Flutter nativo, no boundary de
 provider da Maya e no SQLite específico do Yomu. `MayaService`,
