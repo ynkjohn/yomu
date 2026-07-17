@@ -40,6 +40,7 @@ MayaProviderCodec createMayaProviderCodec({
     'anthropic' => AnthropicMayaProviderCodec(model: model),
     'gemini' => GeminiMayaProviderCodec(model: model),
     'ollama' => OllamaMayaProviderCodec(model: model),
+    'openai-compatible' => OpenAiChatMayaProviderCodec(model: model),
     _ => throw const MayaLlmException(MayaLlmFailureKind.configuration),
   };
 }
@@ -233,6 +234,55 @@ final class OllamaMayaProviderCodec implements MayaProviderCodec {
   }
 }
 
+/// Narrow OpenAI Chat Completions codec for the custom compatible provider.
+///
+/// Built-in OpenAI deliberately remains on the Responses API. This separate
+/// codec prevents protocol drift and does not accept arbitrary request
+/// templates, headers or capability negotiation.
+final class OpenAiChatMayaProviderCodec implements MayaProviderCodec {
+  OpenAiChatMayaProviderCodec({required String model})
+    : model = _requireExplicitModel(model);
+
+  @override
+  final String model;
+
+  @override
+  String get providerId => 'openai-compatible';
+
+  @override
+  Map<String, Object?> encode(MayaLlmRequest request) {
+    return <String, Object?>{
+      'model': model,
+      'messages': _openAiChatMessages(request),
+      'tools': _availableTools(request, _openAiChatTool),
+      'max_tokens': kMayaProviderMaxOutputTokens,
+      'stream': false,
+      'parallel_tool_calls': false,
+    };
+  }
+
+  @override
+  MayaLlmResponse decode(Map<String, Object?> response) {
+    final decoded = _DecodedMayaResponse();
+    for (final rawChoice in _asList(response['choices'])) {
+      final choice = _asStringMap(rawChoice);
+      final message = _asStringMap(choice?['message']);
+      if (message == null) continue;
+      decoded.addText(message['content']);
+      for (final rawCall in _asList(message['tool_calls'])) {
+        final call = _asStringMap(rawCall);
+        final function = _asStringMap(call?['function']);
+        if (function == null) continue;
+        decoded.addTool(
+          function['name'],
+          _asStringMapOrJson(function['arguments']),
+        );
+      }
+    }
+    return decoded.build();
+  }
+}
+
 String _requireExplicitModel(String model) {
   final normalized = model.trim();
   if (normalized.isEmpty) {
@@ -288,6 +338,24 @@ List<Object?> _geminiContents(MayaLlmRequest request) {
 }
 
 List<Object?> _ollamaMessages(MayaLlmRequest request) {
+  return <Object?>[
+    const <String, Object?>{
+      'role': 'system',
+      'content': kMayaProviderSystemPrompt,
+    },
+    for (final message in request.history)
+      <String, Object?>{
+        'role': _commonRole(message.role),
+        'content': message.text,
+      },
+    <String, Object?>{
+      'role': 'user',
+      'content': _currentContextJsonMessage(request),
+    },
+  ];
+}
+
+List<Object?> _openAiChatMessages(MayaLlmRequest request) {
   return <Object?>[
     const <String, Object?>{
       'role': 'system',
@@ -374,6 +442,18 @@ Map<String, Object?> _ollamaTool(MayaLlmTool tool) {
       'name': _toolName(tool),
       'description': _toolDescription(tool),
       'parameters': _toolSchema(tool),
+    },
+  };
+}
+
+Map<String, Object?> _openAiChatTool(MayaLlmTool tool) {
+  return <String, Object?>{
+    'type': 'function',
+    'function': <String, Object?>{
+      'name': _toolName(tool),
+      'description': _toolDescription(tool),
+      'parameters': _toolSchema(tool),
+      'strict': true,
     },
   };
 }

@@ -5,6 +5,8 @@ import 'dart:typed_data';
 
 import 'package:yomu_ai/yomu_ai.dart';
 
+import 'maya_custom_provider_security.dart';
+
 const int kMayaProviderMaxRequestBytes = 256 * 1024;
 const int kMayaProviderMaxResponseBytes = 1024 * 1024;
 const int kMayaProviderMaxHeaders = 32;
@@ -12,6 +14,11 @@ const int kMayaProviderMaxHeaderBytes = 32 * 1024;
 const int kMayaProviderMaxHeaderValueBytes = 8 * 1024;
 
 typedef MayaHttpClientFactory = HttpClient Function();
+typedef MayaDnsLookup = Future<List<InternetAddress>> Function(String host);
+typedef MayaSocketConnector =
+    Future<ConnectionTask<Socket>> Function(InternetAddress address, int port);
+typedef MayaSecureSocketUpgrader =
+    Future<Socket> Function(Socket socket, String host);
 
 /// Minimal provider transport boundary used by concrete adapters and tests.
 ///
@@ -57,6 +64,9 @@ final class MayaProviderHttpTransport implements MayaProviderTransport {
     this.maxRequestBytes = kMayaProviderMaxRequestBytes,
     this.maxResponseBytes = kMayaProviderMaxResponseBytes,
     MayaHttpClientFactory? clientFactory,
+    MayaDnsLookup? dnsLookup,
+    MayaSocketConnector? socketConnector,
+    MayaSecureSocketUpgrader? secureSocketUpgrader,
   }) : _clientFactory = clientFactory ?? HttpClient.new {
     if (totalTimeout <= Duration.zero ||
         totalTimeout > const Duration(minutes: 2) ||
@@ -66,12 +76,22 @@ final class MayaProviderHttpTransport implements MayaProviderTransport {
         maxResponseBytes > kMayaProviderMaxResponseBytes) {
       throw const MayaLlmException(MayaLlmFailureKind.configuration);
     }
+    _dnsLookup = dnsLookup ?? InternetAddress.lookup;
+    _socketConnector =
+        socketConnector ??
+        ((address, port) => Socket.startConnect(address, port));
+    _secureSocketUpgrader =
+        secureSocketUpgrader ??
+        ((socket, host) => SecureSocket.secure(socket, host: host));
   }
 
   final Duration totalTimeout;
   final int maxRequestBytes;
   final int maxResponseBytes;
   final MayaHttpClientFactory _clientFactory;
+  late final MayaDnsLookup _dnsLookup;
+  late final MayaSocketConnector _socketConnector;
+  late final MayaSecureSocketUpgrader _secureSocketUpgrader;
 
   final Set<_MayaHttpOperation> _active = <_MayaHttpOperation>{};
   bool _closed = false;
@@ -116,7 +136,8 @@ final class MayaProviderHttpTransport implements MayaProviderTransport {
       client = _clientFactory()
         ..autoUncompress = true
         ..connectionTimeout = totalTimeout
-        ..idleTimeout = totalTimeout;
+        ..idleTimeout = totalTimeout
+        ..findProxy = (_) => 'DIRECT';
       operation = _MayaHttpOperation(client);
       _active.add(operation);
 
@@ -130,6 +151,44 @@ final class MayaProviderHttpTransport implements MayaProviderTransport {
         totalTimeout,
         () => operation?.abort(_MayaHttpAbortReason.timeout),
       );
+
+      final resolvedAddress = await _resolveEndpoint(endpoint, operation);
+      operation.throwIfAborted();
+      cancellation.throwIfCancelled();
+      if (_closed) {
+        operation.abort(_MayaHttpAbortReason.shutdown);
+        operation.throwIfAborted();
+      }
+      client.connectionFactory = (uri, proxyHost, proxyPort) async {
+        if (proxyHost != null || !_sameOrigin(uri, endpoint)) {
+          return Future<ConnectionTask<Socket>>.error(
+            const MayaLlmException(MayaLlmFailureKind.configuration),
+          );
+        }
+        final rawTask = await _socketConnector(resolvedAddress, uri.port);
+        if (uri.scheme == 'http') return rawTask;
+        Socket? connectedSocket;
+        var cancelled = false;
+        final secureSocket = rawTask.socket.then((socket) async {
+          connectedSocket = socket;
+          if (cancelled) {
+            socket.destroy();
+            throw const SocketException('Connection cancelled');
+          }
+          final upgraded = await _secureSocketUpgrader(socket, uri.host);
+          connectedSocket = upgraded;
+          if (cancelled) {
+            upgraded.destroy();
+            throw const SocketException('Connection cancelled');
+          }
+          return upgraded;
+        });
+        return ConnectionTask.fromSocket<Socket>(secureSocket, () {
+          cancelled = true;
+          connectedSocket?.destroy();
+          rawTask.cancel();
+        });
+      };
 
       final request = await client.openUrl('POST', endpoint);
       operation.request = request;
@@ -251,7 +310,10 @@ final class MayaProviderHttpTransport implements MayaProviderTransport {
         !endpoint.hasAuthority ||
         endpoint.host.isEmpty ||
         endpoint.userInfo.isNotEmpty ||
-        endpoint.fragment.isNotEmpty) {
+        endpoint.hasQuery ||
+        endpoint.hasFragment ||
+        endpoint.port < 1 ||
+        endpoint.port > 65535) {
       throw const MayaLlmException(MayaLlmFailureKind.configuration);
     }
     if (endpoint.scheme == 'https') return;
@@ -261,6 +323,48 @@ final class MayaProviderHttpTransport implements MayaProviderTransport {
     }
     throw const MayaLlmException(MayaLlmFailureKind.configuration);
   }
+
+  Future<InternetAddress> _resolveEndpoint(
+    Uri endpoint,
+    _MayaHttpOperation operation,
+  ) async {
+    final literal = InternetAddress.tryParse(endpoint.host);
+    if (literal != null) {
+      if (endpoint.scheme == 'http') {
+        if (!literal.isLoopback) {
+          throw const MayaLlmException(MayaLlmFailureKind.configuration);
+        }
+      } else if (!isMayaPublicInternetAddress(literal)) {
+        throw const MayaLlmException(MayaLlmFailureKind.configuration);
+      }
+      return literal;
+    }
+
+    late final Future<List<InternetAddress>> lookup;
+    try {
+      lookup = _dnsLookup(endpoint.host);
+    } catch (_) {
+      throw const MayaLlmException(MayaLlmFailureKind.transport);
+    }
+    final addresses =
+        await Future.any<List<InternetAddress>>(<Future<List<InternetAddress>>>[
+          lookup,
+          operation.whenAborted.then<List<InternetAddress>>((reason) {
+            throw _exceptionForAbort(reason);
+          }),
+        ]);
+    operation.throwIfAborted();
+    if (addresses.isEmpty ||
+        addresses.any((a) => !isMayaPublicInternetAddress(a))) {
+      throw const MayaLlmException(MayaLlmFailureKind.configuration);
+    }
+    return addresses.first;
+  }
+
+  static bool _sameOrigin(Uri actual, Uri expected) =>
+      actual.scheme == expected.scheme &&
+      actual.host.toLowerCase() == expected.host.toLowerCase() &&
+      actual.port == expected.port;
 
   static Map<String, String> _validateHeaders(Map<String, String> headers) {
     if (headers.length > kMayaProviderMaxHeaders) {
@@ -333,15 +437,20 @@ final class _MayaHttpOperation {
 
   final HttpClient client;
   final Completer<void> _done = Completer<void>();
+  final Completer<_MayaHttpAbortReason> _aborted =
+      Completer<_MayaHttpAbortReason>();
   HttpClientRequest? request;
   _MayaHttpAbortReason? abortReason;
   bool _finished = false;
 
   Future<void> get done => _done.future;
 
+  Future<_MayaHttpAbortReason> get whenAborted => _aborted.future;
+
   void abort(_MayaHttpAbortReason reason) {
     if (_finished || abortReason != null) return;
     abortReason = reason;
+    if (!_aborted.isCompleted) _aborted.complete(reason);
     final failure = MayaProviderHttpTransport._exceptionForAbort(reason);
     try {
       request?.abort(failure);

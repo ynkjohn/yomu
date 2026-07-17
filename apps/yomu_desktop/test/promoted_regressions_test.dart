@@ -560,6 +560,85 @@ void main() {
     },
   );
 
+  testWidgets('Maya custom provider shows exact destination and optional key', (
+    tester,
+  ) async {
+    await setDesktopSurface(tester);
+    final fixture = (await tester.runAsync(_MayaProviderUiFixture.create))!;
+    addTearDown(() async {
+      await tester.runAsync(fixture.close);
+    });
+    final provider = (await tester.runAsync(fixture.openController))!;
+    final maya = MayaService(
+      store: MayaStore.inMemory(),
+      libraryPort: _NoopMayaPort(),
+    );
+    addMayaTearDown(tester, maya);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: Scaffold(
+          body: MayaScreen(
+            service: maya,
+            engineReady: false,
+            providerController: provider,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('Configurar IA da Maya'));
+    await tester.pumpAndSettle();
+
+    final providerField = tester.widget<DropdownButtonFormField<String>>(
+      find.byType(DropdownButtonFormField<String>),
+    );
+    providerField.onChanged!('openai-compatible');
+    await tester.pump();
+
+    final endpointField = _mayaTextFieldWithHint(
+      'https://api.exemplo.com/v1/chat/completions',
+    );
+    final modelField = _mayaTextFieldWithHint('ID exato do modelo do provider');
+    expect(endpointField, findsOneWidget);
+    expect(_mayaCheckbox(tester, 'Usar API key').value, isTrue);
+
+    const endpoint = 'http://127.0.0.1:1234/v1/chat/completions';
+    await tester.enterText(endpointField, endpoint);
+    await tester.enterText(modelField, 'local-compatible');
+    await tester.tap(_mayaCheckboxFinder('Usar API key'));
+    await tester.pump();
+
+    expect(_mayaCheckbox(tester, 'Usar API key').value, isFalse);
+    expect(_mayaTextFieldWithHint('Cole uma nova chave'), findsNothing);
+    expect(find.text('Destino exato: $endpoint'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Salvar e ativar'));
+    await tester.pump();
+    expect(
+      find.text('Confirme o envio da mensagem atual antes de ativar a IA.'),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      _mayaCheckboxFinder(
+        'Autorizo enviar a mensagem atual para este endpoint',
+      ),
+    );
+    await _invokeAsyncFilledButton(
+      tester,
+      find.widgetWithText(FilledButton, 'Salvar e ativar'),
+    );
+    await tester.pumpAndSettle();
+
+    expect(provider.status, MayaProviderControllerStatus.cloudReady);
+    expect(provider.settings?.providerId, 'openai-compatible');
+    expect(provider.customSettings?.endpointUrl, endpoint);
+    expect(provider.customSettings?.useApiKey, isFalse);
+    expect(find.text('OpenAI-compatible · local-compatible'), findsOneWidget);
+  });
+
   testWidgets('Maya exposes a sanitized degraded provider status', (
     tester,
   ) async {

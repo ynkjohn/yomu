@@ -1,8 +1,7 @@
 # Yomu — handoff atual
 
-Snapshot factual preparado em 2026-07-16 para retomada em uma nova conversa.
-Toda nova sessão deve revalidar o estado; código, diff e comportamento atual
-prevalecem sobre este documento.
+Snapshot factual preparado em 2026-07-16 durante o fechamento da P2C. Código,
+diff e comportamento atual prevalecem sobre este documento.
 
 ## Retomada obrigatória
 
@@ -18,251 +17,264 @@ git status --short --untracked-files=all
 
 Não acesse `C:\Users\joaop\Projetos\multiyomi`.
 
-## Repositório e baseline
+## Autorizações e stop conditions
+
+O usuário autorizou a implementação P2C e o único schema bump `4 → 5`.
+Também autorizou encerrar somente processos órfãos criados pelas tentativas de
+captura visual P2C, sempre após ownership exato, e executar a prova runtime com
+perfil isolado. A prova runtime autorizada já foi concluída. Em 2026-07-17, o
+usuário autorizou e foi concluído o staging seletivo da allowlist nominal de 32
+arquivos.
+
+Ainda não há autorização para:
+
+- commit;
+- push.
+
+Não faça nenhuma dessas operações sem autorização explícita própria. Nunca use
+`git add .`; staging deve seguir a allowlist nominal deste handoff.
+
+## Repositório e baseline committed
 
 - Repositório: `C:\Users\joaop\Projetos\yomu`.
 - Branch: `master`.
 - Remoto: `https://github.com/ynkjohn/yomu.git`.
-- HEAD local, `origin/master` e `ls-remote origin master` na auditoria:
-  `7a35094b80b9359327c49e198258fc3c3d255571`.
-- Divergência auditada: zero ahead, zero behind.
-- P0 `941c4e84efc78f5e082abd817d9790b8694dd12a` é ancestral do HEAD.
+- HEAD local, `origin/master` e `ls-remote origin master`:
+  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`.
+- Divergência: zero ahead, zero behind.
+- Commit atual: `docs: record post-P2B handoff`.
+- P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão publicados.
+- O baseline committed continua no schema v4; o working tree P2C está no
+  schema v5.
 
-Commits após P0, em ordem:
+Commits de persistência publicados, em ordem:
 
-1. `3615126762a07427930d5579774d6b7941780baa` —
-   `feat: finalize post-p0 desktop checkpoint`;
-2. `c9d51d3e94589ddb72a5d099d208cb66d25a0572` —
-   `feat(auth): persist device sessions in SQLite`;
-3. `9d17320d6dffaf61aeaf6ff40e5a476d48f8fb6d` —
-   `docs: record completed P1 checkpoint`;
-4. `d200521aa2735c9c245fe53123afe66208fc7404` —
-   `feat(maya): persist history in SQLite`;
-5. `7a35094b80b9359327c49e198258fc3c3d255571` —
-   `feat(maya): add provider integrations`.
+1. `941c4e84efc78f5e082abd817d9790b8694dd12a` — P0 schema v1;
+2. `c9d51d3e94589ddb72a5d099d208cb66d25a0572` — P1 schema v2;
+3. `d200521aa2735c9c245fe53123afe66208fc7404` — P2A schema v3;
+4. `7a35094b80b9359327c49e198258fc3c3d255571` — P2B schema v4.
 
-P0, checkpoint pós-P0, P1, P2A e P2B estão separados e publicados em
-`origin/master`. Não reimplementar nem combinar essas fases.
+A P2C deve formar um único checkpoint/commit próprio com o bump v5. Não a
+misture com outra fase de persistência.
 
-## Working tree auditada antes deste handoff
+## Working tree e proteções
 
-- Staged: zero.
-- Diff material unstaged: zero.
-- Tracked status-only/EOL: 16.
-- Untracked: 180, todos em áreas protegidas.
-- Outros untracked: zero.
+Antes da implementação P2C, o baseline material estava limpo e preservava:
 
-Classificação dos 180 untracked:
+- zero staged;
+- 15 tracked status-only/EOL;
+- 180 untracked protegidos.
+
+Os 180 protegidos são:
 
 - 28 em `.playwright-cli/**`;
 - 146 em `design_prod/**`;
 - 6 em `mcps/tasks/tools/**`.
 
-Os 16 tracked status-only/EOL são:
+Essas áreas permanecem intocadas e devem ficar fora de qualquer allowlist.
+`pubspec.lock` não mudou. O `crypto: ^3.0.6` foi declarado diretamente no
+desktop, mas já estava resolvido e travado no workspace; nenhum SDK ou pacote
+foi atualizado.
 
-- `apps/yomu_desktop/.gitignore`;
-- `apps/yomu_desktop/README.md`;
-- `apps/yomu_desktop/analysis_options.yaml`;
-- `apps/yomu_desktop/assets/vendor/manifest.json`;
-- `apps/yomu_desktop/windows/.gitignore`;
-- `apps/yomu_desktop/windows/CMakeLists.txt`;
-- `apps/yomu_desktop/windows/flutter/CMakeLists.txt`;
-- `apps/yomu_desktop/windows/runner/CMakeLists.txt`;
-- `apps/yomu_desktop/windows/runner/Runner.rc`;
-- `apps/yomu_desktop/windows/runner/flutter_window.cpp`;
-- `apps/yomu_desktop/windows/runner/flutter_window.h`;
-- `apps/yomu_desktop/windows/runner/resource.h`;
-- `apps/yomu_desktop/windows/runner/runner.exe.manifest`;
-- `apps/yomu_desktop/windows/runner/utils.cpp`;
-- `apps/yomu_desktop/windows/runner/utils.h`;
-- `packages/yomu_suwayomi/vendor/manifest.json`.
+SHA-256 preservado de
+`design_prod\design em producao.html`:
 
-Eles não possuíam diff material e não devem entrar em allowlist apenas para
-normalizar EOL.
+`8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`
 
-Esta sessão de handoff altera somente documentação de contexto:
-`AGENTS.md`, `README.md`, `apps/yomu_desktop/README.md`, `docs/status.md`,
-`docs/architecture.md`, `docs/data-model.md`,
-`docs/suwayomi-integration.md`, `docs/iphone-runbook.md`,
-`docs/phase-maya-minima.md` e este arquivo. Essas mudanças permanecem
-uncommitted até autorização explícita de staging e commit.
+## P2C implementada — contrato
 
-Relatórios de P1, P2A, P2B e fases anteriores são registros históricos e não
-devem ser reescritos para fingir que recursos posteriores já existiam naquela
-época. Para estado corrente, use primeiro este handoff e `docs/status.md`.
+A P2C adiciona um único perfil personalizado `openai-compatible`:
 
-Estado esperado imediatamente após esta atualização documental:
+- somente protocolo Chat Completions;
+- endpoint e modelo explícitos;
+- API key opcional no Windows Credential Manager;
+- URL canônica terminando exatamente em `/chat/completions`;
+- query, fragmento, userinfo, percent-encoding ambíguo e redirects bloqueados;
+- portas aceitas somente em `1..65535`;
+- HTTPS somente para endereços públicos;
+- HTTP somente para IPv4/IPv6 loopback literal;
+- `localhost`, LAN, RFC1918, ULA, link-local, CGNAT, multicast, documentação,
+  benchmark e ranges especiais bloqueados;
+- DNS resolvido a cada request; resposta privada, vazia ou mista rejeitada;
+- conexão TCP no IP validado, sem segunda resolução;
+- HTTPS promovido com `SecureSocket.secure(host: hostname)`, preservando SNI e
+  validação de certificado;
+- proxy forçado a `DIRECT`; nenhum bypass de certificado;
+- único header custom possível: `Authorization: Bearer`;
+- body fixo com `messages`, tools limitadas, `max_tokens: 1024`,
+  `stream: false` e `parallel_tool_calls: false`;
+- model ID custom é opaco e limitado, aceita `/` e espaço, mas rejeita
+  caracteres de controle;
+- tools continuam gerando apenas `ActionProposal` pendente;
+- fallback local, lease, cancelamento e shutdown permanecem fail-closed.
 
-- zero staged;
-- nove tracked com diff material, todos documentação;
-- 15 tracked status-only/EOL preservados;
-- 181 untracked: os 180 artefatos protegidos originais mais este handoff;
-- nenhum outro arquivo material.
+O provider OpenAI built-in continua separado em `/v1/responses`.
 
-Allowlist nominal proposta para um futuro commit exclusivamente documental:
+## Schema v5
 
-- `AGENTS.md`;
+O bump v4→v5 adiciona somente
+`maya_custom_provider_settings`:
+
+- `settings_id = 1`;
+- `endpoint_url` canônica e não secreta;
+- `use_api_key`;
+- `updated_at_ms`.
+
+A migração é aditiva, cria a tabela vazia, preserva a row P2B e não inventa
+perfil custom. O perfil ativo deve ter `updated_at_ms` igual ao
+`consented_at_ms` da row geral. Ausência, corrupção ou mismatch não criam
+adapter.
+
+Snapshots Drift v1–v5 estão em `packages/yomu_storage/drift_schemas` e
+`packages/yomu_storage/test/generated`.
+
+## Credencial e lifecycle
+
+Target custom fixo:
+
+`app.yomu/maya/provider/openai-compatible`
+
+O username WinCred contém `sha256:<digest-do-endpoint-canônico>`. Uma chave só
+é lida quando o binding coincide. Alterar endpoint e deixar a chave vazia não
+reutiliza o credential anterior. `use_api_key = false` remove e verifica a
+ausência do target antes de ativar.
+
+O controller persiste atomicamente o perfil e um snapshot geral disabled antes
+de mudar o cofre. Modo local preserva o perfil. Limpeza explícita remove todos
+os credentials cloud, apaga o perfil e finaliza local/unset. Falhas deixam
+restart duravelmente desativado ou degradado.
+
+## Auditoria arquitetural e de segurança
+
+A revisão confirmou:
+
+- desktop continua Flutter Windows nativo;
+- nenhuma mudança em `MayaService`, `ActionProposal`, Core, Suwayomi ou PWA;
+- nenhum fato de leitura foi duplicado no Yomu SQLite;
+- não há header/body/template arbitrário;
+- credencial não entra no SQLite, WAL, SHM, JSON, logs ou erro;
+- o achado crítico de TCP puro sob `HttpClient.connectionFactory` foi corrigido
+  com promoção TLS explícita e teste de hostname/SNI;
+- respostas remotas permanecem não confiáveis e sem autoridade autônoma.
+
+Contrato completo: `docs/p2c-maya-custom-provider.md`.
+
+## Validação atual
+
+- segurança + transporte + adapters: 36/36;
+- controller + transporte após hardening: 45/45;
+- `packages/yomu_storage`: 39/39;
+- Auth afetado pelo schema v5: 16/16;
+- desktop completo: 196/196;
+- analyzer desktop: limpo;
+- analyzer da raiz: limpo;
+- `tool\verify_workspace.ps1`: aprovado em 213,6 s;
+- build Windows Debug:
+  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`;
+- `git diff --check`: limpo após o fechamento documental;
+- nenhuma chamada live a provider externo foi realizada.
+
+O verificador inicialmente detectou dois problemas reais, ambos corrigidos:
+
+1. snapshot Drift v5 gerado sem data classes tipadas; foi regenerado pela
+   ferramenta Drift 2.28.0 com `drift_schema_v5.json`;
+2. teste Auth ainda esperava `user_version = 4`; agora comprova migração até v5.
+
+## Evidência visual e processos
+
+A regressão Flutter comprova seleção OpenAI-compatible, destino exato, chave
+opcional, consentimento e persistência. Três tentativas de rasterização externa
+via `flutter_tester` ficaram presas; todos os PIDs foram revalidados e somente
+os runners pertencentes ao teste P2C foram encerrados. O teste temporário foi
+removido.
+
+A prova runtime posterior iniciou o build Windows com `APPDATA` e
+`LOCALAPPDATA` sob
+`C:\Users\joaop\AppData\Local\Temp\yomu-p2c-runtime-53d6bcbf43ca42878ef365da016bbd42`.
+O PID 31504 teve executable path e command line confirmados antes da interação.
+No diálogo real, foram selecionados/preenchidos:
+
+- provider `OpenAI-compatible`;
+- endpoint `http://127.0.0.1:1234/v1/chat/completions`;
+- modelo `local-compatible`;
+- `Usar API key` desativado.
+
+A captura direta do HWND, sem conteúdo de outras janelas, foi inspecionada e
+gravada em
+`C:\Users\joaop\Downloads\yomu-sol-final\2026-07-16\02-p2c-maya-custom-provider-dialog.png`,
+SHA-256 `182A544A1CA21ADE28C03C1FB16A1B8FCB3D42C84FDA50DEA2F4877E6EF0F0DC`.
+O PID 31504 aceitou `CloseMainWindow()` e saiu normalmente. Depois do teardown:
+
+- nenhum Yomu, Java, Dart, Flutter ou `flutter_tester` permaneceu;
+- não havia listener em 8787, 14567 ou 11434;
+- o runtime root foi verificado como diretório comum, filho direto do Temp
+  autorizado, e removido.
+
+Evidência P2B preservada:
+`C:\Users\joaop\Downloads\yomu-sol-final\2026-07-16\01-p2b-maya-provider-dialog.png`.
+
+Não abra o build contra o `%APPDATA%` real: isso aplicaria o schema v5 ao banco
+real e impediria rollback simples para um binário v4.
+
+## Allowlist nominal stageada para P2C
+
+O staging seletivo desta allowlist foi autorizado e concluído. Não amplie o
+índice sem nova autorização explícita:
+
 - `README.md`;
 - `apps/yomu_desktop/README.md`;
+- `apps/yomu_desktop/lib/screens/maya_screen.dart`;
+- `apps/yomu_desktop/lib/services/maya_credential_store.dart`;
+- `apps/yomu_desktop/lib/services/maya_custom_provider_security.dart`;
+- `apps/yomu_desktop/lib/services/maya_provider_adapters.dart`;
+- `apps/yomu_desktop/lib/services/maya_provider_codecs.dart`;
+- `apps/yomu_desktop/lib/services/maya_provider_controller.dart`;
+- `apps/yomu_desktop/lib/services/maya_provider_transport.dart`;
+- `apps/yomu_desktop/lib/services/windows_maya_credential_store.dart`;
+- `apps/yomu_desktop/pubspec.yaml`;
+- `apps/yomu_desktop/test/maya_credential_store_test.dart`;
+- `apps/yomu_desktop/test/maya_custom_provider_security_test.dart`;
+- `apps/yomu_desktop/test/maya_provider_adapters_test.dart`;
+- `apps/yomu_desktop/test/maya_provider_codecs_test.dart`;
+- `apps/yomu_desktop/test/maya_provider_controller_test.dart`;
+- `apps/yomu_desktop/test/maya_provider_transport_test.dart`;
+- `apps/yomu_desktop/test/promoted_regressions_test.dart`;
+- `apps/yomu_desktop/test/windows_maya_credential_store_test.dart`;
 - `docs/architecture.md`;
 - `docs/current-handoff.md`;
 - `docs/data-model.md`;
-- `docs/iphone-runbook.md`;
+- `docs/p2c-maya-custom-provider.md`;
 - `docs/phase-maya-minima.md`;
 - `docs/status.md`;
-- `docs/suwayomi-integration.md`.
+- `packages/yomu_local_server/test/device_auth_test.dart`;
+- `packages/yomu_storage/drift_schemas/drift_schema_v5.json`;
+- `packages/yomu_storage/lib/src/yomu_database.dart`;
+- `packages/yomu_storage/lib/src/yomu_database.g.dart`;
+- `packages/yomu_storage/test/generated/schema.dart`;
+- `packages/yomu_storage/test/generated/schema_v5.dart`;
+- `packages/yomu_storage/test/yomu_database_test.dart`.
 
-Não stagear essa allowlist sem nova autorização explícita. Os 15 arquivos
-status-only/EOL e os 180 artefatos protegidos ficam fora.
+Ficam explicitamente fora:
 
-## Referências e runtime no snapshot
+- `design_prod/**`;
+- `.playwright-cli/**`;
+- `mcps/tasks/tools/**`;
+- os 15 tracked status-only/EOL;
+- qualquer build, `.dart_tool`, banco, WAL, SHM, log ou artefato temporário.
 
-- `design_prod/**`, `.playwright-cli/**` e `mcps/tasks/tools/**` permanecem
-  intocados e fora de qualquer commit.
-- Referência desktop:
-  `design_prod\design em producao.html`.
-- SHA-256 confirmado:
-  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
-- Evidência P2B externa:
-  `C:\Users\joaop\Downloads\yomu-sol-final\2026-07-16\01-p2b-maya-provider-dialog.png`.
+Antes de pedir staging, reexecute hash, processos/portas, analyzer proporcional,
+`git diff --check`, status, diff integral e confira que a allowlist acima é
+idêntica ao diff material atual.
 
-Na auditoria deste handoff havia processos ativos, portanto não assuma portas
-livres e não execute build sem revalidar:
+## Limitações e próximo passo
 
-- `yomu_desktop.exe` PID 44076, do build Debug deste repo, em
-  `127.0.0.1:8787`;
-- `java.exe` PID 39264, filho do Yomu, em `127.0.0.1:14567`;
-- nenhum listener em `11434`;
-- nenhum Dart, Flutter ou `flutter_tester` detectado.
+- sem streaming, Responses API custom, múltiplos perfis ou capability
+  negotiation;
+- sem headers adicionais, templates, proxy do sistema ou certificados custom;
+- LAN custom deliberadamente bloqueada;
+- OpenRouter, Groq, Together, vLLM, LM Studio e LocalAI não foram testados live;
+- PWA/mobile, memória nova, autonomia e Source Builder permanecem fora.
 
-Nenhum processo foi encerrado. PIDs são voláteis; confirme ownership novamente
-antes de qualquer ação.
-
-## Arquitetura que não pode ser alterada sem produto
-
-- Desktop Flutter Windows nativo; sem Electron, WebView ou Python UI.
-- Suwayomi-Server é o engine local e fica somente em `127.0.0.1:14567`.
-- Yomu Core fica por padrão em `127.0.0.1:8787`; LAN/PWA é opt-in.
-- Desktop é a fonte de verdade; iPhone usa PWA LAN; Android é futuro.
-- Suwayomi DB é dono de catálogo, mangas, capítulos, páginas, downloads,
-  progresso, read flags e fatos de leitura.
-- Yomu SQLite guarda apenas dados específicos do app.
-- Maya é opcional e local-first. Ações sensíveis exigem `ActionProposal` e
-  confirmação explícita.
-- Não usar Docker. Source Builder é a última fase.
-- Versões fixas: Flutter 3.32.5, Dart 3.8.1, Drift 2.28.0 e sqlite3 2.9.4;
-  sem `sqlite3_flutter_libs` e sem upgrades automáticos.
-
-## Persistência concluída
-
-O schema atual do SQLite Yomu é v4:
-
-| Versão | Fase | Dados adicionados |
-|--------|------|-------------------|
-| v1 | P0 | `app_meta` |
-| v2 | P1 | `device_sessions`, somente `token_hash` |
-| v3 | P2A | `maya_messages`, `maya_action_proposals` |
-| v4 | P2B | `maya_provider_settings`, sem credenciais |
-
-P1 migra `device_sessions.json` de forma transacional, idempotente e
-conservadora. P2A migra `maya_chat.json`, preserva estados ambíguos contra
-reexecução e mantém a barreira durável at-most-once de `ActionProposal`.
-Detalhes normativos estão em `docs/p1-session-persistence.md` e
-`docs/p2a-maya-persistence.md`.
-
-## P2B concluída — Maya com providers reais
-
-A Maya não é mais somente o engine heurístico: o desktop pode usar OpenAI,
-Anthropic, Gemini ou Ollama como providers opcionais. O fallback local continua
-explícito e obrigatório diante de falha ou configuração inválida.
-
-Propriedades implementadas:
-
-- endpoints fixos para os quatro providers;
-- OpenAI, Anthropic e Gemini via HTTPS;
-- Ollama somente em `127.0.0.1:11434`;
-- API keys cloud somente no Windows Credential Manager;
-- nenhuma credencial plaintext no SQLite, WAL, SHM, JSON, logs ou erros;
-- modelo explícito e consentimentos separados para mensagem, histórico e
-  biblioteca;
-- lease opaco invalida contexto preparado sob configuração antiga;
-- tools remotas restritas a `openManga` e `downloadChapter`;
-- toda tool call vira `ActionProposal` pendente e nunca executa automaticamente;
-- falha opcional do provider não derruba Auth, Core, Suwayomi nem a Maya local.
-
-Validação certificada no fechamento da P2B:
-
-- controller: 22/22;
-- controller/adapters/codecs/transport/WinCred: 82/82;
-- regressões promovidas da UI: 17/17;
-- `yomu_ai`: 62/62;
-- `yomu_storage`: 36/36;
-- local server/Auth: 38/38;
-- desktop: 171/171;
-- analyzer integral limpo;
-- `tool\verify_workspace.ps1` aprovado em 227,5 s;
-- build Windows Debug em
-  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`;
-- `git diff --check` limpo;
-- hash da referência protegido preservado.
-
-Limitações certificadas:
-
-- nenhuma chamada live a conta ou modelo externo foi executada;
-- disponibilidade, cobrança e retenção de providers externos não foram
-  certificadas;
-- Ollama em loopback não autentica a identidade do processo local;
-- não há streaming, autonomia, memória nova, integração PWA/mobile ou provider
-  personalizado no schema/código v4.
-
-Contrato completo: `docs/p2b-maya-providers.md`.
-
-## Próxima subfase solicitada — P2C
-
-Necessidade de produto registrada: permitir **provider personalizado
-OpenAI-compatible**. A P2C ainda não começou e não deve ser misturada com P2B.
-
-Escopo preliminar para auditoria e plano na próxima conversa:
-
-- endpoint/URL e modelo explícitos;
-- API key opcional, sempre no Windows Credential Manager quando existir;
-- HTTPS obrigatório para destinos remotos;
-- HTTP somente para IP loopback literal;
-- redirects desativados;
-- proteção contra SSRF, DNS rebinding e destinos privados indevidos;
-- consentimento exibindo o destino exato;
-- fallback local preservado;
-- tools continuam passando por `ActionProposal`;
-- sem headers, templates ou bodies arbitrários na primeira versão.
-
-O desenho provável exige um único bump `4 → 5`, migração forward e commit
-próprio, mas schema e formato ainda precisam de auditoria e aprovação. Não
-reserve tabela ou coluna antes disso.
-
-Decisões que a próxima conversa deve fechar antes de implementar:
-
-1. um único perfil customizado ou múltiplos perfis;
-2. protocolo `chat/completions`, `responses` ou ambos;
-3. API key opcional em todos os casos ou política por endpoint;
-4. política exata para hosts LAN privados além de loopback.
-
-Compatibilidade desejada a avaliar: OpenRouter, Groq, Together, vLLM,
-LM Studio e LocalAI. Essa lista é objetivo de interoperabilidade, não prova de
-compatibilidade atual.
-
-## Próximo fluxo seguro
-
-1. Revalidar repo, HEAD, status, hash, processos e portas.
-2. Confirmar que apenas a documentação deste handoff está materialmente suja.
-3. Se solicitado, revisar o diff documental e pedir autorização separada para
-   staging seletivo e commit desse handoff.
-4. Depois de baseline limpa, auditar somente leitura schema v4, controller,
-   adapters, transport, WinCred e UI para P2C.
-5. Produzir plano de schema `4 → 5`, política de endpoint/SSRF, migração e
-   testes.
-6. Pedir aprovação explícita para iniciar a implementação P2C.
-7. Após implementação, executar gates completos e pedir autorizações separadas
-   para staging, commit e push.
-
-Não iniciar settings, memória, estado pessoal, Android, redesign PWA ou Source
-Builder junto com P2C.
+Os checks finais, o staged diff e a igualdade da allowlist foram revalidados.
+Próximo passo seguro: pedir autorização separada de commit. Push exige
+autorização posterior própria.

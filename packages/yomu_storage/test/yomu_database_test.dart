@@ -13,7 +13,7 @@ void main() {
   late Directory root;
 
   setUp(() async {
-    root = Directory.systemTemp.createTempSync('yomu-storage-p2b-');
+    root = Directory.systemTemp.createTempSync('yomu-storage-p2c-');
     YomuDatabase.debugAfterCreated = null;
   });
 
@@ -30,10 +30,10 @@ void main() {
   });
 
   test(
-    'create schema v4, reopen, WAL, FK, and unset provider settings',
+    'create schema v5, reopen, WAL, FK, and unset provider settings',
     () async {
       final db = await YomuDatabase.openForTest(root);
-      expect(db.schemaVersion, 4);
+      expect(db.schemaVersion, 5);
       await db.validateDatabaseSchema();
 
       await db.setMeta('p0.probe', 'ok');
@@ -59,6 +59,7 @@ void main() {
       expect(await db.foreignKeysEnforcedWithTempTables(), isTrue);
       expect(await db.isMayaDataEmpty(), isTrue);
       expect(await db.getMayaProviderSettings(), isNull);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
       final providerColumns = await db
           .customSelect('PRAGMA table_info(maya_provider_settings)')
           .get();
@@ -66,6 +67,15 @@ void main() {
         (row) => row.read<String>('name') == 'is_enabled',
       );
       expect(enabledColumn.read<int>('notnull'), 1);
+      final customColumns = await db
+          .customSelect('PRAGMA table_info(maya_custom_provider_settings)')
+          .get();
+      expect(customColumns.map((row) => row.read<String>('name')), <String>[
+        'settings_id',
+        'endpoint_url',
+        'use_api_key',
+        'updated_at_ms',
+      ]);
 
       final path = db.paths.databaseFile.path;
       await db.close();
@@ -74,6 +84,7 @@ void main() {
       expect(await db2.getMeta('p0.probe'), 'ok');
       expect(await db2.getDeviceSessionById('clean-session'), isNotNull);
       expect(await db2.getMayaProviderSettings(), isNull);
+      expect(await db2.getMayaCustomProviderSettings(), isNull);
       expect(File(path).existsSync(), isTrue);
       final header = await File(path).openRead(0, 16).first;
       expect(String.fromCharCodes(header.take(15)), 'SQLite format 3');
@@ -82,7 +93,7 @@ void main() {
   );
 
   test(
-    'migrates real schema v1 through v2/v3 to v4 and preserves app_meta',
+    'migrates real schema v1 through v2/v3/v4 to v5 and preserves app_meta',
     () async {
       final verifier = SchemaVerifier(GeneratedHelper());
       final v1 = await verifier.schemaAt(1);
@@ -111,12 +122,13 @@ void main() {
       expect(await db.listDeviceSessions(), isEmpty);
       expect(await db.isMayaDataEmpty(), isTrue);
       expect(await db.getMayaProviderSettings(), isNull);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
       expect(
         (await db.customSelect('PRAGMA user_version').getSingle())
             .data
             .values
             .single,
-        4,
+        5,
       );
 
       await db.insertDeviceSession(
@@ -132,7 +144,7 @@ void main() {
   );
 
   test(
-    'migrates real schema v2 through v3 to v4 preserving meta and sessions',
+    'migrates real schema v2 through v3/v4 to v5 preserving meta and sessions',
     () async {
       final verifier = SchemaVerifier(GeneratedHelper());
       final v2 = await verifier.schemaAt(2);
@@ -161,19 +173,20 @@ void main() {
       );
       expect(await db.isMayaDataEmpty(), isTrue);
       expect(await db.getMayaProviderSettings(), isNull);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
       expect(
         (await db.customSelect('PRAGMA user_version').getSingle())
             .data
             .values
             .single,
-        4,
+        5,
       );
       await db.close();
     },
   );
 
   test(
-    'migrates real schema v3 to v4 preserving meta, sessions, and Maya data',
+    'migrates real schema v3 through v4 to v5 preserving all prior data',
     () async {
       final verifier = SchemaVerifier(GeneratedHelper());
       final v3 = await verifier.schemaAt(3);
@@ -234,6 +247,7 @@ void main() {
       expect(maya.proposals.single.status, 'confirmed');
       expect(maya.proposals.single.confirmedAtMs, 1300);
       expect(await db.getMayaProviderSettings(), isNull);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
       final disabledCloud = MayaProviderSettings.cloud(
         providerId: 'openai',
         modelPolicy: MayaProviderModelPolicy.explicit,
@@ -263,7 +277,61 @@ void main() {
             .data
             .values
             .single,
-        4,
+        5,
+      );
+      await db.close();
+    },
+  );
+
+  test(
+    'migrates real schema v4 to v5 without inventing a custom profile',
+    () async {
+      final verifier = SchemaVerifier(GeneratedHelper());
+      final v4 = await verifier.schemaAt(4);
+      addTearDown(v4.close);
+      v4.rawDatabase.execute(
+        'INSERT INTO app_meta(key, value, updated_at_ms) VALUES (?, ?, ?)',
+        ['p2b.preserved', 'yes', 444555],
+      );
+      v4.rawDatabase.execute(
+        'INSERT INTO maya_provider_settings('
+        'settings_id, mode, is_enabled, provider_id, model_policy, model_id, '
+        'share_recent_history, share_library_context, consent_version, '
+        'consented_at_ms, updated_at_ms'
+        ') VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          1,
+          'cloud',
+          1,
+          'openai',
+          'explicit',
+          'gpt-preserved',
+          1,
+          0,
+          1,
+          2000,
+          2100,
+        ],
+      );
+
+      final paths = YomuStoragePaths(root);
+      await paths.ensureLayout();
+      v4.rawDatabase.execute('VACUUM INTO ?', [paths.databaseFile.path]);
+
+      final db = await YomuDatabase.openForTest(root);
+      await db.validateDatabaseSchema();
+      expect(await db.getMeta('p2b.preserved'), 'yes');
+      final provider = await db.getMayaProviderSettings();
+      expect(provider?.providerId, 'openai');
+      expect(provider?.modelId, 'gpt-preserved');
+      expect(provider?.shareRecentHistory, isTrue);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
+      expect(
+        (await db.customSelect('PRAGMA user_version').getSingle())
+            .data
+            .values
+            .single,
+        5,
       );
       await db.close();
     },
@@ -323,6 +391,48 @@ void main() {
       await db.close();
       db = await YomuDatabase.openForTest(root);
       expect(await db.getMayaProviderSettings(), isNull);
+      await db.close();
+    },
+  );
+
+  test(
+    'custom provider profile is singleton, non-secret, and restart-safe',
+    () async {
+      var db = await YomuDatabase.openForTest(root);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
+
+      final first = MayaCustomProviderSettings(
+        endpointUrl: 'https://api.example.com/v1/chat/completions',
+        useApiKey: true,
+        updatedAtMs: 1000,
+      );
+      await db.setMayaCustomProviderSettings(first);
+      expect(await db.getMayaCustomProviderSettings(), first);
+
+      final replacement = MayaCustomProviderSettings(
+        endpointUrl: 'http://127.0.0.1:1234/v1/chat/completions',
+        useApiKey: false,
+        updatedAtMs: 1100,
+      );
+      await db.setMayaCustomProviderSettings(replacement);
+      expect(await db.getMayaCustomProviderSettings(), replacement);
+
+      final raw = await db
+          .customSelect(
+            'SELECT endpoint_url, use_api_key, updated_at_ms '
+            'FROM maya_custom_provider_settings WHERE settings_id = 1',
+          )
+          .getSingle();
+      expect(raw.read<String>('endpoint_url'), replacement.endpointUrl);
+      expect(raw.read<int>('use_api_key'), 0);
+      expect(raw.data.keys, isNot(contains('api_key')));
+
+      await db.close();
+      db = await YomuDatabase.openForTest(root);
+      expect(await db.getMayaCustomProviderSettings(), replacement);
+      expect(await db.resetMayaCustomProviderSettings(), isTrue);
+      expect(await db.resetMayaCustomProviderSettings(), isFalse);
+      expect(await db.getMayaCustomProviderSettings(), isNull);
       await db.close();
     },
   );
@@ -520,6 +630,66 @@ void main() {
       ]);
       final stored = await db.getMayaProviderSettings();
       expect(stored == local || stored == cloud, isTrue);
+      await db.close();
+    },
+  );
+
+  test(
+    'custom provider typed input and SQLite constraints fail closed',
+    () async {
+      expect(
+        () => MayaCustomProviderSettings(
+          endpointUrl: '',
+          useApiKey: true,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaCustomProviderSettings(
+          endpointUrl: ' https://api.example.com/v1/chat/completions',
+          useApiKey: true,
+          updatedAtMs: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => MayaCustomProviderSettings(
+          endpointUrl: 'https://api.example.com/v1/chat/completions',
+          useApiKey: true,
+          updatedAtMs: -1,
+        ),
+        throwsArgumentError,
+      );
+
+      final db = await YomuDatabase.openForTest(root);
+      const insert =
+          'INSERT INTO maya_custom_provider_settings('
+          'settings_id, endpoint_url, use_api_key, updated_at_ms'
+          ') VALUES (?, ?, ?, ?)';
+      await expectLater(
+        db.customStatement(insert, [
+          2,
+          'https://example.com/chat/completions',
+          1,
+          1,
+        ]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [1, '', 1, 1]),
+        throwsA(anything),
+      );
+      await expectLater(
+        db.customStatement(insert, [
+          1,
+          'https://example.com/chat/completions',
+          1,
+          -1,
+        ]),
+        throwsA(anything),
+      );
+      expect(await db.getMayaCustomProviderSettings(), isNull);
       await db.close();
     },
   );

@@ -3,12 +3,13 @@
 ## Baseline atual
 
 - Branch `master`, HEAD local/remoto
-  `7a35094b80b9359327c49e198258fc3c3d255571` em 2026-07-16.
-- P0, checkpoint pós-P0, P1, P2A e P2B estão commitados separadamente.
-- Schema SQLite Yomu atual: v4.
-- Próxima necessidade registrada: P2C, provider personalizado
-  OpenAI-compatible. Ainda não implementada; exige auditoria, plano, bump
-  `4 → 5` aprovado e commit próprio.
+  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a` em 2026-07-16.
+- P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão commitados
+  separadamente.
+- A P2C está implementada no working tree com schema SQLite Yomu v5, mas ainda
+  não foi commitada ou publicada. O staging seletivo foi concluído.
+- A prova runtime isolada e a captura visual externa da P2C foram concluídas sem
+  tocar o perfil real do usuário.
 - Handoff operacional: `docs/current-handoff.md`.
 
 ## Gates
@@ -28,7 +29,7 @@
 | **P1 — sessões/Auth no SQLite (schema v2)** | ✅ commit `c9d51d3` |
 | **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ commit `d200521` |
 | **P2B — providers Maya (schema v4)** | ✅ commit `7a35094` |
-| **P2C — provider personalizado OpenAI-compatible** | planejado; não iniciado |
+| **P2C — provider personalizado OpenAI-compatible** | ✅ implementação/gates/evidência runtime; commit pendente |
 
 ## Phases
 
@@ -42,10 +43,67 @@
 | P1 sessions/auth schema bump | ✅ commit `c9d51d3` |
 | P2A Maya persistence schema bump | ✅ commit `d200521` |
 | P2B Maya providers schema bump | ✅ commit `7a35094` |
-| P2C provider personalizado | planejada; implementação não autorizada neste checkpoint |
+| P2C provider personalizado | ✅ schema v5 stageado; commit não autorizado |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |
+
+## P2C — provider personalizado OpenAI-compatible (2026-07-16, working tree)
+
+- Baseline committed separado: `master` /
+  `d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`
+  (`docs: record post-P2B handoff`). A P2C contém um único bump `4 → 5` e não
+  mistura outra área de persistência.
+- Drift adiciona somente o singleton não secreto
+  `maya_custom_provider_settings`, com URL canônica, uso opcional de API key e
+  timestamp do snapshot. A migração v4→v5 cria a tabela vazia, preserva a
+  configuração P2B e não inventa perfil custom.
+- Existe um único perfil `openai-compatible`, somente Chat Completions. Modelo
+  e endpoint são explícitos; OpenAI built-in continua usando Responses em
+  `/v1/responses`.
+- URLs rejeitam userinfo, query, fragmento, percent-encoding ambíguo, redirects,
+  segmentos relativos e portas inválidas. HTTPS aceita apenas IP público;
+  HTTP aceita somente IPv4/IPv6 loopback literal. `localhost`, LAN, RFC1918,
+  ULA, link-local, CGNAT, multicast, documentação e ranges especiais são
+  bloqueados.
+- DNS é resolvido em cada request. Respostas privadas ou mistas falham antes da
+  conexão; o socket conecta ao IP validado e HTTPS é promovido explicitamente
+  com o hostname original, preservando SNI e validação de certificado. Proxy é
+  `DIRECT` e não há bypass de certificado.
+- O target WinCred permanece determinístico em
+  `app.yomu/maya/provider/openai-compatible`. O username contém o SHA-256 do
+  endpoint canônico; endpoint alterado com campo vazio não reutiliza a chave
+  anterior. Modo sem chave remove e verifica a ausência do credential.
+- O body Chat Completions é fixo: `messages`, tools limitadas,
+  `max_tokens: 1024`, `stream: false` e `parallel_tool_calls: false`. O único
+  header custom é `Authorization: Bearer` quando a chave está habilitada.
+- Consentimento mostra o destino canônico exato e é invalidado quando o
+  endpoint muda. Modo local preserva o perfil; limpeza explícita remove perfil
+  e credencial. Lease, fallback local, cancelamento e `ActionProposal`
+  permanecem obrigatórios.
+- Auditoria de arquitetura confirmou que `MayaService`, `ActionProposal`, Core,
+  Suwayomi e PWA não mudaram. A revisão de segurança encontrou e corrigiu a
+  promoção TLS explícita necessária quando `HttpClient.connectionFactory` fixa
+  um IP.
+- Validação atual: segurança/transporte/adapters 36/36; controller + transporte
+  45/45; `yomu_storage` 39/39; Auth afetado pelo schema 16/16; desktop 196/196;
+  analyzer raiz/desktop limpos; `tool\verify_workspace.ps1` aprovado em 213,6 s;
+  build Windows Debug gerado em
+  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`.
+- Não houve chamada live a provider externo. A regressão de UI comprova seleção,
+  destino exato, chave opcional e persistência; três tentativas de rasterização
+  PNG via `flutter_tester` ficaram presas e foram encerradas com ownership
+  comprovado. A prova runtime posterior usou `APPDATA`/`LOCALAPPDATA` isolados e
+  capturou somente a janela real em
+  `C:\Users\joaop\Downloads\yomu-sol-final\2026-07-16\02-p2c-maya-custom-provider-dialog.png`
+  (SHA-256 `182A544A1CA21ADE28C03C1FB16A1B8FCB3D42C84FDA50DEA2F4877E6EF0F0DC`).
+  O diálogo mostra o endpoint loopback exato, modelo `local-compatible` e API
+  key desativada. O PID iniciado fechou normalmente; o perfil isolado foi
+  removido e não restaram processos relacionados nem listeners em 8787, 14567
+  ou 11434.
+- A referência desktop permaneceu imutável, SHA-256
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
+- Contrato factual: `docs/p2c-maya-custom-provider.md`.
 
 ## P2B — providers da Maya (2026-07-16, validada)
 
@@ -201,12 +259,15 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 ## Limitações restantes
 
 - Ownership via PowerShell/CIM (command line ilegível → não mata)
-- DNS rebinding TOCTOU residual entre resolve e TCP connect
+- Destinos custom são pinados ao IP validado por request; ainda não há prova
+  live contra providers externos, proxies corporativos ou topologias DNS reais
 - PWA HTTP só em LAN confiável (HTTPS na fase PWA final)
 - A evidência visual atual cobre telas e modos principais, mas não todos os estados de loading/erro, menus, tooltips, foco e animações; não há alegação de fidelidade 1:1.
 - O painel de fim do leitor tem prova widget, não prova runtime atual; evitou-se alterar progresso/`isRead` real apenas para produzir screenshot.
 - Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
   correto, com custo de write a observar em uso LAN intenso.
 - Source Builder permanece fora de escopo e na última fase.
-- Provider personalizado ainda não existe no código/schema v4. A necessidade
-  foi registrada como P2C separada; consulte `docs/current-handoff.md`.
+- P2C possui staging seletivo validado, mas ainda não possui commit ou push;
+  essas operações continuam condicionadas a autorizações explícitas próprias.
+  Consulte
+  `docs/current-handoff.md`.

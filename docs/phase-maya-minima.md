@@ -2,8 +2,9 @@
 
 > Estado histórico: esta fase introduziu a Maya com persistência JSON e engine
 > heurístico local. A P2A migrou o histórico para o SQLite Yomu schema v3 e a
-> P2B adicionou providers opcionais no schema v4. Consulte
-> `docs/p2a-maya-persistence.md`, `docs/p2b-maya-providers.md` e
+> P2B adicionou providers opcionais no schema v4 e a P2C implementou o perfil
+> OpenAI-compatible no schema v5. Consulte `docs/p2a-maya-persistence.md`,
+> `docs/p2b-maya-providers.md`, `docs/p2c-maya-custom-provider.md` e
 > `docs/current-handoff.md`.
 
 ## Objetivo
@@ -24,7 +25,8 @@ Assistente **local-first** no desktop que consulta a biblioteca Suwayomi e só e
 - Providers eram posteriores; OpenAI, Anthropic, Gemini e Ollama foram
   implementados na P2B, sempre opcionais
 - Múltiplas conversas e memória continuam não implementadas
-- Provider OpenAI-compatible personalizado está planejado para P2C
+- Provider OpenAI-compatible personalizado foi implementado na P2C; naquela
+  fase histórica ainda não existia
 - Maya no PWA iPhone
 - Source Builder
 

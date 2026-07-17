@@ -27,7 +27,8 @@ iPhone Safari/PWA talks **only** to Yomu Core.
 
 - Suwayomi: library, chapters, pages, downloads, main progress, extensions.
 - Yomu SQLite implementado: meta do app, sessões, histórico/propostas da Maya e
-  configuração não secreta de provider da Maya.
+  configuração não secreta de provider da Maya, incluindo o perfil de endpoint
+  OpenAI-compatible no schema v5.
 - Extras futuros do Yomu, como status pessoal, SourceSpecs e analytics, exigem
   ownership confirmado e schema bump próprio antes de serem persistidos.
 
@@ -41,7 +42,9 @@ A Maya permanece local-first. Providers cloud são adapters opcionais do
 desktop Flutter nativo; eles não passam pelo Yomu Core, pela PWA ou pelo banco
 Suwayomi. OpenAI, Anthropic e Gemini usam HTTPS para destinos fixos e chaves no
 Windows Credential Manager. Ollama usa somente
-`http://127.0.0.1:11434/api/chat` e não possui credencial.
+`http://127.0.0.1:11434/api/chat` e não possui credencial. A P2C adiciona um
+único perfil OpenAI-compatible via Chat Completions, com endpoint e modelo
+explícitos e API key opcional.
 
 O SQLite Yomu guarda apenas provider, modelo explícito, estado habilitado,
 flags de contexto e consentimento. Contexto é montado por requisição dentro de
@@ -51,16 +54,17 @@ ao engine local. Tool calls remotos são dados
 não confiáveis e só podem resultar em `ActionProposal` local pendente, ainda
 sujeito à confirmação explícita e à barreira at-most-once da P2A.
 
-Não há streaming, memória nova, autonomia, endpoint customizável ou integração
-PWA no schema/código v4. O contrato detalhado está em
-`docs/p2b-maya-providers.md`.
+O perfil custom é persistido separadamente no singleton não secreto
+`maya_custom_provider_settings`. HTTPS aceita apenas destinos públicos; HTTP é
+restrito a IP loopback literal. DNS é validado em cada requisição, o socket
+conecta ao IP aprovado e TLS usa o hostname original para SNI/certificado.
+Queries, fragmentos, userinfo, redirects, proxies, headers e bodies arbitrários
+são bloqueados. Chaves custom são vinculadas ao SHA-256 do endpoint canônico no
+WinCred.
 
-O próximo requisito de produto é um provider personalizado OpenAI-compatible,
-isolado como P2C. Ele ainda não está implementado. Persistir endpoint ou perfil
-exigirá plano próprio, um único bump `4 → 5`, HTTPS para remoto, HTTP restrito a
-loopback literal, redirects desativados, proteção SSRF/DNS e credencial
-opcional somente no WinCred. Essas são guardas preliminares; o formato final
-de schema e protocolo depende de auditoria e aprovação explícita.
+Não há streaming, memória nova, autonomia ou integração PWA. Os contratos
+detalhados estão em `docs/p2b-maya-providers.md` e
+`docs/p2c-maya-custom-provider.md`.
 
 ## Hard gates (done)
 
@@ -70,6 +74,7 @@ de schema e protocolo depende de auditoria e aprovação explícita.
 4. Library / downloads (hard gate)
 5. PWA mínima (LAN opt-in + pairing + library/reader)
 6. Maya persistente + providers opcionais + ActionProposal — **done**
+7. P2C custom OpenAI-compatible, schema v5 — **implemented; commit pending**
 
 P2B concluída no código: schema v4 e providers compostos no bootstrap desktop.
 O controlador usa a factory real, é injetado no
@@ -79,5 +84,5 @@ indisponível mantém local/Ollama e bloqueia credenciais cloud sem fallback
 inseguro. A prova live de compatibilidade com cada serviço externo não faz
 parte dos gates certificados desta fase.
 
-Próxima subfase solicitada: P2C custom OpenAI-compatible. Source Builder
-permanece reservado para a última fase.
+A P2C permanece isolada no working tree e ainda requer staging/commit próprios.
+Source Builder permanece reservado para a última fase.

@@ -2,6 +2,7 @@ import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
 import 'maya_credential_store.dart';
+import 'maya_custom_provider_security.dart';
 import 'maya_provider_codecs.dart';
 import 'maya_provider_controller.dart';
 import 'maya_provider_transport.dart';
@@ -203,6 +204,11 @@ _MayaProviderConfiguration _configurationFor(
 
   final providerId = settings.providerId;
   final model = _normalizeModel(providerId, settings.modelId);
+  if (providerId != kMayaCustomProviderId &&
+      (settings.customEndpointUrl != null ||
+          settings.customUseApiKey != null)) {
+    throw const MayaLlmException(MayaLlmFailureKind.configuration);
+  }
   return switch (providerId) {
     'openai' => _MayaProviderConfiguration(
       providerId: providerId,
@@ -235,8 +241,31 @@ _MayaProviderConfiguration _configurationFor(
       allowLoopbackHttp: true,
       requiresCredential: false,
     ),
+    kMayaCustomProviderId => _customConfiguration(settings, model),
     _ => throw const MayaLlmException(MayaLlmFailureKind.configuration),
   };
+}
+
+_MayaProviderConfiguration _customConfiguration(
+  MayaProviderAdapterSettings settings,
+  String model,
+) {
+  final rawEndpoint = settings.customEndpointUrl;
+  final requiresCredential = settings.customUseApiKey;
+  if (rawEndpoint == null || requiresCredential == null) {
+    throw const MayaLlmException(MayaLlmFailureKind.configuration);
+  }
+  final endpoint = MayaCustomProviderEndpoint.parse(rawEndpoint);
+  if (endpoint.canonicalUrl != rawEndpoint) {
+    throw const MayaLlmException(MayaLlmFailureKind.configuration);
+  }
+  return _MayaProviderConfiguration(
+    providerId: kMayaCustomProviderId,
+    model: model,
+    endpoint: endpoint.uri,
+    allowLoopbackHttp: endpoint.uri.scheme == 'http',
+    requiresCredential: requiresCredential,
+  );
 }
 
 String _normalizeModel(String providerId, String? modelId) {
@@ -244,6 +273,16 @@ String _normalizeModel(String providerId, String? modelId) {
     throw const MayaLlmException(MayaLlmFailureKind.configuration);
   }
   var model = modelId.trim();
+  if (providerId == kMayaCustomProviderId) {
+    if (model.isEmpty ||
+        model.length > kMayaProviderMaxModelIdChars ||
+        model.runes.any(
+          (rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f),
+        )) {
+      throw const MayaLlmException(MayaLlmFailureKind.configuration);
+    }
+    return model;
+  }
   if (providerId == 'gemini' && model.startsWith('models/')) {
     model = model.substring('models/'.length);
   }
@@ -262,6 +301,7 @@ void _addCredentialHeaders(
 }) {
   switch (providerId) {
     case 'openai':
+    case kMayaCustomProviderId:
       headers['Authorization'] = 'Bearer $credential';
       return;
     case 'anthropic':

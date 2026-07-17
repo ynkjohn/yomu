@@ -3,6 +3,7 @@ import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
+import '../services/maya_custom_provider_security.dart';
 import '../services/maya_provider_controller.dart';
 
 class MayaScreen extends StatefulWidget {
@@ -470,6 +471,7 @@ String _mayaProviderLabel(String? providerId) => switch (providerId) {
   'anthropic' => 'Anthropic',
   'gemini' => 'Gemini',
   'ollama' => 'Ollama local',
+  kMayaCustomProviderId => 'OpenAI-compatible',
   null => 'Provider',
   _ => providerId,
 };
@@ -479,6 +481,7 @@ const List<(String, String)> _mayaProviderChoices = <(String, String)>[
   ('anthropic', 'Anthropic'),
   ('gemini', 'Google Gemini'),
   ('ollama', 'Ollama local'),
+  (kMayaCustomProviderId, 'OpenAI-compatible'),
 ];
 
 class _MayaProviderDialog extends StatefulWidget {
@@ -493,7 +496,9 @@ class _MayaProviderDialog extends StatefulWidget {
 class _MayaProviderDialogState extends State<_MayaProviderDialog> {
   late String _providerId;
   late final TextEditingController _modelController;
+  late final TextEditingController _endpointController;
   late final TextEditingController _apiKeyController;
+  late bool _useApiKey;
   late bool _shareRecentHistory;
   late bool _shareLibraryContext;
   late bool _cloudConsent;
@@ -504,12 +509,19 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
   void initState() {
     super.initState();
     final settings = widget.controller.settings;
+    final customSettings = widget.controller.customSettings;
     final persistedProvider = settings?.providerId;
     _providerId = kSupportedMayaProviderIds.contains(persistedProvider)
         ? persistedProvider!
-        : 'openai';
+        : customSettings == null
+        ? 'openai'
+        : kMayaCustomProviderId;
     _modelController = TextEditingController(text: settings?.modelId ?? '');
+    _endpointController = TextEditingController(
+      text: customSettings?.endpointUrl ?? '',
+    );
     _apiKeyController = TextEditingController();
+    _useApiKey = customSettings?.useApiKey ?? true;
     _shareRecentHistory = settings?.shareRecentHistory ?? false;
     _shareLibraryContext = settings?.shareLibraryContext ?? false;
     _cloudConsent =
@@ -522,6 +534,7 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
   void dispose() {
     _apiKeyController.clear();
     _apiKeyController.dispose();
+    _endpointController.dispose();
     _modelController.dispose();
     super.dispose();
   }
@@ -529,9 +542,23 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
   Future<void> _saveCloud() async {
     if (_saving) return;
     final model = _modelController.text.trim();
+    final isCustom = _providerId == kMayaCustomProviderId;
     if (model.isEmpty) {
       setState(() => _error = 'Informe o ID exato do modelo.');
       return;
+    }
+    String? endpointUrl;
+    if (isCustom) {
+      try {
+        endpointUrl = MayaCustomProviderEndpoint.parse(
+          _endpointController.text,
+        ).canonicalUrl;
+      } catch (_) {
+        setState(() {
+          _error = 'Informe uma URL segura terminando em /chat/completions.';
+        });
+        return;
+      }
     }
     if (!_cloudConsent) {
       setState(() {
@@ -545,14 +572,25 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
     });
     final apiKey = _apiKeyController.text;
     try {
-      await widget.controller.saveCloud(
-        providerId: _providerId,
-        modelPolicy: MayaProviderModelPolicy.explicit,
-        modelId: model,
-        apiKey: apiKey.trim().isEmpty ? null : apiKey,
-        shareRecentHistory: _shareRecentHistory,
-        shareLibraryContext: _shareLibraryContext,
-      );
+      if (isCustom) {
+        await widget.controller.saveCustom(
+          endpointUrl: endpointUrl!,
+          modelId: model,
+          useApiKey: _useApiKey,
+          apiKey: _useApiKey && apiKey.trim().isNotEmpty ? apiKey : null,
+          shareRecentHistory: _shareRecentHistory,
+          shareLibraryContext: _shareLibraryContext,
+        );
+      } else {
+        await widget.controller.saveCloud(
+          providerId: _providerId,
+          modelPolicy: MayaProviderModelPolicy.explicit,
+          modelId: model,
+          apiKey: apiKey.trim().isEmpty ? null : apiKey,
+          shareRecentHistory: _shareRecentHistory,
+          shareLibraryContext: _shareLibraryContext,
+        );
+      }
       _apiKeyController.clear();
       if (mounted) Navigator.of(context).pop(true);
     } on MayaProviderControllerException catch (error) {
@@ -607,9 +645,10 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
         title: const Text('Limpar credenciais cloud da Maya?'),
         content: const Text(
           'As requisições serão canceladas e todas as credenciais cloud da '
-          'Maya (OpenAI, Anthropic e Gemini) serão removidas do Windows '
-          'Credential Manager antes de ativar o modo local. O histórico '
-          'continuará disponível.',
+          'Maya (OpenAI, Anthropic, Gemini e OpenAI-compatible) serão '
+          'removidas do Windows Credential Manager. O perfil de endpoint '
+          'personalizado também será apagado antes de ativar o modo local. '
+          'O histórico continuará disponível.',
         ),
         actions: [
           TextButton(
@@ -655,6 +694,8 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
   @override
   Widget build(BuildContext context) {
     final isOllama = _providerId == 'ollama';
+    final isCustom = _providerId == kMayaCustomProviderId;
+    final customDestination = _customConsentDestination();
     return AlertDialog(
       title: const Text('IA da Maya'),
       content: SizedBox(
@@ -698,11 +739,67 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
                           _providerId = value;
                           _modelController.clear();
                           _apiKeyController.clear();
+                          if (value == kMayaCustomProviderId) {
+                            final custom = widget.controller.customSettings;
+                            _endpointController.text =
+                                custom?.endpointUrl ?? '';
+                            _useApiKey = custom?.useApiKey ?? true;
+                          }
                           _cloudConsent = false;
                           _error = null;
                         });
                       },
               ),
+              if (isCustom) ...[
+                const SizedBox(height: 15),
+                const _MayaFieldLabel('Endpoint Chat Completions'),
+                const SizedBox(height: 7),
+                TextField(
+                  controller: _endpointController,
+                  enabled: !_saving,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  keyboardType: TextInputType.url,
+                  onChanged: (_) {
+                    if (_cloudConsent || _error != null) {
+                      setState(() {
+                        _cloudConsent = false;
+                        _error = null;
+                      });
+                    }
+                  },
+                  decoration: const InputDecoration(
+                    hintText: 'https://api.exemplo.com/v1/chat/completions',
+                    helperText:
+                        'HTTPS para destinos públicos. HTTP somente para IP '
+                        'loopback literal; LAN e localhost são bloqueados.',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                CheckboxListTile(
+                  value: _useApiKey,
+                  onChanged: _saving
+                      ? null
+                      : (value) => setState(() {
+                          _useApiKey = value ?? false;
+                          if (!_useApiKey) _apiKeyController.clear();
+                          _error = null;
+                        }),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text(
+                    'Usar API key',
+                    style: TextStyle(fontSize: 12.5),
+                  ),
+                  subtitle: const Text(
+                    'Opcional e salva somente no Windows Credential Manager.',
+                    style: TextStyle(
+                      color: YomuTokens.textSubtle,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 15),
               const _MayaFieldLabel('Modelo'),
               const SizedBox(height: 7),
@@ -720,7 +817,7 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
                       : 'O Yomu não escolhe modelo ou custo automaticamente.',
                 ),
               ),
-              if (!isOllama) ...[
+              if (!isOllama && (!isCustom || _useApiKey)) ...[
                 const SizedBox(height: 15),
                 const _MayaFieldLabel('API key'),
                 const SizedBox(height: 7),
@@ -752,13 +849,20 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
                       }),
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
-                title: const Text(
-                  'Autorizo enviar a mensagem atual a este provider',
-                  style: TextStyle(fontSize: 12.5),
+                title: Text(
+                  isCustom
+                      ? 'Autorizo enviar a mensagem atual para este endpoint'
+                      : 'Autorizo enviar a mensagem atual a este provider',
+                  style: const TextStyle(fontSize: 12.5),
                 ),
-                subtitle: const Text(
-                  'Obrigatório para cada ativação cloud.',
-                  style: TextStyle(color: YomuTokens.textSubtle, fontSize: 11),
+                subtitle: Text(
+                  isCustom
+                      ? 'Destino exato: $customDestination'
+                      : 'Obrigatório para cada ativação cloud.',
+                  style: const TextStyle(
+                    color: YomuTokens.textSubtle,
+                    fontSize: 11,
+                  ),
                 ),
               ),
               CheckboxListTile(
@@ -840,6 +944,18 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
         ),
       ],
     );
+  }
+
+  String _customConsentDestination() {
+    if (_providerId != kMayaCustomProviderId) return '';
+    try {
+      return MayaCustomProviderEndpoint.parse(
+        _endpointController.text,
+      ).canonicalUrl;
+    } catch (_) {
+      final value = _endpointController.text.trim();
+      return value.isEmpty ? 'endpoint ainda não informado' : value;
+    }
   }
 }
 

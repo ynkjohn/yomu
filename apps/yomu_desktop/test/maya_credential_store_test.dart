@@ -19,6 +19,10 @@ void main() {
         store.delete(providerId: 'openai'),
         throwsA(isA<MayaCredentialStoreException>()),
       );
+      await expectLater(
+        store.exists(providerId: 'openai'),
+        throwsA(isA<MayaCredentialStoreException>()),
+      );
     },
   );
 
@@ -69,6 +73,53 @@ void main() {
     await store.delete(providerId: 'openai');
     expect(await store.read(providerId: 'openai'), isNull);
     expect(await store.read(providerId: 'anthropic'), 'sk-anthropic');
+  });
+
+  test('custom credential is bound to one endpoint digest', () async {
+    final store = FakeMayaCredentialStore();
+    final firstBinding = 'a' * 64;
+    final secondBinding = 'b' * 64;
+
+    await store.save(
+      providerId: 'openai-compatible',
+      apiKey: 'sk-custom',
+      credentialBinding: firstBinding,
+    );
+    expect(await store.exists(providerId: 'openai-compatible'), isTrue);
+    expect(
+      await store.read(
+        providerId: 'openai-compatible',
+        credentialBinding: firstBinding,
+      ),
+      'sk-custom',
+    );
+    expect(
+      await store.read(
+        providerId: 'openai-compatible',
+        credentialBinding: secondBinding,
+      ),
+      isNull,
+    );
+
+    await store.delete(providerId: 'openai-compatible');
+    expect(await store.exists(providerId: 'openai-compatible'), isFalse);
+  });
+
+  test('credential binding accepts only lowercase SHA-256', () {
+    expect(validateMayaCredentialBinding(null), isNull);
+    expect(validateMayaCredentialBinding('a' * 64), 'a' * 64);
+    for (final invalid in <String>['', 'A' * 64, 'a' * 63, '../binding']) {
+      expect(
+        () => validateMayaCredentialBinding(invalid),
+        throwsA(
+          isA<MayaCredentialStoreException>().having(
+            (error) => error.code,
+            'code',
+            MayaCredentialStoreErrorCode.invalidBinding,
+          ),
+        ),
+      );
+    }
   });
 
   test('invalid API keys fail without echoing plaintext', () async {

@@ -6,8 +6,9 @@ Private, local-first manga/manhwa/webtoon reader.
 - **Engine:** [Suwayomi-Server](https://github.com/Suwayomi/Suwayomi-Server) managed locally (**no Docker**)
 - **Extensions:** Tachiyomi/Mihon ecosystem (e.g. [Keiyoushi](https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json))
 - **Mobile:** iPhone via Safari/PWA → **Yomu Core only** (Suwayomi stays on loopback)
-- **Extras:** Maya local-first com providers opcionais; analytics e Source
-  Builder permanecem fases posteriores
+- **Extras:** Maya local-first com providers opcionais, incluindo perfil
+  OpenAI-compatible personalizado; analytics e Source Builder permanecem
+  fases posteriores
 
 ## Requirements
 
@@ -95,12 +96,14 @@ aberto; em `LNK1168`, peça fechamento normal ao usuário.
 | Hard gate (biblioteca + salvar/retomar progresso + downloads) | ✅ (Fase 2C) |
 | PWA LAN real | ✅ (opt-in + pairing + proxy) |
 | Maya persistente + providers OpenAI/Anthropic/Gemini/Ollama | ✅ (schema v4) |
-| Provider OpenAI-compatible personalizado | planejado como P2C; não implementado |
+| Provider OpenAI-compatible personalizado | ✅ P2C no working tree (schema v5; commit pendente) |
 | Source Builder | reservado para a última fase |
 
 Yomu HTTP default: `http://127.0.0.1:8787`; LAN só com opt-in. Suwayomi: `http://127.0.0.1:14567` apenas.
-Os adapters/providers da P2B foram validados com transports determinísticos;
-nenhuma chamada live a conta ou modelo externo foi certificada.
+Os adapters/providers da P2B/P2C foram validados com transports
+determinísticos; nenhuma chamada live a conta ou modelo externo foi
+certificada. O perfil custom usa somente Chat Completions, HTTPS para destinos
+públicos ou HTTP para loopback literal e chave opcional no WinCred.
 
 ### Suwayomi JAR
 
@@ -109,11 +112,13 @@ JAR may live under `vendor/` (gitignored if large) or downloaded on first start 
 
 ## Estado e arquitetura
 
-O baseline atual é `master` em `7a35094b80b9359327c49e198258fc3c3d255571`:
-P0, checkpoint pós-P0, P1, P2A e P2B estão concluídos e publicados. O SQLite
-Yomu está no schema v4. Consulte `docs/current-handoff.md` antes de continuar e
-`docs/architecture.md` para os limites de ownership. A próxima necessidade de
-produto é um provider OpenAI-compatible personalizado em subfase separada.
+O baseline committed atual é `master` em
+`d4d6d5bcb2a6f5ff884adaf000240471e6f87a9a`: P0, checkpoint pós-P0, P1, P2A,
+P2B e o handoff pós-P2B estão publicados. A P2C está implementada no working
+tree com schema v5 e stageada seletivamente, mas ainda não foi commitada.
+Consulte
+`docs/current-handoff.md`, `docs/p2c-maya-custom-provider.md` e
+`docs/architecture.md` antes de continuar.
 
 ## License
 

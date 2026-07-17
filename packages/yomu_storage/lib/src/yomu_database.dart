@@ -162,6 +162,7 @@ enum MayaProviderModelPolicy { providerDefault, explicit }
 
 const int kMayaProviderIdMaxChars = 64;
 const int kMayaProviderModelIdMaxChars = 200;
+const int kMayaCustomProviderEndpointUrlMaxChars = 2048;
 
 /// Typed, non-secret Maya provider preferences.
 ///
@@ -306,6 +307,54 @@ class MayaProviderSettings {
   );
 }
 
+/// Typed, non-secret settings for the single OpenAI-compatible Maya profile.
+///
+/// The endpoint is already canonicalized by the desktop security boundary
+/// before it reaches storage. API keys never belong in this object or in Yomu
+/// SQLite.
+@immutable
+class MayaCustomProviderSettings {
+  factory MayaCustomProviderSettings({
+    required String endpointUrl,
+    required bool useApiKey,
+    required int updatedAtMs,
+  }) {
+    _requireNonNegativeTimestamp(updatedAtMs, 'updatedAtMs');
+    return MayaCustomProviderSettings._(
+      endpointUrl: _requireBoundedSettingId(
+        endpointUrl,
+        'endpointUrl',
+        kMayaCustomProviderEndpointUrlMaxChars,
+      ),
+      useApiKey: useApiKey,
+      updatedAtMs: updatedAtMs,
+    );
+  }
+
+  const MayaCustomProviderSettings._({
+    required this.endpointUrl,
+    required this.useApiKey,
+    required this.updatedAtMs,
+  });
+
+  int get settingsId => 1;
+
+  final String endpointUrl;
+  final bool useApiKey;
+  final int updatedAtMs;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MayaCustomProviderSettings &&
+          endpointUrl == other.endpointUrl &&
+          useApiKey == other.useApiKey &&
+          updatedAtMs == other.updatedAtMs;
+
+  @override
+  int get hashCode => Object.hash(endpointUrl, useApiKey, updatedAtMs);
+}
+
 String _requireBoundedSettingId(Object? value, String name, int maxChars) {
   if (value is! String ||
       value.isEmpty ||
@@ -446,11 +495,39 @@ class MayaProviderSettingsTable extends Table {
   ];
 }
 
+/// Singleton, non-secret endpoint profile for `openai-compatible`.
+///
+/// Absence means that no custom profile is saved. The associated optional API
+/// key remains in the operating-system vault and is bound to the canonical
+/// endpoint outside SQLite.
+@DataClassName('StoredMayaCustomProviderSettings')
+class MayaCustomProviderSettingsTable extends Table {
+  @override
+  String get tableName => 'maya_custom_provider_settings';
+
+  IntColumn get settingsId => integer()();
+  TextColumn get endpointUrl => text()();
+  BoolColumn get useApiKey => boolean()();
+  IntColumn get updatedAtMs => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {settingsId};
+
+  @override
+  List<String> get customConstraints => const [
+    'CHECK (settings_id = 1)',
+    'CHECK (length(endpoint_url) BETWEEN 1 AND 2048 AND '
+        'endpoint_url = trim(endpoint_url))',
+    'CHECK (updated_at_ms >= 0)',
+  ];
+}
+
 /// Single-process Yomu SQLite database (Drift).
 ///
 /// Schema v1 contains [AppMeta]. Schema v2 adds [DeviceSessions]. Schema v3
 /// adds [MayaMessages] and [MayaActionProposals]. Schema v4 adds the non-secret
-/// singleton [MayaProviderSettingsTable].
+/// singleton [MayaProviderSettingsTable]. Schema v5 adds the non-secret
+/// singleton [MayaCustomProviderSettingsTable].
 @DriftDatabase(
   tables: [
     AppMeta,
@@ -458,6 +535,7 @@ class MayaProviderSettingsTable extends Table {
     MayaMessages,
     MayaActionProposals,
     MayaProviderSettingsTable,
+    MayaCustomProviderSettingsTable,
   ],
 )
 class YomuDatabase extends _$YomuDatabase {
@@ -495,7 +573,7 @@ class YomuDatabase extends _$YomuDatabase {
   static Future<void> Function(YomuDatabase db)? debugAfterCreated;
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -503,7 +581,7 @@ class YomuDatabase extends _$YomuDatabase {
       await m.createAll();
     },
     onUpgrade: (m, from, to) async {
-      if (from < 1 || from >= to || to != 4) {
+      if (from < 1 || from >= to || to != 5) {
         throw StateError('Unsupported Yomu database migration: $from -> $to');
       }
       // Run forward steps in order so an installation may safely upgrade from
@@ -518,6 +596,9 @@ class YomuDatabase extends _$YomuDatabase {
       }
       if (from < 4) {
         await m.createTable(mayaProviderSettingsTable);
+      }
+      if (from < 5) {
+        await m.createTable(mayaCustomProviderSettingsTable);
       }
     },
   );
@@ -1069,6 +1150,39 @@ class YomuDatabase extends _$YomuDatabase {
   Future<bool> resetMayaProviderSettings() async {
     final deleted = await (delete(
       mayaProviderSettingsTable,
+    )..where((t) => t.settingsId.equals(1))).go();
+    return deleted > 0;
+  }
+
+  /// Returns null when no OpenAI-compatible endpoint profile is saved.
+  Future<MayaCustomProviderSettings?> getMayaCustomProviderSettings() async {
+    final row = await select(mayaCustomProviderSettingsTable).getSingleOrNull();
+    if (row == null) return null;
+    return MayaCustomProviderSettings(
+      endpointUrl: row.endpointUrl,
+      useApiKey: row.useApiKey,
+      updatedAtMs: row.updatedAtMs,
+    );
+  }
+
+  /// Atomically replaces the complete non-secret custom endpoint profile.
+  Future<void> setMayaCustomProviderSettings(
+    MayaCustomProviderSettings settings,
+  ) async {
+    await into(mayaCustomProviderSettingsTable).insertOnConflictUpdate(
+      MayaCustomProviderSettingsTableCompanion.insert(
+        settingsId: Value(settings.settingsId),
+        endpointUrl: settings.endpointUrl,
+        useApiKey: settings.useApiKey,
+        updatedAtMs: settings.updatedAtMs,
+      ),
+    );
+  }
+
+  /// Deletes the saved custom endpoint profile without touching Maya history.
+  Future<bool> resetMayaCustomProviderSettings() async {
+    final deleted = await (delete(
+      mayaCustomProviderSettingsTable,
     )..where((t) => t.settingsId.equals(1))).go();
     return deleted > 0;
   }

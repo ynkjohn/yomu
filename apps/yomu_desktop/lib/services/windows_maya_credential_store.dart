@@ -10,6 +10,8 @@ const int _credPersistLocalMachine = 2;
 const int _errorFileNotFound = 2;
 const int _errorNotFound = 1168;
 const int _heapZeroMemory = 0x00000008;
+const String _credentialBindingUserPrefix = 'sha256:';
+const int _credentialUserNameMaxUnits = 80;
 
 /// Windows Credential Manager-backed API-key storage for the native desktop.
 ///
@@ -28,9 +30,11 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
   Future<void> save({
     required String providerId,
     required String apiKey,
+    String? credentialBinding,
   }) async {
     final target = mayaCredentialTargetForProvider(providerId);
     validateMayaApiKey(apiKey);
+    final binding = validateMayaCredentialBinding(credentialBinding);
 
     List<int> secretBytes;
     try {
@@ -44,7 +48,7 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
     final arena = _NativeHeapArena(_bindings);
     try {
       final targetPointer = arena.utf16(target);
-      final userPointer = arena.utf16(providerId);
+      final userPointer = arena.utf16(_credentialUserName(providerId, binding));
       final blobPointer = arena.bytes(secretBytes.length);
       blobPointer.asTypedList(secretBytes.length).setAll(0, secretBytes);
 
@@ -75,8 +79,13 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
   }
 
   @override
-  Future<String?> read({required String providerId}) async {
+  Future<String?> read({
+    required String providerId,
+    String? credentialBinding,
+  }) async {
     final target = mayaCredentialTargetForProvider(providerId);
+    final binding = validateMayaCredentialBinding(credentialBinding);
+    final expectedUserName = _credentialUserName(providerId, binding);
     final arena = _NativeHeapArena(_bindings);
     Pointer<_CredentialW> nativeCredential = nullptr;
     Uint8List? copiedBytes;
@@ -102,7 +111,9 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
       final native = nativeCredential.ref;
       final size = native.credentialBlobSize;
       final blob = native.credentialBlob;
+      final userName = native.userName;
       if (native.type != _credTypeGeneric ||
+          userName == nullptr ||
           size <= 0 ||
           size > kMayaCredentialMaxApiKeyBytes ||
           blob == nullptr) {
@@ -110,6 +121,16 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
           MayaCredentialStoreErrorCode.corruptCredential,
         );
       }
+      final storedUserName = _readNullTerminatedUtf16(
+        userName,
+        _credentialUserNameMaxUnits,
+      );
+      if (storedUserName == null) {
+        throw const MayaCredentialStoreException(
+          MayaCredentialStoreErrorCode.corruptCredential,
+        );
+      }
+      if (storedUserName != expectedUserName) return null;
 
       copiedBytes = Uint8List.fromList(blob.asTypedList(size));
       try {
@@ -146,6 +167,43 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
   }
 
   @override
+  Future<bool> exists({required String providerId}) async {
+    final target = mayaCredentialTargetForProvider(providerId);
+    final arena = _NativeHeapArena(_bindings);
+    Pointer<_CredentialW> nativeCredential = nullptr;
+    try {
+      final targetPointer = arena.utf16(target);
+      final output = arena.credentialOutput();
+      if (_bindings.credRead(targetPointer, _credTypeGeneric, 0, output) == 0) {
+        final error = _bindings.getLastError();
+        if (_isNotFound(error)) return false;
+        throw const MayaCredentialStoreException(
+          MayaCredentialStoreErrorCode.readFailed,
+        );
+      }
+      nativeCredential = output.value;
+      if (nativeCredential == nullptr) {
+        throw const MayaCredentialStoreException(
+          MayaCredentialStoreErrorCode.corruptCredential,
+        );
+      }
+      return true;
+    } on MayaCredentialStoreException {
+      rethrow;
+    } catch (_) {
+      throw const MayaCredentialStoreException(
+        MayaCredentialStoreErrorCode.readFailed,
+      );
+    } finally {
+      if (nativeCredential != nullptr) {
+        _zeroCredentialBlob(nativeCredential);
+        _bindings.credFree(nativeCredential.cast<Void>());
+      }
+      arena.dispose();
+    }
+  }
+
+  @override
   Future<void> delete({required String providerId}) async {
     final target = mayaCredentialTargetForProvider(providerId);
     final arena = _NativeHeapArena(_bindings);
@@ -171,6 +229,29 @@ final class WindowsMayaCredentialStore implements MayaCredentialStore {
 
   static bool _isNotFound(int error) =>
       error == _errorNotFound || error == _errorFileNotFound;
+}
+
+String _credentialUserName(String providerId, String? binding) =>
+    binding == null ? providerId : '$_credentialBindingUserPrefix$binding';
+
+String? _readNullTerminatedUtf16(Pointer<Uint16> pointer, int maxUnits) {
+  final units = <int>[];
+  for (var i = 0; i <= maxUnits; i++) {
+    final unit = pointer[i];
+    if (unit == 0) return String.fromCharCodes(units);
+    if (i == maxUnits) return null;
+    units.add(unit);
+  }
+  return null;
+}
+
+void _zeroCredentialBlob(Pointer<_CredentialW> credential) {
+  final native = credential.ref;
+  final size = native.credentialBlobSize;
+  final blob = native.credentialBlob;
+  if (blob != nullptr && size > 0 && size <= kMayaCredentialMaxApiKeyBytes) {
+    blob.asTypedList(size).fillRange(0, size, 0);
+  }
 }
 
 final class _FileTime extends Struct {

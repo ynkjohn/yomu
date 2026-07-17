@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_desktop/services/maya_credential_store.dart';
+import 'package:yomu_desktop/services/maya_custom_provider_security.dart';
 import 'package:yomu_desktop/services/maya_provider_controller.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
@@ -46,6 +47,7 @@ MayaLlmRequest _request({
 
 final class _CredentialStore implements MayaCredentialStore {
   final Map<String, String> values = <String, String>{};
+  final Map<String, String?> bindings = <String, String?>{};
   final List<String> events = <String>[];
   int saveCalls = 0;
   int readCalls = 0;
@@ -63,10 +65,12 @@ final class _CredentialStore implements MayaCredentialStore {
   Future<void> save({
     required String providerId,
     required String apiKey,
+    String? credentialBinding,
   }) async {
     saveCalls++;
     events.add('save:$providerId');
     validateMayaCredentialProviderId(providerId);
+    validateMayaCredentialBinding(credentialBinding);
     validateMayaApiKey(apiKey);
     final saveStarted = nextSaveStarted;
     nextSaveStarted = null;
@@ -77,16 +81,30 @@ final class _CredentialStore implements MayaCredentialStore {
     if (blocker != null) await blocker.future;
     await onSave?.call(providerId, apiKey);
     values[providerId] = apiKey;
+    bindings[providerId] = credentialBinding;
   }
 
   @override
-  Future<String?> read({required String providerId}) async {
+  Future<String?> read({
+    required String providerId,
+    String? credentialBinding,
+  }) async {
     readCalls++;
     events.add('read:$providerId');
     validateMayaCredentialProviderId(providerId);
+    validateMayaCredentialBinding(credentialBinding);
     if (failRead) throw StateError('raw-secret-read-failure');
-    final stored = values[providerId];
+    final stored = bindings[providerId] == credentialBinding
+        ? values[providerId]
+        : null;
     return readOverride?.call(providerId, stored) ?? stored;
+  }
+
+  @override
+  Future<bool> exists({required String providerId}) async {
+    validateMayaCredentialProviderId(providerId);
+    if (failRead) throw StateError('raw-secret-exists-failure');
+    return values.containsKey(providerId);
   }
 
   @override
@@ -97,6 +115,7 @@ final class _CredentialStore implements MayaCredentialStore {
     await onDelete?.call(providerId);
     if (failDelete) throw StateError('raw-secret-delete-failure');
     values.remove(providerId);
+    bindings.remove(providerId);
   }
 }
 
@@ -362,6 +381,7 @@ void main() {
         'anthropic',
         'gemini',
         'ollama',
+        'openai-compatible',
       });
       await expectLater(
         controller.saveCloud(
@@ -424,6 +444,200 @@ void main() {
         controller.settings?.consentVersion,
         kCurrentMayaProviderConsentVersion,
       );
+    },
+  );
+
+  test(
+    'custom profile canonicalizes, binds its key, and reopens ready',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.close);
+      fixture.adapters.builder = (_, readCredential) =>
+          _CredentialReadingAdapter(readCredential);
+      final controller = await fixture.openController();
+
+      await controller.saveCustom(
+        endpointUrl: 'HTTPS://API.Example.com:443/v1/chat/completions',
+        modelId: 'compatible-model',
+        useApiKey: true,
+        apiKey: 'sk-custom-bound',
+        shareRecentHistory: true,
+        shareLibraryContext: false,
+      );
+
+      final endpoint = MayaCustomProviderEndpoint.parse(
+        'https://api.example.com/v1/chat/completions',
+      );
+      expect(controller.status, MayaProviderControllerStatus.cloudReady);
+      expect(controller.settings?.providerId, kMayaCustomProviderId);
+      expect(controller.customSettings?.endpointUrl, endpoint.canonicalUrl);
+      expect(controller.customSettings?.useApiKey, isTrue);
+      expect(
+        fixture.credentials.bindings[kMayaCustomProviderId],
+        endpoint.credentialBinding,
+      );
+      expect(
+        fixture.adapters.calls.last.settings.customEndpointUrl,
+        endpoint.canonicalUrl,
+      );
+      expect(fixture.adapters.calls.last.settings.customUseApiKey, isTrue);
+
+      final response = await controller.complete(
+        _request(contextLease: controller.contextPolicy.contextLease),
+      );
+      expect(response.text, 'credential-backed response');
+      expect(fixture.credentials.readCalls, 3);
+
+      await controller.close();
+      final reopened = await fixture.openController();
+      expect(reopened.status, MayaProviderControllerStatus.cloudReady);
+      expect(reopened.customSettings?.endpointUrl, endpoint.canonicalUrl);
+      expect(fixture.credentials.readCalls, 4);
+    },
+  );
+
+  test('endpoint change with blank key never reuses the old binding', () async {
+    final fixture = await _Fixture.create();
+    addTearDown(fixture.close);
+    final controller = await fixture.openController();
+
+    await controller.saveCustom(
+      endpointUrl: 'https://first.example.com/v1/chat/completions',
+      modelId: 'first-model',
+      useApiKey: true,
+      apiKey: 'sk-first-endpoint',
+      shareRecentHistory: false,
+      shareLibraryContext: false,
+    );
+    final firstBinding = fixture.credentials.bindings[kMayaCustomProviderId];
+
+    await expectLater(
+      controller.saveCustom(
+        endpointUrl: 'https://second.example.com/v1/chat/completions',
+        modelId: 'second-model',
+        useApiKey: true,
+        shareRecentHistory: false,
+        shareLibraryContext: false,
+      ),
+      throwsA(
+        _controllerError(MayaProviderControllerErrorCode.missingCredential),
+      ),
+    );
+
+    expect(controller.status, MayaProviderControllerStatus.disabled);
+    expect(
+      controller.customSettings?.endpointUrl,
+      'https://second.example.com/v1/chat/completions',
+    );
+    expect(
+      fixture.credentials.values[kMayaCustomProviderId],
+      'sk-first-endpoint',
+    );
+    expect(fixture.credentials.bindings[kMayaCustomProviderId], firstBinding);
+    expect(
+      (await fixture.database.getMayaProviderSettings())?.isEnabled,
+      isFalse,
+    );
+  });
+
+  test(
+    'optional-key mode deletes the key; local preserves profile; cleanup removes it',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.close);
+      final controller = await fixture.openController();
+      const endpoint = 'http://127.0.0.1:1234/v1/chat/completions';
+
+      await controller.saveCustom(
+        endpointUrl: endpoint,
+        modelId: 'local-compatible',
+        useApiKey: true,
+        apiKey: 'sk-to-remove',
+        shareRecentHistory: false,
+        shareLibraryContext: false,
+      );
+      await controller.saveCustom(
+        endpointUrl: endpoint,
+        modelId: 'local-compatible',
+        useApiKey: false,
+        shareRecentHistory: false,
+        shareLibraryContext: false,
+      );
+      expect(controller.status, MayaProviderControllerStatus.cloudReady);
+      expect(controller.customSettings?.useApiKey, isFalse);
+      expect(fixture.credentials.values[kMayaCustomProviderId], isNull);
+
+      await controller.saveLocal();
+      expect(controller.status, MayaProviderControllerStatus.local);
+      expect(controller.customSettings?.endpointUrl, endpoint);
+      expect(await fixture.database.getMayaCustomProviderSettings(), isNotNull);
+
+      await controller.removeProvider();
+      expect(controller.status, MayaProviderControllerStatus.local);
+      expect(controller.customSettings, isNull);
+      expect(await fixture.database.getMayaCustomProviderSettings(), isNull);
+      expect(fixture.credentials.values, isEmpty);
+    },
+  );
+
+  test(
+    'restart rejects missing, stale, or invalid custom profiles and accepts a matching keyless profile',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.close);
+      final settings = MayaProviderSettings.cloud(
+        providerId: kMayaCustomProviderId,
+        modelPolicy: MayaProviderModelPolicy.explicit,
+        modelId: 'compatible/restart model',
+        shareRecentHistory: true,
+        shareLibraryContext: false,
+        consentVersion: kCurrentMayaProviderConsentVersion,
+        consentedAtMs: 100,
+        updatedAtMs: 100,
+      );
+      await fixture.database.setMayaProviderSettings(settings);
+
+      final missing = await fixture.openController();
+      expect(missing.status, MayaProviderControllerStatus.adapterUnavailable);
+      expect(missing.contextPolicy.enabled, isFalse);
+      await missing.close();
+
+      await fixture.database.setMayaCustomProviderSettings(
+        MayaCustomProviderSettings(
+          endpointUrl: 'https://api.example.com/v1/chat/completions',
+          useApiKey: false,
+          updatedAtMs: 99,
+        ),
+      );
+      final stale = await fixture.openController();
+      expect(stale.status, MayaProviderControllerStatus.adapterUnavailable);
+      expect(stale.contextPolicy.enabled, isFalse);
+      await stale.close();
+
+      await fixture.database.setMayaCustomProviderSettings(
+        MayaCustomProviderSettings(
+          endpointUrl: 'https://127.0.0.1/v1/chat/completions',
+          useApiKey: false,
+          updatedAtMs: 100,
+        ),
+      );
+      final invalid = await fixture.openController();
+      expect(invalid.status, MayaProviderControllerStatus.adapterUnavailable);
+      expect(invalid.contextPolicy.enabled, isFalse);
+      await invalid.close();
+
+      await fixture.database.setMayaCustomProviderSettings(
+        MayaCustomProviderSettings(
+          endpointUrl: 'http://127.0.0.1:1234/v1/chat/completions',
+          useApiKey: false,
+          updatedAtMs: 100,
+        ),
+      );
+      final valid = await fixture.openController();
+      expect(valid.status, MayaProviderControllerStatus.cloudReady);
+      expect(valid.contextPolicy.enabled, isTrue);
+      expect(fixture.credentials.readCalls, 0);
+      expect(fixture.adapters.calls, hasLength(1));
     },
   );
 
@@ -1010,7 +1224,12 @@ void main() {
     expect(fixture.credentials.values, isEmpty);
     expect(
       fixture.credentials.events.where((event) => event.startsWith('delete:')),
-      <String>['delete:openai', 'delete:anthropic', 'delete:gemini'],
+      <String>[
+        'delete:openai',
+        'delete:anthropic',
+        'delete:openai-compatible',
+        'delete:gemini',
+      ],
     );
   });
 
@@ -1225,6 +1444,42 @@ void main() {
       await fixture.database.customStatement(
         "INSERT OR REPLACE INTO app_meta(key, value, updated_at_ms) "
         "VALUES ('provider.file.audit', 'complete', 1)",
+      );
+
+      final needle = secret.codeUnits;
+      final files = fixture.root
+          .listSync(recursive: true, followLinks: false)
+          .whereType<File>();
+      for (final file in files) {
+        final bytes = await file.readAsBytes();
+        expect(
+          _containsBytes(bytes, needle),
+          isFalse,
+          reason: 'plaintext found in ${file.path}',
+        );
+      }
+    },
+  );
+
+  test(
+    'custom API key bytes never enter SQLite, WAL, SHM, lock, or log files',
+    () async {
+      final fixture = await _Fixture.create();
+      addTearDown(fixture.close);
+      final controller = await fixture.openController();
+      const secret = 'sk-custom-file-audit-unique-a18e6d42';
+
+      await controller.saveCustom(
+        endpointUrl: 'https://api.example.com/v1/chat/completions',
+        modelId: 'compatible/audit model',
+        useApiKey: true,
+        apiKey: secret,
+        shareRecentHistory: true,
+        shareLibraryContext: true,
+      );
+      await fixture.database.customStatement(
+        "INSERT OR REPLACE INTO app_meta(key, value, updated_at_ms) "
+        "VALUES ('provider.custom.file.audit', 'complete', 1)",
       );
 
       final needle = secret.codeUnits;

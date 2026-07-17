@@ -4,17 +4,20 @@ import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
 import 'maya_credential_store.dart';
+import 'maya_custom_provider_security.dart';
 
 const Set<String> kSupportedMayaProviderIds = <String>{
   'openai',
   'anthropic',
   'gemini',
   'ollama',
+  kMayaCustomProviderId,
 };
 const List<String> _cloudCredentialProviderIds = <String>[
   'openai',
   'anthropic',
   'gemini',
+  kMayaCustomProviderId,
 ];
 const int kCurrentMayaProviderConsentVersion = 1;
 
@@ -75,16 +78,22 @@ final class MayaProviderAdapterSettings {
     required this.providerId,
     required this.modelPolicy,
     required this.modelId,
+    this.customEndpointUrl,
+    this.customUseApiKey,
   });
 
   final String providerId;
   final MayaProviderModelPolicy modelPolicy;
   final String? modelId;
+  final String? customEndpointUrl;
+  final bool? customUseApiKey;
 
   @override
   String toString() =>
       'MayaProviderAdapterSettings(providerId: $providerId, '
-      'modelPolicy: ${modelPolicy.name}, modelConfigured: ${modelId != null})';
+      'modelPolicy: ${modelPolicy.name}, modelConfigured: ${modelId != null}, '
+      'customEndpointConfigured: ${customEndpointUrl != null}, '
+      'customUseApiKey: $customUseApiKey)';
 }
 
 /// Reads the current credential only while an adapter request is admitted.
@@ -142,6 +151,7 @@ final class MayaProviderController implements MayaLlmProvider {
   Future<void> _mutationTail = Future<void>.value();
   Future<void>? _closeFuture;
   MayaProviderSettings? _settings;
+  MayaCustomProviderSettings? _customSettings;
   MayaLlmProvider? _adapter;
   _MayaProviderCredentialAccess? _credentialAccess;
   _MayaProviderContextLease? _contextLease;
@@ -156,6 +166,8 @@ final class MayaProviderController implements MayaLlmProvider {
   MayaProviderControllerStatus get status => _status;
 
   MayaProviderSettings? get settings => _settings;
+
+  MayaCustomProviderSettings? get customSettings => _customSettings;
 
   bool get isClosed => !_accepting;
 
@@ -199,7 +211,7 @@ final class MayaProviderController implements MayaLlmProvider {
     required bool shareLibraryContext,
   }) {
     return _enqueueMutation(() async {
-      _requireSupportedProvider(providerId);
+      _requireBuiltInProvider(providerId);
       final nowMs = _clock().toUtc().millisecondsSinceEpoch;
 
       late final MayaProviderSettings candidate;
@@ -232,6 +244,87 @@ final class MayaProviderController implements MayaLlmProvider {
         credentialMutation = await _prepareCredential(
           providerId: providerId,
           candidateKey: apiKey,
+          credentialBinding: null,
+          previousCredentialBinding: null,
+          requireCredential: providerId != 'ollama',
+        );
+      } on MayaProviderControllerException {
+        _settings = disabled;
+        _status = MayaProviderControllerStatus.disabled;
+        rethrow;
+      }
+      try {
+        await _persist(candidate);
+      } on MayaProviderControllerException {
+        await credentialMutation?.rollback();
+        _settings = disabled;
+        _status = MayaProviderControllerStatus.disabled;
+        rethrow;
+      }
+      credentialMutation?.commit();
+      await _replaceActive(candidate, throwOnAdapterFailure: true);
+    });
+  }
+
+  /// Save and activate the single custom OpenAI-compatible profile.
+  ///
+  /// The endpoint is canonicalized before persistence. A disabled general row
+  /// and the custom profile are committed atomically before any vault change.
+  /// The optional key is bound to the canonical endpoint SHA-256, so changing
+  /// the endpoint can never reuse an old key through a blank field.
+  Future<void> saveCustom({
+    required String endpointUrl,
+    required String modelId,
+    required bool useApiKey,
+    String? apiKey,
+    required bool shareRecentHistory,
+    required bool shareLibraryContext,
+  }) {
+    return _enqueueMutation(() async {
+      late final MayaCustomProviderEndpoint endpoint;
+      late final MayaProviderSettings candidate;
+      late final MayaCustomProviderSettings customCandidate;
+      final nowMs = _clock().toUtc().millisecondsSinceEpoch;
+      try {
+        endpoint = MayaCustomProviderEndpoint.parse(endpointUrl);
+        candidate = MayaProviderSettings.cloud(
+          providerId: kMayaCustomProviderId,
+          modelPolicy: MayaProviderModelPolicy.explicit,
+          modelId: modelId,
+          isEnabled: true,
+          shareRecentHistory: shareRecentHistory,
+          shareLibraryContext: shareLibraryContext,
+          consentVersion: kCurrentMayaProviderConsentVersion,
+          consentedAtMs: nowMs,
+          updatedAtMs: nowMs,
+        );
+        customCandidate = MayaCustomProviderSettings(
+          endpointUrl: endpoint.canonicalUrl,
+          useApiKey: useApiKey,
+          updatedAtMs: nowMs,
+        );
+      } catch (_) {
+        throw const MayaProviderControllerException(
+          MayaProviderControllerErrorCode.invalidConfiguration,
+        );
+      }
+
+      final previousBinding = _customCredentialBinding(_customSettings);
+      final disabled = _disabledCloudSnapshot(candidate, nowMs);
+      await _persistCustomConfiguration(disabled, customCandidate);
+      _settings = disabled;
+      _customSettings = customCandidate;
+      _status = MayaProviderControllerStatus.disabled;
+      await _stopActive();
+
+      _MayaCredentialMutation? credentialMutation;
+      try {
+        credentialMutation = await _prepareCredential(
+          providerId: kMayaCustomProviderId,
+          candidateKey: apiKey,
+          credentialBinding: endpoint.credentialBinding,
+          previousCredentialBinding: previousBinding,
+          requireCredential: useApiKey,
         );
       } on MayaProviderControllerException {
         _settings = disabled;
@@ -289,6 +382,7 @@ final class MayaProviderController implements MayaLlmProvider {
           }
           _status = _inactiveStatusFor(
             previous,
+            customSettings: _customSettings,
             credentialUnavailable: cleanupFailed,
           );
           rethrow;
@@ -300,25 +394,32 @@ final class MayaProviderController implements MayaLlmProvider {
       try {
         await _deleteCloudCredentials(previous?.providerId);
       } on MayaProviderControllerException {
-        _status = _inactiveStatusFor(_settings, credentialUnavailable: true);
+        _status = _inactiveStatusFor(
+          _settings,
+          customSettings: _customSettings,
+          credentialUnavailable: true,
+        );
         rethrow;
       }
 
       // The cloud row is already disabled before cleanup starts. If final
       // persistence fails, restart remains fail-closed and a later removal can
       // retry the idempotent cleanup/finalization step.
-      _status = _inactiveStatusFor(_settings, credentialUnavailable: false);
+      _status = _inactiveStatusFor(
+        _settings,
+        customSettings: _customSettings,
+        credentialUnavailable: false,
+      );
       MayaProviderSettings? replacement;
-      if (resetToUnset) {
-        await _resetPersistence();
-      } else {
+      if (!resetToUnset) {
         replacement = MayaProviderSettings.local(
           updatedAtMs: _clock().toUtc().millisecondsSinceEpoch,
         );
-        await _persist(replacement);
       }
+      await _finalizeProviderRemoval(replacement);
 
       _settings = replacement;
+      _customSettings = null;
       _status = replacement == null
           ? MayaProviderControllerStatus.unset
           : MayaProviderControllerStatus.local;
@@ -386,19 +487,24 @@ final class MayaProviderController implements MayaLlmProvider {
     return _closeFuture = _mutationTail.then((_) async {
       await _stopActive();
       _settings = null;
+      _customSettings = null;
       _status = MayaProviderControllerStatus.closed;
     });
   }
 
   Future<void> _load() async {
     MayaProviderSettings? persisted;
+    MayaCustomProviderSettings? customPersisted;
     try {
       persisted = await _database.getMayaProviderSettings();
+      customPersisted = await _database.getMayaCustomProviderSettings();
     } catch (_) {
       throw const MayaProviderControllerException(
         MayaProviderControllerErrorCode.persistenceFailure,
       );
     }
+
+    _customSettings = customPersisted;
 
     if (persisted == null) {
       _settings = null;
@@ -433,10 +539,28 @@ final class MayaProviderController implements MayaLlmProvider {
       return;
     }
 
-    if (providerId != 'ollama') {
+    String? credentialBinding;
+    var requiresCredential = providerId != 'ollama';
+    if (providerId == kMayaCustomProviderId) {
+      final custom = _customSettings;
+      if (custom == null ||
+          custom.updatedAtMs != persisted.consentedAtMs ||
+          !_validCustomSettings(custom)) {
+        _status = MayaProviderControllerStatus.adapterUnavailable;
+        return;
+      }
+      final endpoint = MayaCustomProviderEndpoint.parse(custom.endpointUrl);
+      credentialBinding = endpoint.credentialBinding;
+      requiresCredential = custom.useApiKey;
+    }
+
+    if (requiresCredential) {
       String? credential;
       try {
-        credential = await _credentialStore.read(providerId: providerId);
+        credential = await _credentialStore.read(
+          providerId: providerId,
+          credentialBinding: credentialBinding,
+        );
       } catch (_) {
         _status = MayaProviderControllerStatus.credentialUnavailable;
         return;
@@ -452,13 +576,19 @@ final class MayaProviderController implements MayaLlmProvider {
   Future<_MayaCredentialMutation?> _prepareCredential({
     required String providerId,
     required String? candidateKey,
+    required String? credentialBinding,
+    required String? previousCredentialBinding,
+    required bool requireCredential,
   }) async {
     if (providerId == 'ollama') return null;
 
     final supplied = candidateKey != null && candidateKey.trim().isNotEmpty;
-    if (!supplied) {
+    if (requireCredential && !supplied) {
       try {
-        final existing = await _credentialStore.read(providerId: providerId);
+        final existing = await _credentialStore.read(
+          providerId: providerId,
+          credentialBinding: credentialBinding,
+        );
         if (existing == null) {
           await _deactivateIfActiveProvider(
             providerId,
@@ -484,7 +614,10 @@ final class MayaProviderController implements MayaLlmProvider {
 
     String? previousCredential;
     try {
-      previousCredential = await _credentialStore.read(providerId: providerId);
+      previousCredential = await _credentialStore.read(
+        providerId: providerId,
+        credentialBinding: previousCredentialBinding,
+      );
     } catch (_) {
       throw const MayaProviderControllerException(
         MayaProviderControllerErrorCode.credentialFailure,
@@ -494,10 +627,45 @@ final class MayaProviderController implements MayaLlmProvider {
       credentialStore: _credentialStore,
       providerId: providerId,
       previousCredential: previousCredential,
+      previousCredentialBinding: previousCredentialBinding,
     );
+
+    if (!requireCredential) {
+      try {
+        await _credentialStore.delete(providerId: providerId);
+      } catch (_) {
+        // Readback below remains authoritative because a vault may commit the
+        // delete before returning an operation error.
+      }
+      try {
+        if (await _credentialStore.exists(providerId: providerId)) {
+          throw StateError('credential still present');
+        }
+        return mutation;
+      } catch (_) {
+        final restored = await mutation.rollback();
+        if (!restored) {
+          await _deactivateIfActiveProvider(
+            providerId,
+            status: MayaProviderControllerStatus.credentialUnavailable,
+          );
+        }
+        throw const MayaProviderControllerException(
+          MayaProviderControllerErrorCode.credentialFailure,
+        );
+      }
+    }
+
     try {
-      await _credentialStore.save(providerId: providerId, apiKey: candidateKey);
-      final readback = await _credentialStore.read(providerId: providerId);
+      await _credentialStore.save(
+        providerId: providerId,
+        apiKey: candidateKey!,
+        credentialBinding: credentialBinding,
+      );
+      final readback = await _credentialStore.read(
+        providerId: providerId,
+        credentialBinding: credentialBinding,
+      );
       if (readback != candidateKey) throw StateError('credential readback');
       return mutation;
     } catch (_) {
@@ -530,8 +698,9 @@ final class MayaProviderController implements MayaLlmProvider {
         // delete. The readback below remains the source of truth.
       }
       try {
-        final readback = await _credentialStore.read(providerId: providerId);
-        if (readback != null) failed = true;
+        if (await _credentialStore.exists(providerId: providerId)) {
+          failed = true;
+        }
       } catch (_) {
         failed = true;
       }
@@ -566,9 +735,34 @@ final class MayaProviderController implements MayaLlmProvider {
     }
   }
 
-  Future<void> _resetPersistence() async {
+  Future<void> _persistCustomConfiguration(
+    MayaProviderSettings providerSettings,
+    MayaCustomProviderSettings customSettings,
+  ) async {
     try {
-      await _database.resetMayaProviderSettings();
+      await _database.transaction(() async {
+        await _database.setMayaCustomProviderSettings(customSettings);
+        await _database.setMayaProviderSettings(providerSettings);
+      });
+    } catch (_) {
+      throw const MayaProviderControllerException(
+        MayaProviderControllerErrorCode.persistenceFailure,
+      );
+    }
+  }
+
+  Future<void> _finalizeProviderRemoval(
+    MayaProviderSettings? replacement,
+  ) async {
+    try {
+      await _database.transaction(() async {
+        await _database.resetMayaCustomProviderSettings();
+        if (replacement == null) {
+          await _database.resetMayaProviderSettings();
+        } else {
+          await _database.setMayaProviderSettings(replacement);
+        }
+      });
     } catch (_) {
       throw const MayaProviderControllerException(
         MayaProviderControllerErrorCode.persistenceFailure,
@@ -587,9 +781,32 @@ final class MayaProviderController implements MayaLlmProvider {
     }
     await _stopActive();
     _settings = settings;
+    MayaCustomProviderSettings? custom;
+    String? credentialBinding;
+    var requiresCredential = settings.providerId != 'ollama';
+    if (settings.providerId == kMayaCustomProviderId) {
+      custom = _customSettings;
+      if (custom == null ||
+          custom.updatedAtMs != settings.consentedAtMs ||
+          !_validCustomSettings(custom)) {
+        _status = MayaProviderControllerStatus.adapterUnavailable;
+        if (throwOnAdapterFailure) {
+          throw const MayaProviderControllerException(
+            MayaProviderControllerErrorCode.adapterFailure,
+          );
+        }
+        return;
+      }
+      credentialBinding = MayaCustomProviderEndpoint.parse(
+        custom.endpointUrl,
+      ).credentialBinding;
+      requiresCredential = custom.useApiKey;
+    }
     final credentialAccess = _MayaProviderCredentialAccess(
       credentialStore: _credentialStore,
       providerId: settings.providerId!,
+      credentialBinding: credentialBinding,
+      requiresCredential: requiresCredential,
     );
     try {
       final adapter = await _adapterFactory(
@@ -597,6 +814,8 @@ final class MayaProviderController implements MayaLlmProvider {
           providerId: settings.providerId!,
           modelPolicy: settings.modelPolicy!,
           modelId: settings.modelId,
+          customEndpointUrl: custom?.endpointUrl,
+          customUseApiKey: custom?.useApiKey,
         ),
         readCredential: credentialAccess.read,
       );
@@ -676,6 +895,15 @@ final class MayaProviderController implements MayaLlmProvider {
     }
   }
 
+  static void _requireBuiltInProvider(String providerId) {
+    _requireSupportedProvider(providerId);
+    if (providerId == kMayaCustomProviderId) {
+      throw const MayaProviderControllerException(
+        MayaProviderControllerErrorCode.invalidConfiguration,
+      );
+    }
+  }
+
   static bool _validPersistedModel(MayaProviderSettings settings) {
     return switch (settings.modelPolicy) {
       MayaProviderModelPolicy.providerDefault => settings.modelId == null,
@@ -685,8 +913,31 @@ final class MayaProviderController implements MayaLlmProvider {
     };
   }
 
+  static bool _validCustomSettings(MayaCustomProviderSettings settings) {
+    try {
+      final endpoint = MayaCustomProviderEndpoint.parse(settings.endpointUrl);
+      return endpoint.canonicalUrl == settings.endpointUrl;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String? _customCredentialBinding(
+    MayaCustomProviderSettings? settings,
+  ) {
+    if (settings == null) return null;
+    try {
+      return MayaCustomProviderEndpoint.parse(
+        settings.endpointUrl,
+      ).credentialBinding;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static MayaProviderControllerStatus _inactiveStatusFor(
     MayaProviderSettings? settings, {
+    required MayaCustomProviderSettings? customSettings,
     required bool credentialUnavailable,
   }) {
     if (settings == null) return MayaProviderControllerStatus.unset;
@@ -704,6 +955,12 @@ final class MayaProviderController implements MayaLlmProvider {
       return MayaProviderControllerStatus.consentRequired;
     }
     if (!_validPersistedModel(settings) || providerId == 'ollama') {
+      return MayaProviderControllerStatus.adapterUnavailable;
+    }
+    if (providerId == kMayaCustomProviderId &&
+        (customSettings == null ||
+            !_validCustomSettings(customSettings) ||
+            !customSettings.useApiKey)) {
       return MayaProviderControllerStatus.adapterUnavailable;
     }
     return credentialUnavailable
@@ -757,11 +1014,13 @@ final class _MayaCredentialMutation {
     required MayaCredentialStore credentialStore,
     required this.providerId,
     required String? previousCredential,
+    required this.previousCredentialBinding,
   }) : _credentialStore = credentialStore,
        _previousCredential = previousCredential;
 
   final MayaCredentialStore _credentialStore;
   final String providerId;
+  final String? previousCredentialBinding;
   String? _previousCredential;
   bool _active = true;
 
@@ -779,14 +1038,24 @@ final class _MayaCredentialMutation {
       if (previous == null) {
         await _credentialStore.delete(providerId: providerId);
       } else {
-        await _credentialStore.save(providerId: providerId, apiKey: previous);
+        await _credentialStore.save(
+          providerId: providerId,
+          apiKey: previous,
+          credentialBinding: previousCredentialBinding,
+        );
       }
     } catch (_) {
       // Read back even after an operation error: Windows Credential Manager
       // may have committed the mutation before reporting a boundary failure.
     }
     try {
-      final readback = await _credentialStore.read(providerId: providerId);
+      if (previous == null) {
+        return !await _credentialStore.exists(providerId: providerId);
+      }
+      final readback = await _credentialStore.read(
+        providerId: providerId,
+        credentialBinding: previousCredentialBinding,
+      );
       return readback == previous;
     } catch (_) {
       return false;
@@ -798,10 +1067,14 @@ final class _MayaProviderCredentialAccess {
   _MayaProviderCredentialAccess({
     required MayaCredentialStore credentialStore,
     required this.providerId,
+    required this.credentialBinding,
+    required this.requiresCredential,
   }) : _credentialStore = credentialStore;
 
   final MayaCredentialStore _credentialStore;
   final String providerId;
+  final String? credentialBinding;
+  final bool requiresCredential;
   int _activeRequests = 0;
   bool _valid = true;
 
@@ -821,12 +1094,15 @@ final class _MayaProviderCredentialAccess {
   }
 
   Future<String?> read() async {
-    if (providerId == 'ollama') return null;
+    if (!requiresCredential) return null;
     if (!_valid || _activeRequests == 0) {
       throw const MayaLlmException(MayaLlmFailureKind.cancelled);
     }
     try {
-      return await _credentialStore.read(providerId: providerId);
+      return await _credentialStore.read(
+        providerId: providerId,
+        credentialBinding: credentialBinding,
+      );
     } catch (_) {
       throw const MayaLlmException(MayaLlmFailureKind.unavailable);
     }

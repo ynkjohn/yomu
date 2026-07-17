@@ -99,6 +99,7 @@ List<Map<String, Object?>> _toolDeclarations(
         _map(tools.single)['functionDeclarations'],
       ).map(_map).toList(growable: false);
     case 'ollama':
+    case 'openai-compatible':
       return _list(
         body['tools'],
       ).map(_map).map((tool) => _map(tool['function'])).toList(growable: false);
@@ -129,6 +130,8 @@ String _trustedSystemPrompt(
       _map(_list(_map(body['systemInstruction'])['parts']).single)['text']!
           as String,
     'ollama' => _map(_list(body['messages']).first)['content']! as String,
+    'openai-compatible' =>
+      _map(_list(body['messages']).first)['content']! as String,
     _ => throw StateError('fixture provider'),
   };
 }
@@ -143,6 +146,7 @@ String _currentJsonMessage(MayaProviderCodec codec, Map<String, Object?> body) {
       final current = _map(_list(body['contents']).last);
       return _map(_list(current['parts']).single)['text']! as String;
     case 'ollama':
+    case 'openai-compatible':
       return _map(_list(body['messages']).last)['content']! as String;
     default:
       throw StateError('fixture provider');
@@ -161,6 +165,7 @@ void main() {
     AnthropicMayaProviderCodec(model: 'claude-test'),
     GeminiMayaProviderCodec(model: 'gemini-test'),
     OllamaMayaProviderCodec(model: 'llama-test'),
+    OpenAiChatMayaProviderCodec(model: 'compatible-test'),
   ];
 
   test('model is always explicit and provider IDs are allowlisted', () {
@@ -178,6 +183,10 @@ void main() {
     );
     expect(
       () => OllamaMayaProviderCodec(model: '\n'),
+      throwsA(_configurationFailure()),
+    );
+    expect(
+      () => OpenAiChatMayaProviderCodec(model: ' '),
       throwsA(_configurationFailure()),
     );
     expect(
@@ -254,6 +263,30 @@ void main() {
     expect(_map(messages.first)['role'], 'system');
     expect(_map(messages.first)['content'], kMayaProviderSystemPrompt);
     expect(body.keys, contains('tools'));
+  });
+
+  test('OpenAI-compatible Chat body is narrow and non-streaming', () {
+    final codec = codecs[4];
+    final body = codec.encode(_request());
+    final messages = _list(body['messages']);
+
+    expect(body['model'], 'compatible-test');
+    expect(body['max_tokens'], kMayaProviderMaxOutputTokens);
+    expect(body['stream'], isFalse);
+    expect(body['parallel_tool_calls'], isFalse);
+    expect(_map(messages.first)['role'], 'system');
+    expect(_map(messages.first)['content'], kMayaProviderSystemPrompt);
+    expect(
+      body.keys,
+      unorderedEquals(<String>[
+        'model',
+        'messages',
+        'tools',
+        'max_tokens',
+        'stream',
+        'parallel_tool_calls',
+      ]),
+    );
   });
 
   test('availableTools controls closed schemas for every provider', () {
@@ -698,6 +731,117 @@ void main() {
               },
           ],
         },
+      },
+    ),
+    _DecodeFixture(
+      name: 'OpenAI-compatible',
+      codec: codecs[4],
+      textOnly: const <String, Object?>{
+        'choices': <Object?>[
+          <String, Object?>{
+            'message': <String, Object?>{'content': 'Texto puro.'},
+          },
+        ],
+      },
+      toolOnly: const <String, Object?>{
+        'choices': <Object?>[
+          <String, Object?>{
+            'message': <String, Object?>{
+              'content': '',
+              'tool_calls': <Object?>[
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'open_manga',
+                    'arguments': '{"manga_id":7}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      mixed: const <String, Object?>{
+        'choices': <Object?>[
+          <String, Object?>{
+            'message': <String, Object?>{
+              'content': 'Resposta mista.',
+              'tool_calls': <Object?>[
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'download_chapter',
+                    'arguments': '{"manga_id":7,"chapter_id":99}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      mixedText: 'Resposta mista.',
+      malformed: const <String, Object?>{
+        'choices': <Object?>[
+          <String, Object?>{
+            'message': <String, Object?>{
+              'unknown': 'remote-secret',
+              'tool_calls': <Object?>[
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'unknown_tool',
+                    'arguments': '{"manga_id":1}',
+                  },
+                },
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'open_manga',
+                    'arguments': 'not-json',
+                  },
+                },
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'open_manga',
+                    'arguments': '{"manga_id":0}',
+                  },
+                },
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'open_manga',
+                    'arguments': '{"manga_id":-2}',
+                  },
+                },
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'open_manga',
+                    'arguments': '{"manga_id":3,"extra":true}',
+                  },
+                },
+                <String, Object?>{
+                  'function': <String, Object?>{
+                    'name': 'open_manga',
+                    'arguments': '{"manga_id":8}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      limit: <String, Object?>{
+        'choices': <Object?>[
+          <String, Object?>{
+            'message': <String, Object?>{
+              'content': '',
+              'tool_calls': <Object?>[
+                for (var id = 1; id <= 6; id++)
+                  <String, Object?>{
+                    'function': <String, Object?>{
+                      'name': 'open_manga',
+                      'arguments': '{"manga_id":$id}',
+                    },
+                  },
+              ],
+            },
+          },
+        ],
       },
     ),
   ];

@@ -12,29 +12,30 @@ Library membership, manga metadata from sources, chapters, pages, downloads, mai
 | Sessions | `device_sessions` | schema v2; somente hash do bearer |
 | Maya | `maya_messages`, `maya_action_proposals` | schema v3; P2A |
 | Maya providers | `maya_provider_settings` | schema v4; singleton sem credenciais |
+| Maya custom provider | `maya_custom_provider_settings` | schema v5; singleton de endpoint sem credenciais |
 | Settings | `app_settings` | candidato P2+; não aprovado |
 | Intention | `personal_status_overrides` | candidato P2+; não aprovado |
 | Specs | `source_specs`, `source_revisions` | Source Builder; fase posterior |
 | Analytics | `reading_analytics`, `history_extras` | candidato P2+; não aprovado |
 | Links | `suwayomi_link` | candidato P2+; não aprovado |
 
-O schema v4 preserva o histórico atual e o estado auditável de
-`ActionProposal` do schema v3 e adiciona somente a configuração não secreta do
-provider da Maya. A row `settings_id = 1` diferencia modo local, modo cloud e
-consentimentos de contexto; `is_enabled = 0` mantém transições e falhas cloud
-duravelmente fail-closed. Ausência da row significa configuração nunca
-realizada. API keys permanecem exclusivamente no Windows Credential Manager.
+O schema v5 preserva todo o schema v4 e adiciona somente
+`maya_custom_provider_settings`. A row geral `settings_id = 1` diferencia modo
+local, modo cloud e consentimentos de contexto; `is_enabled = 0` mantém
+transições e falhas cloud duravelmente fail-closed. A row custom, também
+singleton, guarda URL canônica, uso opcional de chave e timestamp do snapshot.
+API keys permanecem exclusivamente no Windows Credential Manager.
 
 O schema não cria conversas múltiplas, memória, prompts/respostas remotas crus
 ou logs genéricos. Os demais nomes continuam candidatos históricos, não
 autorização de persistência, e exigem nova subfase com schema bump separado.
-Consulte `docs/p2b-maya-providers.md` para o contrato completo da P2B.
+Consulte `docs/p2b-maya-providers.md` e
+`docs/p2c-maya-custom-provider.md` para os contratos completos.
 
-O provider personalizado solicitado para P2C não possui coluna ou tabela no
-schema v4. Se endpoint/perfil precisar ser persistido, a mudança deve ocorrer
-somente em uma migração explícita `4 → 5`, após definir ownership, protocolo,
-restrições de rede e política de credencial. Nenhum nome de tabela ou formato
-está autorizado antes desse plano.
+A migração `4 → 5` cria a tabela custom vazia e não inventa perfil. A row
+custom só é válida quando sua URL permanece canônica e seu `updated_at_ms`
+coincide com o consentimento da row geral ativa. Corrupção, ausência ou
+mismatch impedem a criação do adapter.
 
 ## Personal status reconciliation — modelo conceitual candidato
 

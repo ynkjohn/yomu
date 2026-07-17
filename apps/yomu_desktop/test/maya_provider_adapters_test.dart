@@ -35,6 +35,8 @@ Future<MayaLlmProvider> _adapter({
   required MayaProviderCredentialReader readCredential,
   required _RecordingTransport transport,
   MayaProviderModelPolicy modelPolicy = MayaProviderModelPolicy.explicit,
+  String? customEndpointUrl,
+  bool? customUseApiKey,
 }) {
   final factory = createMayaProviderAdapterFactory(
     transportFactory: () => transport,
@@ -44,6 +46,8 @@ Future<MayaLlmProvider> _adapter({
       providerId: providerId,
       modelPolicy: modelPolicy,
       modelId: modelId,
+      customEndpointUrl: customEndpointUrl,
+      customUseApiKey: customUseApiKey,
     ),
     readCredential: readCredential,
   );
@@ -225,6 +229,99 @@ void main() {
       expect(transport.allowLoopbackHttp, isTrue);
       expect(transport.headers, isEmpty);
       expect(transport.payload?['model'], 'llama3.2:3b');
+    },
+  );
+
+  test(
+    'custom Chat adapter uses the exact endpoint and optional bearer',
+    () async {
+      const secret = 'sk-compatible-adapter-test';
+      var reads = 0;
+      final transport = _RecordingTransport(
+        expectedCredential: secret,
+        response: <String, Object?>{
+          'choices': <Object?>[
+            <String, Object?>{
+              'message': <String, Object?>{'content': 'resposta compatível'},
+            },
+          ],
+        },
+      );
+      final adapter = await _adapter(
+        providerId: 'openai-compatible',
+        modelId: 'meta-llama/Llama 3.3',
+        customEndpointUrl: 'https://api.example.com/v1/chat/completions',
+        customUseApiKey: true,
+        readCredential: () async {
+          reads++;
+          return secret;
+        },
+        transport: transport,
+      );
+      addTearDown(adapter.close);
+
+      final response = await adapter.complete(_request());
+
+      expect(response.text, 'resposta compatível');
+      expect(reads, 1);
+      expect(
+        transport.endpoint,
+        Uri.parse('https://api.example.com/v1/chat/completions'),
+      );
+      expect(transport.allowLoopbackHttp, isFalse);
+      expect(transport.headers, <String, String>{
+        'Authorization': '<redacted>',
+      });
+      expect(transport.payload?['model'], 'meta-llama/Llama 3.3');
+      expect(transport.payload, contains('messages'));
+      expect(transport.payload, isNot(contains('instructions')));
+    },
+  );
+
+  test('custom model rejects control characters', () async {
+    await expectLater(
+      _adapter(
+        providerId: 'openai-compatible',
+        modelId: 'model\nsmuggled',
+        customEndpointUrl: 'https://api.example.com/v1/chat/completions',
+        customUseApiKey: false,
+        readCredential: () async => null,
+        transport: _RecordingTransport(response: const <String, Object?>{}),
+      ),
+      throwsA(_failure(MayaLlmFailureKind.configuration)),
+    );
+  });
+
+  test(
+    'custom loopback profile without API key never reads the vault',
+    () async {
+      var reads = 0;
+      final transport = _RecordingTransport(
+        response: <String, Object?>{
+          'choices': <Object?>[
+            <String, Object?>{
+              'message': <String, Object?>{'content': 'resposta local'},
+            },
+          ],
+        },
+      );
+      final adapter = await _adapter(
+        providerId: 'openai-compatible',
+        modelId: 'local-model',
+        customEndpointUrl: 'http://127.0.0.1:1234/v1/chat/completions',
+        customUseApiKey: false,
+        readCredential: () async {
+          reads++;
+          throw StateError('credential store must not be touched');
+        },
+        transport: transport,
+      );
+      addTearDown(adapter.close);
+
+      expect((await adapter.complete(_request())).text, 'resposta local');
+      expect(reads, 0);
+      expect(transport.allowLoopbackHttp, isTrue);
+      expect(transport.headers, isEmpty);
     },
   );
 
@@ -659,29 +756,46 @@ final class _RecordingTransport implements MayaProviderTransport {
 
 final class _CountingCredentialStore implements MayaCredentialStore {
   final Map<String, String> _values = <String, String>{};
+  final Map<String, String?> _bindings = <String, String?>{};
   int readCalls = 0;
 
   @override
   Future<void> save({
     required String providerId,
     required String apiKey,
+    String? credentialBinding,
   }) async {
     validateMayaCredentialProviderId(providerId);
+    validateMayaCredentialBinding(credentialBinding);
     validateMayaApiKey(apiKey);
     _values[providerId] = apiKey;
+    _bindings[providerId] = credentialBinding;
   }
 
   @override
-  Future<String?> read({required String providerId}) async {
+  Future<String?> read({
+    required String providerId,
+    String? credentialBinding,
+  }) async {
     validateMayaCredentialProviderId(providerId);
+    validateMayaCredentialBinding(credentialBinding);
     readCalls++;
-    return _values[providerId];
+    return _bindings[providerId] == credentialBinding
+        ? _values[providerId]
+        : null;
+  }
+
+  @override
+  Future<bool> exists({required String providerId}) async {
+    validateMayaCredentialProviderId(providerId);
+    return _values.containsKey(providerId);
   }
 
   @override
   Future<void> delete({required String providerId}) async {
     validateMayaCredentialProviderId(providerId);
     _values.remove(providerId);
+    _bindings.remove(providerId);
   }
 }
 

@@ -51,11 +51,17 @@ void main() {
       await request.response.close();
     });
     addTearDown(() => server.close(force: true));
-    final transport = MayaProviderHttpTransport();
+    InternetAddress? connectedAddress;
+    final transport = MayaProviderHttpTransport(
+      socketConnector: (address, port) {
+        connectedAddress = address;
+        return Socket.startConnect(address, port);
+      },
+    );
     addTearDown(transport.close);
 
     final result = await transport.postJson(
-      endpoint: _endpoint(server, '/v1/messages?mode=test'),
+      endpoint: _endpoint(server, '/v1/messages'),
       headers: const <String, String>{
         'Authorization': 'Bearer test-only-secret',
         'X-Provider-Version': '2026-01-01',
@@ -69,11 +75,152 @@ void main() {
     );
 
     expect(result, <String, Object?>{'ok': true});
-    expect(receivedPath, '/v1/messages?mode=test');
+    expect(receivedPath, '/v1/messages');
     expect(receivedMethod, 'POST');
     expect(receivedContentType, ContentType.json.mimeType);
     expect(receivedAuthorization, 'Bearer test-only-secret');
     expect(received['model'], 'test-model');
+    expect(connectedAddress?.address, '127.0.0.1');
+  });
+
+  test(
+    'rejects query, fragment and userinfo before opening a socket',
+    () async {
+      var connections = 0;
+      final transport = MayaProviderHttpTransport(
+        socketConnector: (address, port) {
+          connections++;
+          return Socket.startConnect(address, port);
+        },
+      );
+      addTearDown(transport.close);
+
+      for (final endpoint in <Uri>[
+        Uri.parse('https://api.example.com/v1/chat/completions?mode=test'),
+        Uri.parse('https://api.example.com/v1/chat/completions#fragment'),
+        Uri.parse('https://user@api.example.com/v1/chat/completions'),
+      ]) {
+        await expectLater(
+          transport.postJson(
+            endpoint: endpoint,
+            headers: const <String, String>{},
+            payload: const <String, Object?>{'ok': true},
+            cancellation: MayaLlmCancellationToken(),
+            allowLoopbackHttp: false,
+          ),
+          throwsA(_llmFailure(MayaLlmFailureKind.configuration)),
+        );
+      }
+      expect(connections, 0);
+    },
+  );
+
+  test('rejects private or mixed DNS answers before connecting', () async {
+    var connections = 0;
+    var lookups = 0;
+    final answers = <List<InternetAddress>>[
+      <InternetAddress>[InternetAddress('192.168.1.10')],
+      <InternetAddress>[
+        InternetAddress('93.184.216.34'),
+        InternetAddress('10.0.0.5'),
+      ],
+    ];
+    final transport = MayaProviderHttpTransport(
+      dnsLookup: (_) async => answers[lookups++],
+      socketConnector: (address, port) {
+        connections++;
+        return Socket.startConnect(address, port);
+      },
+    );
+    addTearDown(transport.close);
+
+    for (var i = 0; i < answers.length; i++) {
+      await expectLater(
+        transport.postJson(
+          endpoint: Uri.parse('https://api.example.com/v1/chat/completions'),
+          headers: const <String, String>{},
+          payload: const <String, Object?>{'ok': true},
+          cancellation: MayaLlmCancellationToken(),
+          allowLoopbackHttp: false,
+        ),
+        throwsA(_llmFailure(MayaLlmFailureKind.configuration)),
+      );
+    }
+    expect(lookups, 2);
+    expect(connections, 0);
+  });
+
+  test(
+    'connects to the validated public DNS address, not a second lookup',
+    () async {
+      final validated = InternetAddress('93.184.216.34');
+      InternetAddress? connectedAddress;
+      var lookups = 0;
+      final transport = MayaProviderHttpTransport(
+        dnsLookup: (_) async {
+          lookups++;
+          return <InternetAddress>[validated];
+        },
+        socketConnector: (address, port) async {
+          connectedAddress = address;
+          return Socket.startConnect(InternetAddress.loopbackIPv4, 1);
+        },
+      );
+      addTearDown(transport.close);
+
+      await expectLater(
+        transport.postJson(
+          endpoint: Uri.parse('https://api.example.com/v1/chat/completions'),
+          headers: const <String, String>{},
+          payload: const <String, Object?>{'ok': true},
+          cancellation: MayaLlmCancellationToken(),
+          allowLoopbackHttp: false,
+        ),
+        throwsA(_llmFailure(MayaLlmFailureKind.transport)),
+      );
+      expect(lookups, 1);
+      expect(connectedAddress?.address, validated.address);
+    },
+  );
+
+  test('HTTPS pins DNS then upgrades with the original hostname', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write('{"ok":true}');
+      await request.response.close();
+    });
+
+    final validated = InternetAddress('93.184.216.34');
+    InternetAddress? connectedAddress;
+    String? tlsHost;
+    final transport = MayaProviderHttpTransport(
+      dnsLookup: (_) async => <InternetAddress>[validated],
+      socketConnector: (address, port) {
+        connectedAddress = address;
+        return Socket.startConnect(InternetAddress.loopbackIPv4, server.port);
+      },
+      secureSocketUpgrader: (socket, host) async {
+        tlsHost = host;
+        return socket;
+      },
+    );
+    addTearDown(transport.close);
+
+    final response = await transport.postJson(
+      endpoint: Uri.parse(
+        'https://api.example.com:${server.port}/v1/chat/completions',
+      ),
+      headers: const <String, String>{},
+      payload: const <String, Object?>{'ok': true},
+      cancellation: MayaLlmCancellationToken(),
+      allowLoopbackHttp: false,
+    );
+
+    expect(response, <String, Object?>{'ok': true});
+    expect(connectedAddress?.address, validated.address);
+    expect(tlsHost, 'api.example.com');
   });
 
   test('plain HTTP requires explicit literal-loopback opt-in', () async {

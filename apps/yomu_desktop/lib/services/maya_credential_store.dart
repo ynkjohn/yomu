@@ -4,9 +4,11 @@ const String kMayaCredentialTargetPrefix = 'app.yomu/maya/provider/';
 const int kMayaCredentialMaxApiKeyBytes = 2048;
 
 final RegExp _providerIdPattern = RegExp(r'^[a-z][a-z0-9-]{0,39}$');
+final RegExp _credentialBindingPattern = RegExp(r'^[a-f0-9]{64}$');
 
 enum MayaCredentialStoreErrorCode {
   invalidProviderId,
+  invalidBinding,
   invalidApiKey,
   unavailable,
   readFailed,
@@ -27,6 +29,8 @@ final class MayaCredentialStoreException implements Exception {
   String get message => switch (code) {
     MayaCredentialStoreErrorCode.invalidProviderId =>
       'Identificador de provider inválido.',
+    MayaCredentialStoreErrorCode.invalidBinding =>
+      'Vínculo de credencial inválido.',
     MayaCredentialStoreErrorCode.invalidApiKey =>
       'A chave do provider é inválida.',
     MayaCredentialStoreErrorCode.unavailable =>
@@ -50,9 +54,20 @@ final class MayaCredentialStoreException implements Exception {
 /// Implementations must not persist API keys in SQLite, JSON, environment
 /// variables, command-line arguments, logs, or exception messages.
 abstract interface class MayaCredentialStore {
-  Future<void> save({required String providerId, required String apiKey});
+  Future<void> save({
+    required String providerId,
+    required String apiKey,
+    String? credentialBinding,
+  });
 
-  Future<String?> read({required String providerId});
+  /// Returns null when the target is absent or is bound to a different
+  /// non-secret context. A custom endpoint therefore cannot inherit a key
+  /// saved for another endpoint when the key field is left blank.
+  Future<String?> read({required String providerId, String? credentialBinding});
+
+  /// Whether any credential exists at the deterministic provider target,
+  /// regardless of its endpoint binding. Used to verify destructive cleanup.
+  Future<bool> exists({required String providerId});
 
   /// Idempotent: deleting an absent credential succeeds.
   Future<void> delete({required String providerId});
@@ -68,6 +83,7 @@ final class UnavailableMayaCredentialStore implements MayaCredentialStore {
   Future<void> save({
     required String providerId,
     required String apiKey,
+    String? credentialBinding,
   }) async {
     throw const MayaCredentialStoreException(
       MayaCredentialStoreErrorCode.unavailable,
@@ -75,7 +91,17 @@ final class UnavailableMayaCredentialStore implements MayaCredentialStore {
   }
 
   @override
-  Future<String?> read({required String providerId}) async {
+  Future<String?> read({
+    required String providerId,
+    String? credentialBinding,
+  }) async {
+    throw const MayaCredentialStoreException(
+      MayaCredentialStoreErrorCode.unavailable,
+    );
+  }
+
+  @override
+  Future<bool> exists({required String providerId}) async {
     throw const MayaCredentialStoreException(
       MayaCredentialStoreErrorCode.unavailable,
     );
@@ -102,6 +128,16 @@ String validateMayaCredentialProviderId(String providerId) {
     );
   }
   return providerId;
+}
+
+String? validateMayaCredentialBinding(String? credentialBinding) {
+  if (credentialBinding == null) return null;
+  if (!_credentialBindingPattern.hasMatch(credentialBinding)) {
+    throw const MayaCredentialStoreException(
+      MayaCredentialStoreErrorCode.invalidBinding,
+    );
+  }
+  return credentialBinding;
 }
 
 /// Validates the narrow API-key format accepted by the credential boundary.
@@ -141,22 +177,37 @@ void validateMayaApiKey(String apiKey) {
 /// It never writes to disk. Production composition must use the Windows
 /// Credential Manager implementation.
 final class FakeMayaCredentialStore implements MayaCredentialStore {
-  final Map<String, String> _values = <String, String>{};
+  final Map<String, ({String apiKey, String? binding})> _values =
+      <String, ({String apiKey, String? binding})>{};
 
   @override
   Future<void> save({
     required String providerId,
     required String apiKey,
+    String? credentialBinding,
   }) async {
     final target = mayaCredentialTargetForProvider(providerId);
     validateMayaApiKey(apiKey);
-    _values[target] = apiKey;
+    final binding = validateMayaCredentialBinding(credentialBinding);
+    _values[target] = (apiKey: apiKey, binding: binding);
   }
 
   @override
-  Future<String?> read({required String providerId}) async {
+  Future<String?> read({
+    required String providerId,
+    String? credentialBinding,
+  }) async {
     final target = mayaCredentialTargetForProvider(providerId);
-    return _values[target];
+    final binding = validateMayaCredentialBinding(credentialBinding);
+    final stored = _values[target];
+    if (stored == null || stored.binding != binding) return null;
+    return stored.apiKey;
+  }
+
+  @override
+  Future<bool> exists({required String providerId}) async {
+    final target = mayaCredentialTargetForProvider(providerId);
+    return _values.containsKey(target);
   }
 
   @override

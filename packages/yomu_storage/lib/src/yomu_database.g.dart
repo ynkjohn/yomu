@@ -2538,6 +2538,340 @@ class MayaProviderSettingsTableCompanion
   }
 }
 
+class $MayaCustomProviderSettingsTableTable
+    extends MayaCustomProviderSettingsTable
+    with
+        TableInfo<
+          $MayaCustomProviderSettingsTableTable,
+          StoredMayaCustomProviderSettings
+        > {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MayaCustomProviderSettingsTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _settingsIdMeta = const VerificationMeta(
+    'settingsId',
+  );
+  @override
+  late final GeneratedColumn<int> settingsId = GeneratedColumn<int>(
+    'settings_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _endpointUrlMeta = const VerificationMeta(
+    'endpointUrl',
+  );
+  @override
+  late final GeneratedColumn<String> endpointUrl = GeneratedColumn<String>(
+    'endpoint_url',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _useApiKeyMeta = const VerificationMeta(
+    'useApiKey',
+  );
+  @override
+  late final GeneratedColumn<bool> useApiKey = GeneratedColumn<bool>(
+    'use_api_key',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("use_api_key" IN (0, 1))',
+    ),
+  );
+  static const VerificationMeta _updatedAtMsMeta = const VerificationMeta(
+    'updatedAtMs',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAtMs = GeneratedColumn<int>(
+    'updated_at_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    settingsId,
+    endpointUrl,
+    useApiKey,
+    updatedAtMs,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'maya_custom_provider_settings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<StoredMayaCustomProviderSettings> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('settings_id')) {
+      context.handle(
+        _settingsIdMeta,
+        settingsId.isAcceptableOrUnknown(data['settings_id']!, _settingsIdMeta),
+      );
+    }
+    if (data.containsKey('endpoint_url')) {
+      context.handle(
+        _endpointUrlMeta,
+        endpointUrl.isAcceptableOrUnknown(
+          data['endpoint_url']!,
+          _endpointUrlMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_endpointUrlMeta);
+    }
+    if (data.containsKey('use_api_key')) {
+      context.handle(
+        _useApiKeyMeta,
+        useApiKey.isAcceptableOrUnknown(data['use_api_key']!, _useApiKeyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_useApiKeyMeta);
+    }
+    if (data.containsKey('updated_at_ms')) {
+      context.handle(
+        _updatedAtMsMeta,
+        updatedAtMs.isAcceptableOrUnknown(
+          data['updated_at_ms']!,
+          _updatedAtMsMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMsMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {settingsId};
+  @override
+  StoredMayaCustomProviderSettings map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return StoredMayaCustomProviderSettings(
+      settingsId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}settings_id'],
+      )!,
+      endpointUrl: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}endpoint_url'],
+      )!,
+      useApiKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}use_api_key'],
+      )!,
+      updatedAtMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at_ms'],
+      )!,
+    );
+  }
+
+  @override
+  $MayaCustomProviderSettingsTableTable createAlias(String alias) {
+    return $MayaCustomProviderSettingsTableTable(attachedDatabase, alias);
+  }
+}
+
+class StoredMayaCustomProviderSettings extends DataClass
+    implements Insertable<StoredMayaCustomProviderSettings> {
+  final int settingsId;
+  final String endpointUrl;
+  final bool useApiKey;
+  final int updatedAtMs;
+  const StoredMayaCustomProviderSettings({
+    required this.settingsId,
+    required this.endpointUrl,
+    required this.useApiKey,
+    required this.updatedAtMs,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['settings_id'] = Variable<int>(settingsId);
+    map['endpoint_url'] = Variable<String>(endpointUrl);
+    map['use_api_key'] = Variable<bool>(useApiKey);
+    map['updated_at_ms'] = Variable<int>(updatedAtMs);
+    return map;
+  }
+
+  MayaCustomProviderSettingsTableCompanion toCompanion(bool nullToAbsent) {
+    return MayaCustomProviderSettingsTableCompanion(
+      settingsId: Value(settingsId),
+      endpointUrl: Value(endpointUrl),
+      useApiKey: Value(useApiKey),
+      updatedAtMs: Value(updatedAtMs),
+    );
+  }
+
+  factory StoredMayaCustomProviderSettings.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return StoredMayaCustomProviderSettings(
+      settingsId: serializer.fromJson<int>(json['settingsId']),
+      endpointUrl: serializer.fromJson<String>(json['endpointUrl']),
+      useApiKey: serializer.fromJson<bool>(json['useApiKey']),
+      updatedAtMs: serializer.fromJson<int>(json['updatedAtMs']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'settingsId': serializer.toJson<int>(settingsId),
+      'endpointUrl': serializer.toJson<String>(endpointUrl),
+      'useApiKey': serializer.toJson<bool>(useApiKey),
+      'updatedAtMs': serializer.toJson<int>(updatedAtMs),
+    };
+  }
+
+  StoredMayaCustomProviderSettings copyWith({
+    int? settingsId,
+    String? endpointUrl,
+    bool? useApiKey,
+    int? updatedAtMs,
+  }) => StoredMayaCustomProviderSettings(
+    settingsId: settingsId ?? this.settingsId,
+    endpointUrl: endpointUrl ?? this.endpointUrl,
+    useApiKey: useApiKey ?? this.useApiKey,
+    updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+  );
+  StoredMayaCustomProviderSettings copyWithCompanion(
+    MayaCustomProviderSettingsTableCompanion data,
+  ) {
+    return StoredMayaCustomProviderSettings(
+      settingsId: data.settingsId.present
+          ? data.settingsId.value
+          : this.settingsId,
+      endpointUrl: data.endpointUrl.present
+          ? data.endpointUrl.value
+          : this.endpointUrl,
+      useApiKey: data.useApiKey.present ? data.useApiKey.value : this.useApiKey,
+      updatedAtMs: data.updatedAtMs.present
+          ? data.updatedAtMs.value
+          : this.updatedAtMs,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('StoredMayaCustomProviderSettings(')
+          ..write('settingsId: $settingsId, ')
+          ..write('endpointUrl: $endpointUrl, ')
+          ..write('useApiKey: $useApiKey, ')
+          ..write('updatedAtMs: $updatedAtMs')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(settingsId, endpointUrl, useApiKey, updatedAtMs);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is StoredMayaCustomProviderSettings &&
+          other.settingsId == this.settingsId &&
+          other.endpointUrl == this.endpointUrl &&
+          other.useApiKey == this.useApiKey &&
+          other.updatedAtMs == this.updatedAtMs);
+}
+
+class MayaCustomProviderSettingsTableCompanion
+    extends UpdateCompanion<StoredMayaCustomProviderSettings> {
+  final Value<int> settingsId;
+  final Value<String> endpointUrl;
+  final Value<bool> useApiKey;
+  final Value<int> updatedAtMs;
+  const MayaCustomProviderSettingsTableCompanion({
+    this.settingsId = const Value.absent(),
+    this.endpointUrl = const Value.absent(),
+    this.useApiKey = const Value.absent(),
+    this.updatedAtMs = const Value.absent(),
+  });
+  MayaCustomProviderSettingsTableCompanion.insert({
+    this.settingsId = const Value.absent(),
+    required String endpointUrl,
+    required bool useApiKey,
+    required int updatedAtMs,
+  }) : endpointUrl = Value(endpointUrl),
+       useApiKey = Value(useApiKey),
+       updatedAtMs = Value(updatedAtMs);
+  static Insertable<StoredMayaCustomProviderSettings> custom({
+    Expression<int>? settingsId,
+    Expression<String>? endpointUrl,
+    Expression<bool>? useApiKey,
+    Expression<int>? updatedAtMs,
+  }) {
+    return RawValuesInsertable({
+      if (settingsId != null) 'settings_id': settingsId,
+      if (endpointUrl != null) 'endpoint_url': endpointUrl,
+      if (useApiKey != null) 'use_api_key': useApiKey,
+      if (updatedAtMs != null) 'updated_at_ms': updatedAtMs,
+    });
+  }
+
+  MayaCustomProviderSettingsTableCompanion copyWith({
+    Value<int>? settingsId,
+    Value<String>? endpointUrl,
+    Value<bool>? useApiKey,
+    Value<int>? updatedAtMs,
+  }) {
+    return MayaCustomProviderSettingsTableCompanion(
+      settingsId: settingsId ?? this.settingsId,
+      endpointUrl: endpointUrl ?? this.endpointUrl,
+      useApiKey: useApiKey ?? this.useApiKey,
+      updatedAtMs: updatedAtMs ?? this.updatedAtMs,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (settingsId.present) {
+      map['settings_id'] = Variable<int>(settingsId.value);
+    }
+    if (endpointUrl.present) {
+      map['endpoint_url'] = Variable<String>(endpointUrl.value);
+    }
+    if (useApiKey.present) {
+      map['use_api_key'] = Variable<bool>(useApiKey.value);
+    }
+    if (updatedAtMs.present) {
+      map['updated_at_ms'] = Variable<int>(updatedAtMs.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MayaCustomProviderSettingsTableCompanion(')
+          ..write('settingsId: $settingsId, ')
+          ..write('endpointUrl: $endpointUrl, ')
+          ..write('useApiKey: $useApiKey, ')
+          ..write('updatedAtMs: $updatedAtMs')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$YomuDatabase extends GeneratedDatabase {
   _$YomuDatabase(QueryExecutor e) : super(e);
   $YomuDatabaseManager get managers => $YomuDatabaseManager(this);
@@ -2548,6 +2882,8 @@ abstract class _$YomuDatabase extends GeneratedDatabase {
       $MayaActionProposalsTable(this);
   late final $MayaProviderSettingsTableTable mayaProviderSettingsTable =
       $MayaProviderSettingsTableTable(this);
+  late final $MayaCustomProviderSettingsTableTable
+  mayaCustomProviderSettingsTable = $MayaCustomProviderSettingsTableTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2558,6 +2894,7 @@ abstract class _$YomuDatabase extends GeneratedDatabase {
     mayaMessages,
     mayaActionProposals,
     mayaProviderSettingsTable,
+    mayaCustomProviderSettingsTable,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -4123,6 +4460,206 @@ typedef $$MayaProviderSettingsTableTableProcessedTableManager =
       StoredMayaProviderSettings,
       PrefetchHooks Function()
     >;
+typedef $$MayaCustomProviderSettingsTableTableCreateCompanionBuilder =
+    MayaCustomProviderSettingsTableCompanion Function({
+      Value<int> settingsId,
+      required String endpointUrl,
+      required bool useApiKey,
+      required int updatedAtMs,
+    });
+typedef $$MayaCustomProviderSettingsTableTableUpdateCompanionBuilder =
+    MayaCustomProviderSettingsTableCompanion Function({
+      Value<int> settingsId,
+      Value<String> endpointUrl,
+      Value<bool> useApiKey,
+      Value<int> updatedAtMs,
+    });
+
+class $$MayaCustomProviderSettingsTableTableFilterComposer
+    extends Composer<_$YomuDatabase, $MayaCustomProviderSettingsTableTable> {
+  $$MayaCustomProviderSettingsTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get settingsId => $composableBuilder(
+    column: $table.settingsId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get endpointUrl => $composableBuilder(
+    column: $table.endpointUrl,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get useApiKey => $composableBuilder(
+    column: $table.useApiKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$MayaCustomProviderSettingsTableTableOrderingComposer
+    extends Composer<_$YomuDatabase, $MayaCustomProviderSettingsTableTable> {
+  $$MayaCustomProviderSettingsTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get settingsId => $composableBuilder(
+    column: $table.settingsId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get endpointUrl => $composableBuilder(
+    column: $table.endpointUrl,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get useApiKey => $composableBuilder(
+    column: $table.useApiKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$MayaCustomProviderSettingsTableTableAnnotationComposer
+    extends Composer<_$YomuDatabase, $MayaCustomProviderSettingsTableTable> {
+  $$MayaCustomProviderSettingsTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get settingsId => $composableBuilder(
+    column: $table.settingsId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get endpointUrl => $composableBuilder(
+    column: $table.endpointUrl,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get useApiKey =>
+      $composableBuilder(column: $table.useApiKey, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAtMs => $composableBuilder(
+    column: $table.updatedAtMs,
+    builder: (column) => column,
+  );
+}
+
+class $$MayaCustomProviderSettingsTableTableTableManager
+    extends
+        RootTableManager<
+          _$YomuDatabase,
+          $MayaCustomProviderSettingsTableTable,
+          StoredMayaCustomProviderSettings,
+          $$MayaCustomProviderSettingsTableTableFilterComposer,
+          $$MayaCustomProviderSettingsTableTableOrderingComposer,
+          $$MayaCustomProviderSettingsTableTableAnnotationComposer,
+          $$MayaCustomProviderSettingsTableTableCreateCompanionBuilder,
+          $$MayaCustomProviderSettingsTableTableUpdateCompanionBuilder,
+          (
+            StoredMayaCustomProviderSettings,
+            BaseReferences<
+              _$YomuDatabase,
+              $MayaCustomProviderSettingsTableTable,
+              StoredMayaCustomProviderSettings
+            >,
+          ),
+          StoredMayaCustomProviderSettings,
+          PrefetchHooks Function()
+        > {
+  $$MayaCustomProviderSettingsTableTableTableManager(
+    _$YomuDatabase db,
+    $MayaCustomProviderSettingsTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MayaCustomProviderSettingsTableTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$MayaCustomProviderSettingsTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$MayaCustomProviderSettingsTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> settingsId = const Value.absent(),
+                Value<String> endpointUrl = const Value.absent(),
+                Value<bool> useApiKey = const Value.absent(),
+                Value<int> updatedAtMs = const Value.absent(),
+              }) => MayaCustomProviderSettingsTableCompanion(
+                settingsId: settingsId,
+                endpointUrl: endpointUrl,
+                useApiKey: useApiKey,
+                updatedAtMs: updatedAtMs,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> settingsId = const Value.absent(),
+                required String endpointUrl,
+                required bool useApiKey,
+                required int updatedAtMs,
+              }) => MayaCustomProviderSettingsTableCompanion.insert(
+                settingsId: settingsId,
+                endpointUrl: endpointUrl,
+                useApiKey: useApiKey,
+                updatedAtMs: updatedAtMs,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$MayaCustomProviderSettingsTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$YomuDatabase,
+      $MayaCustomProviderSettingsTableTable,
+      StoredMayaCustomProviderSettings,
+      $$MayaCustomProviderSettingsTableTableFilterComposer,
+      $$MayaCustomProviderSettingsTableTableOrderingComposer,
+      $$MayaCustomProviderSettingsTableTableAnnotationComposer,
+      $$MayaCustomProviderSettingsTableTableCreateCompanionBuilder,
+      $$MayaCustomProviderSettingsTableTableUpdateCompanionBuilder,
+      (
+        StoredMayaCustomProviderSettings,
+        BaseReferences<
+          _$YomuDatabase,
+          $MayaCustomProviderSettingsTableTable,
+          StoredMayaCustomProviderSettings
+        >,
+      ),
+      StoredMayaCustomProviderSettings,
+      PrefetchHooks Function()
+    >;
 
 class $YomuDatabaseManager {
   final _$YomuDatabase _db;
@@ -4139,5 +4676,11 @@ class $YomuDatabaseManager {
       $$MayaProviderSettingsTableTableTableManager(
         _db,
         _db.mayaProviderSettingsTable,
+      );
+  $$MayaCustomProviderSettingsTableTableTableManager
+  get mayaCustomProviderSettingsTable =>
+      $$MayaCustomProviderSettingsTableTableTableManager(
+        _db,
+        _db.mayaCustomProviderSettingsTable,
       );
 }

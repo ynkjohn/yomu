@@ -23,6 +23,7 @@ dependencies:
     path: ../../packages/yomu_ui
   yomu_ai:
     path: ../../packages/yomu_ai
+  crypto: ^3.0.6
   path: ^1.9.1
 
 dev_dependencies:
