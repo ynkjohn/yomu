@@ -22,6 +22,17 @@ class YomuNavItem {
 
 enum YomuNavGroup { main, system }
 
+enum YomuWindowResizeEdge {
+  topLeft,
+  top,
+  topRight,
+  right,
+  bottomRight,
+  bottom,
+  bottomLeft,
+  left,
+}
+
 /// Desktop shell with a compact production sidebar and persistent status rail.
 class YomuAppShell extends StatelessWidget {
   const YomuAppShell({
@@ -34,6 +45,11 @@ class YomuAppShell extends StatelessWidget {
     this.serverLabel = 'Yomu Core ativo · :8787',
     this.serverColor = YomuTokens.success,
     this.onServerTap,
+    this.onWindowDrag,
+    this.onWindowMinimize,
+    this.onWindowToggleMaximize,
+    this.onWindowClose,
+    this.onWindowResize,
   });
 
   final List<YomuNavItem> items;
@@ -44,172 +60,329 @@ class YomuAppShell extends StatelessWidget {
   final String serverLabel;
   final Color serverColor;
   final VoidCallback? onServerTap;
+  final VoidCallback? onWindowDrag;
+  final VoidCallback? onWindowMinimize;
+  final VoidCallback? onWindowToggleMaximize;
+  final VoidCallback? onWindowClose;
+  final ValueChanged<YomuWindowResizeEdge>? onWindowResize;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(color: YomuTokens.bg),
-        child: Row(
-          children: [
-            Container(
-              width: 208,
-              decoration: const BoxDecoration(
-                color: YomuTokens.sidebar,
-                border: Border(right: BorderSide(color: Color(0x12FFFFFF))),
-              ),
-              child: Stack(
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: const BoxDecoration(color: YomuTokens.bg),
+              child: Column(
                 children: [
-                  Positioned(
-                    left: 0,
-                    top: 92,
-                    bottom: 70,
-                    child: Container(
-                      width: 1,
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            Color(0x5791A5FF),
-                            Colors.transparent,
-                          ],
-                        ),
-                      ),
-                    ),
+                  _WindowTitleBar(
+                    title: title,
+                    onDrag: onWindowDrag,
+                    onMinimize: onWindowMinimize,
+                    onToggleMaximize: onWindowToggleMaximize,
+                    onClose: onWindowClose,
                   ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.fromLTRB(22, 16, 18, 14),
-                        child: Row(
-                          children: [
-                            _WindowDot(Color(0xFFFF5F57)),
-                            SizedBox(width: 7),
-                            _WindowDot(Color(0xFFFEBC2E)),
-                            SizedBox(width: 7),
-                            _WindowDot(Color(0xFF28C840)),
-                          ],
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 2, 18, 14),
-                        child: Row(
-                          children: [
-                            _YomuMark(),
-                            const SizedBox(width: 9),
-                            Expanded(
-                              child: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: YomuTokens.text,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: -0.2,
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 208,
+                          decoration: const BoxDecoration(
+                            color: YomuTokens.sidebar,
+                            border: Border(
+                              right: BorderSide(color: Color(0x12FFFFFF)),
+                            ),
+                          ),
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                left: 0,
+                                top: 92,
+                                bottom: 70,
+                                child: Container(
+                                  width: 1,
+                                  decoration: const BoxDecoration(
+                                    gradient: LinearGradient(
+                                      begin: Alignment.topCenter,
+                                      end: Alignment.bottomCenter,
+                                      colors: [
+                                        Colors.transparent,
+                                        Color(0x5791A5FF),
+                                        Colors.transparent,
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          itemCount: items.length,
-                          itemBuilder: (context, index) {
-                            final item = items[index];
-                            final selected = item.id == selectedId;
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                if (item.group == YomuNavGroup.system &&
-                                    (index == 0 ||
-                                        items[index - 1].group !=
-                                            YomuNavGroup.system))
-                                  const Padding(
-                                    padding: EdgeInsets.fromLTRB(10, 16, 10, 6),
-                                    child: Text(
-                                      'SISTEMA',
-                                      style: TextStyle(
-                                        color: YomuTokens.textSubtle,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.7,
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      18,
+                                      12,
+                                      18,
+                                      14,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        _YomuMark(),
+                                        const SizedBox(width: 9),
+                                        Expanded(
+                                          child: Text(
+                                            title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: YomuTokens.text,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: -0.2,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: ListView.builder(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                      ),
+                                      itemCount: items.length,
+                                      itemBuilder: (context, index) {
+                                        final item = items[index];
+                                        final selected = item.id == selectedId;
+                                        return Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            if (item.group ==
+                                                    YomuNavGroup.system &&
+                                                (index == 0 ||
+                                                    items[index - 1].group !=
+                                                        YomuNavGroup.system))
+                                              const Padding(
+                                                padding: EdgeInsets.fromLTRB(
+                                                  10,
+                                                  16,
+                                                  10,
+                                                  6,
+                                                ),
+                                                child: Text(
+                                                  'SISTEMA',
+                                                  style: TextStyle(
+                                                    color:
+                                                        YomuTokens.textSubtle,
+                                                    fontSize: 10,
+                                                    fontWeight: FontWeight.w700,
+                                                    letterSpacing: 0.7,
+                                                  ),
+                                                ),
+                                              ),
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 1,
+                                              ),
+                                              child: _NavItemButton(
+                                                item: item,
+                                                selected: selected,
+                                                onTap: () => onSelect(item.id),
+                                              ),
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  Container(
+                                    margin: const EdgeInsets.fromLTRB(
+                                      10,
+                                      0,
+                                      10,
+                                      2,
+                                    ),
+                                    padding: const EdgeInsets.fromLTRB(
+                                      10,
+                                      11,
+                                      10,
+                                      0,
+                                    ),
+                                    decoration: const BoxDecoration(
+                                      border: Border(
+                                        top: BorderSide(
+                                          color: Color(0x0FFFFFFF),
+                                        ),
                                       ),
                                     ),
+                                    child: Column(
+                                      children: [
+                                        _ServerStatusButton(
+                                          label: serverLabel,
+                                          color: serverColor,
+                                          onTap: onServerTap,
+                                        ),
+                                        const SizedBox(height: 8),
+                                        const Row(
+                                          children: [
+                                            CircleAvatar(
+                                              radius: 10,
+                                              backgroundColor: Color(
+                                                0x335B73DC,
+                                              ),
+                                              child: Text(
+                                                'YL',
+                                                style: TextStyle(
+                                                  color: Color(0xFFC7D2FF),
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.w700,
+                                                  height: 1,
+                                                ),
+                                              ),
+                                            ),
+                                            SizedBox(width: 7),
+                                            Expanded(
+                                              child: Text(
+                                                'Perfil local',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  color: Color(0xFF8D96A8),
+                                                  fontSize: 11,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 1),
-                                  child: _NavItemButton(
-                                    item: item,
-                                    selected: selected,
-                                    onTap: () => onSelect(item.id),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                      Container(
-                        margin: const EdgeInsets.fromLTRB(10, 0, 10, 2),
-                        padding: const EdgeInsets.fromLTRB(10, 11, 10, 0),
-                        decoration: const BoxDecoration(
-                          border: Border(
-                            top: BorderSide(color: Color(0x0FFFFFFF)),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
-                        child: Column(
-                          children: [
-                            _ServerStatusButton(
-                              label: serverLabel,
-                              color: serverColor,
-                              onTap: onServerTap,
-                            ),
-                            const SizedBox(height: 8),
-                            const Row(
-                              children: [
-                                CircleAvatar(
-                                  radius: 10,
-                                  backgroundColor: Color(0x335B73DC),
-                                  child: Text(
-                                    'YL',
-                                    style: TextStyle(
-                                      color: Color(0xFFC7D2FF),
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1,
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(width: 7),
-                                Expanded(
-                                  child: Text(
-                                    'Perfil local',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Color(0xFF8D96A8),
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                        Expanded(child: body),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
-            Expanded(child: body),
-          ],
+          ),
+          if (onWindowResize != null)
+            _WindowResizeRegions(onResize: onWindowResize!),
+        ],
+      ),
+    );
+  }
+}
+
+class _WindowResizeRegions extends StatelessWidget {
+  const _WindowResizeRegions({required this.onResize});
+
+  static const double _edgeSize = 6;
+  static const double _cornerSize = 12;
+
+  final ValueChanged<YomuWindowResizeEdge> onResize;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        _region(
+          edge: YomuWindowResizeEdge.top,
+          cursor: SystemMouseCursors.resizeUp,
+          left: _cornerSize,
+          top: 0,
+          right: _cornerSize,
+          height: _edgeSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.right,
+          cursor: SystemMouseCursors.resizeRight,
+          top: _cornerSize,
+          right: 0,
+          bottom: _cornerSize,
+          width: _edgeSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.bottom,
+          cursor: SystemMouseCursors.resizeDown,
+          left: _cornerSize,
+          right: _cornerSize,
+          bottom: 0,
+          height: _edgeSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.left,
+          cursor: SystemMouseCursors.resizeLeft,
+          left: 0,
+          top: _cornerSize,
+          bottom: _cornerSize,
+          width: _edgeSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.topLeft,
+          cursor: SystemMouseCursors.resizeUpLeft,
+          left: 0,
+          top: 0,
+          width: _cornerSize,
+          height: _cornerSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.topRight,
+          cursor: SystemMouseCursors.resizeUpRight,
+          top: 0,
+          right: 0,
+          width: _cornerSize,
+          height: _cornerSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.bottomRight,
+          cursor: SystemMouseCursors.resizeDownRight,
+          right: 0,
+          bottom: 0,
+          width: _cornerSize,
+          height: _cornerSize,
+        ),
+        _region(
+          edge: YomuWindowResizeEdge.bottomLeft,
+          cursor: SystemMouseCursors.resizeDownLeft,
+          left: 0,
+          bottom: 0,
+          width: _cornerSize,
+          height: _cornerSize,
+        ),
+      ],
+    );
+  }
+
+  Widget _region({
+    required YomuWindowResizeEdge edge,
+    required MouseCursor cursor,
+    double? left,
+    double? top,
+    double? right,
+    double? bottom,
+    double? width,
+    double? height,
+  }) {
+    return Positioned(
+      left: left,
+      top: top,
+      right: right,
+      bottom: bottom,
+      width: width,
+      height: height,
+      child: MouseRegion(
+        key: ValueKey('yomu-window-resize-${edge.name}'),
+        cursor: cursor,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
+          onPanDown: (_) => onResize(edge),
         ),
       ),
     );
@@ -520,15 +693,222 @@ class _YomuMark extends StatelessWidget {
   }
 }
 
-class _WindowDot extends StatelessWidget {
-  const _WindowDot(this.color);
+class _WindowTitleBar extends StatelessWidget {
+  const _WindowTitleBar({
+    required this.title,
+    required this.onDrag,
+    required this.onMinimize,
+    required this.onToggleMaximize,
+    required this.onClose,
+  });
 
-  final Color color;
+  final String title;
+  final VoidCallback? onDrag;
+  final VoidCallback? onMinimize;
+  final VoidCallback? onToggleMaximize;
+  final VoidCallback? onClose;
 
   @override
-  Widget build(BuildContext context) => Container(
-    width: 12,
-    height: 12,
-    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-  );
+  Widget build(BuildContext context) {
+    return SizedBox(
+      key: const ValueKey('yomu-window-title-bar'),
+      height: YomuTokens.windowTitleBarHeight,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 208,
+                decoration: const BoxDecoration(
+                  color: YomuTokens.sidebar,
+                  border: Border(right: BorderSide(color: Color(0x12FFFFFF))),
+                ),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 14),
+                    _WindowControlButton(
+                      key: const ValueKey('yomu-window-close'),
+                      label: 'Fechar',
+                      color: const Color(0xFFFF5F57),
+                      onPressed: onClose,
+                    ),
+                    _WindowControlButton(
+                      key: const ValueKey('yomu-window-minimize'),
+                      label: 'Minimizar',
+                      color: const Color(0xFFFEBC2E),
+                      onPressed: onMinimize,
+                    ),
+                    _WindowControlButton(
+                      key: const ValueKey('yomu-window-maximize'),
+                      label: 'Maximizar ou restaurar',
+                      color: const Color(0xFF28C840),
+                      onPressed: onToggleMaximize,
+                    ),
+                    Expanded(
+                      child: _WindowDragRegion(
+                        key: const ValueKey('yomu-window-drag-sidebar'),
+                        onDrag: onDrag,
+                        onDoubleTap: onToggleMaximize,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ColoredBox(
+                  color: YomuTokens.bg,
+                  child: _WindowDragRegion(
+                    key: const ValueKey('yomu-window-drag-main'),
+                    onDrag: onDrag,
+                    onDoubleTap: onToggleMaximize,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          IgnorePointer(
+            child: Center(
+              child: Text(
+                title,
+                key: const ValueKey('yomu-window-title'),
+                style: const TextStyle(
+                  color: Color(0xFFC9CED9),
+                  fontFamily: 'Segoe UI Variable Display',
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  height: 1,
+                  letterSpacing: 0.35,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WindowDragRegion extends StatelessWidget {
+  const _WindowDragRegion({
+    super.key,
+    required this.onDrag,
+    required this.onDoubleTap,
+  });
+
+  final VoidCallback? onDrag;
+  final VoidCallback? onDoubleTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true,
+      onPanStart: onDrag == null ? null : (_) => onDrag!(),
+      onDoubleTap: onDoubleTap,
+      child: const SizedBox.expand(),
+    );
+  }
+}
+
+class _WindowControlButton extends StatefulWidget {
+  const _WindowControlButton({
+    super.key,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final String label;
+  final Color color;
+  final VoidCallback? onPressed;
+
+  @override
+  State<_WindowControlButton> createState() => _WindowControlButtonState();
+}
+
+class _WindowControlButtonState extends State<_WindowControlButton> {
+  bool _hovered = false;
+  bool _focused = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null;
+    final scale = _pressed
+        ? 0.9
+        : _hovered
+        ? 1.08
+        : 1.0;
+
+    return FocusableActionDetector(
+      enabled: enabled,
+      mouseCursor: enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
+      onShowHoverHighlight: (value) => setState(() => _hovered = value),
+      onShowFocusHighlight: (value) => setState(() => _focused = value),
+      shortcuts: const {
+        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+      },
+      actions: {
+        ActivateIntent: CallbackAction<ActivateIntent>(
+          onInvoke: (_) {
+            widget.onPressed?.call();
+            return null;
+          },
+        ),
+      },
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        label: widget.label,
+        onTap: widget.onPressed,
+        child: ExcludeSemantics(
+          child: Tooltip(
+            message: widget.label,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onPressed,
+              onTapDown: enabled
+                  ? (_) => setState(() => _pressed = true)
+                  : null,
+              onTapUp: enabled ? (_) => setState(() => _pressed = false) : null,
+              onTapCancel: enabled
+                  ? () => setState(() => _pressed = false)
+                  : null,
+              child: SizedBox(
+                width: 20,
+                height: YomuTokens.windowTitleBarHeight,
+                child: Center(
+                  child: AnimatedScale(
+                    scale: scale,
+                    duration: YomuTokens.durationFast,
+                    curve: Curves.easeOutCubic,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: enabled
+                            ? widget.color
+                            : widget.color.withValues(alpha: 0.45),
+                        shape: BoxShape.circle,
+                        border: _focused
+                            ? Border.all(
+                                color: const Color(0xCCFFFFFF),
+                                width: 1,
+                              )
+                            : null,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

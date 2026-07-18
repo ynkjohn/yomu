@@ -27,9 +27,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   // Desired Flutter client area; Win32Window computes the DPI-aware outer
-  // frame (title bar and borders) without machine-specific magic numbers.
+  // resize frame while Flutter renders the visible title bar.
   Win32Window::Size size(1240, 800);
-  if (!window.Create(L"yomu_desktop", origin, size)) {
+  if (!window.Create(L"Yomu", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

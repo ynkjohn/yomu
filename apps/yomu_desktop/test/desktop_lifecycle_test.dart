@@ -15,7 +15,12 @@ void main() {
       final teardownStarted = Completer<void>();
       final allowTeardown = Completer<void>();
       var teardownCalls = 0;
+      var confirmationCalls = 0;
       final exit = DesktopExitCoordinator(
+        confirmExit: () async {
+          confirmationCalls++;
+          return true;
+        },
         shutdown: () => queue.shutdown(() async {
           teardownCalls++;
           teardownStarted.complete();
@@ -33,12 +38,36 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(responseCompleted, isFalse);
+      expect(confirmationCalls, 1);
       expect(teardownCalls, 1);
 
       allowTeardown.complete();
       expect(await first, ui.AppExitResponse.exit);
       expect(await second, ui.AppExitResponse.exit);
       expect(teardownCalls, 1);
+    },
+  );
+
+  test(
+    'desktop exit cancellation skips shutdown and allows a new request',
+    () async {
+      var confirmationCalls = 0;
+      var shutdownCalls = 0;
+      final exit = DesktopExitCoordinator(
+        confirmExit: () async {
+          confirmationCalls++;
+          return confirmationCalls > 1;
+        },
+        shutdown: () async => shutdownCalls++,
+      );
+
+      expect(await exit.requestExit(), ui.AppExitResponse.cancel);
+      expect(confirmationCalls, 1);
+      expect(shutdownCalls, 0);
+
+      expect(await exit.requestExit(), ui.AppExitResponse.exit);
+      expect(confirmationCalls, 2);
+      expect(shutdownCalls, 1);
     },
   );
 

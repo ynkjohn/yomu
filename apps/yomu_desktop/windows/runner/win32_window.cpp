@@ -18,24 +18,16 @@ namespace {
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
-/// Registry key for app theme preference.
-///
-/// A value of 0 indicates apps should use dark mode. A non-zero or missing
-/// value indicates apps should use light mode.
-constexpr const wchar_t kGetPreferredBrightnessRegKey[] =
-  L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
-constexpr const wchar_t kGetPreferredBrightnessRegValue[] = L"AppsUseLightTheme";
+constexpr auto kDwmWindowCornerPreference =
+    static_cast<DWMWINDOWATTRIBUTE>(33);
+constexpr auto kDwmBorderColor = static_cast<DWMWINDOWATTRIBUTE>(34);
+constexpr DWORD kDwmCornerRound = 2;
+constexpr COLORREF kDwmColorNone = static_cast<COLORREF>(0xFFFFFFFE);
 
 // The number of Win32Window objects that currently exist.
 static int g_active_window_count = 0;
 
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
-using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(
-    LPRECT rect,
-    DWORD style,
-    BOOL has_menu,
-    DWORD ex_style,
-    UINT dpi);
 
 // Scale helper to convert logical scaler values to physical using passed in
 // scale factor
@@ -140,31 +132,20 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  // |size| is a logical client-area contract. Convert it to physical client
-  // pixels, then let Windows calculate the matching non-client frame for the
-  // target monitor/DPI. This keeps a 1240x800 Flutter viewport independent of
-  // title-bar metrics, borders, theme, and DPI scaling.
-  constexpr DWORD window_style = WS_OVERLAPPEDWINDOW;
-  constexpr DWORD extended_style = 0;
-  RECT frame = {0, 0, Scale(size.width, scale_factor),
-                Scale(size.height, scale_factor)};
-  bool adjusted_for_dpi = false;
-  if (HMODULE user32_module = GetModuleHandleA("User32.dll")) {
-    auto adjust_for_dpi = reinterpret_cast<AdjustWindowRectExForDpiFn>(
-        GetProcAddress(user32_module, "AdjustWindowRectExForDpi"));
-    if (adjust_for_dpi != nullptr) {
-      adjusted_for_dpi = adjust_for_dpi(
-          &frame, window_style, FALSE, extended_style, dpi) != FALSE;
-    }
-  }
-  if (!adjusted_for_dpi) {
-    AdjustWindowRectEx(&frame, window_style, FALSE, extended_style);
-  }
-  const int outer_width = frame.right - frame.left;
-  const int outer_height = frame.bottom - frame.top;
+  // |size| is a logical client-area contract. The non-client area is removed
+  // in WM_NCCALCSIZE, so the physical outer size is also the Flutter viewport.
+  // Keep an overlapped top-level window so Explorer preserves the native
+  // taskbar minimize/restore cycle. Omitting WS_CAPTION leaves the visible
+  // frame fully custom, while the remaining standard styles retain the system
+  // menu contract and native sizing/minimize/maximize behavior.
+  constexpr DWORD window_style =
+      WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+  constexpr DWORD extended_style = WS_EX_APPWINDOW;
+  const int outer_width = Scale(size.width, scale_factor);
+  const int outer_height = Scale(size.height, scale_factor);
 
-  HWND window = CreateWindow(
-      window_class, title.c_str(), window_style,
+  HWND window = CreateWindowEx(
+      extended_style, window_class, title.c_str(), window_style,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       outer_width, outer_height,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -208,6 +189,29 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_NCCALCSIZE:
+      // Let Flutter paint the full window, including the pixels that Windows
+      // otherwise reserves as the visible top resize frame.
+      return 0;
+
+    case WM_GETMINMAXINFO: {
+      // Keep maximized windows inside the monitor work area (taskbar excluded)
+      // now that there is no native non-client frame to constrain the bounds.
+      HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+      MONITORINFO monitor_info{};
+      monitor_info.cbSize = sizeof(monitor_info);
+      if (GetMonitorInfo(monitor, &monitor_info)) {
+        auto min_max_info = reinterpret_cast<MINMAXINFO*>(lparam);
+        const RECT& work = monitor_info.rcWork;
+        const RECT& bounds = monitor_info.rcMonitor;
+        min_max_info->ptMaxPosition.x = work.left - bounds.left;
+        min_max_info->ptMaxPosition.y = work.top - bounds.top;
+        min_max_info->ptMaxSize.x = work.right - work.left;
+        min_max_info->ptMaxSize.y = work.bottom - work.top;
+      }
+      return 0;
+    }
+
     case WM_DESTROY:
       window_handle_ = nullptr;
       Destroy();
@@ -302,16 +306,17 @@ void Win32Window::OnDestroy() {
 }
 
 void Win32Window::UpdateTheme(HWND const window) {
-  DWORD light_mode;
-  DWORD light_mode_size = sizeof(light_mode);
-  LSTATUS result = RegGetValue(HKEY_CURRENT_USER, kGetPreferredBrightnessRegKey,
-                               kGetPreferredBrightnessRegValue,
-                               RRF_RT_REG_DWORD, nullptr, &light_mode,
-                               &light_mode_size);
+  BOOL enable_dark_mode = TRUE;
+  DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                        &enable_dark_mode, sizeof(enable_dark_mode));
 
-  if (result == ERROR_SUCCESS) {
-    BOOL enable_dark_mode = light_mode == 0;
-    DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                          &enable_dark_mode, sizeof(enable_dark_mode));
-  }
+  const DWORD corner_preference = kDwmCornerRound;
+  DwmSetWindowAttribute(window, kDwmWindowCornerPreference,
+                        &corner_preference, sizeof(corner_preference));
+
+  // DWMWA_COLOR_NONE suppresses the DWM frame instead of tinting it. A tinted
+  // border can be replaced by the system's bright active border after focus,
+  // restore, or monitor changes.
+  DwmSetWindowAttribute(window, kDwmBorderColor, &kDwmColorNone,
+                        sizeof(kDwmColorNone));
 }

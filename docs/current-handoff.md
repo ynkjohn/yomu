@@ -300,3 +300,67 @@ correspondentes e revalide hash, processos/portas, status e remoto.
 
 O ciclo P2C está publicado. Esta sincronização factual final permanece separada
 de código e schema; staging, commit e eventual push exigem autorizações próprias.
+
+## Checkpoint — chrome da janela Windows
+
+Em 2026-07-17/18, sobre o baseline `master`/`origin/master`
+`1e195c28e769f1896a32e91016db6afa722134ba`, o chrome da janela desktop foi
+substituído por uma barra Flutter integrada ao app:
+
+- removidos da área visível o ícone nativo e o título `yomu_desktop`;
+- título `Yomu` centralizado com `Segoe UI Variable Display`, discreto e
+  independente das regiões de drag;
+- controles fechar, minimizar e maximizar/restaurar movidos para a barra do app;
+- controles renderizam círculos de 12 px, com centros separados por 20 px e
+  alvos transparentes de 20 x 40 px, sem caixas ou bordas visíveis;
+- a área cliente ocupa toda a janela via `WM_NCCALCSIZE`, removendo a faixa
+  cinza superior do frame nativo;
+- oito regiões Flutter de 6 px nas bordas e 12 px nos cantos iniciam
+  `WM_SYSCOMMAND / SC_SIZE`, preservando resize sem hit-test nativo concorrente;
+- a janela continua overlapped, sem `WS_CAPTION`, preservando o ciclo nativo de
+  minimizar/restaurar pelo botão da barra de tarefas;
+- maximização respeita exatamente a work area do monitor;
+- DWM usa dark mode, `DWMWA_COLOR_NONE` para suprimir a moldura e a preferência
+  de cantos arredondados do Windows 11;
+- fechar pela barra ou por solicitação nativa passa por confirmação explícita;
+  cancelar mantém o app aberto, confirmações concorrentes compartilham uma
+  única operação e o shutdown coordenado só começa após `Fechar Yomu`.
+
+Validação atual:
+
+- teste direcionado `apps/yomu_desktop/test/widget_test.dart`: 8/8;
+- lifecycle direcionado: 17/17;
+- suíte desktop: 197/197;
+- analyzers da raiz e do desktop: limpos;
+- `tool\verify_workspace.ps1`: aprovado em 174,2 s;
+- build Windows Debug aprovado em
+  `apps/yomu_desktop/build/windows/x64/runner/Debug/yomu_desktop.exe`;
+- o usuário confirmou manualmente barra, controles, resize, comportamento da
+  barra de tarefas e ausência da moldura branca; o último build com confirmação
+  de saída foi aberto antes da autorização deste checkpoint, sem nova regressão
+  reportada;
+- nenhuma prova visual foi executada pelo agente no monitor 1;
+- `git diff --check` limpo e SHA-256 de `design_prod\design em producao.html`
+  preservado em
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`.
+
+Allowlist nominal deste checkpoint:
+
+- `apps/yomu_desktop/lib/services/windows_window_chrome.dart`;
+- `apps/yomu_desktop/lib/shell/desktop_lifecycle.dart`;
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_desktop/test/desktop_lifecycle_test.dart`;
+- `apps/yomu_desktop/test/widget_test.dart`;
+- `apps/yomu_desktop/windows/runner/flutter_window.cpp`;
+- `apps/yomu_desktop/windows/runner/flutter_window.h`;
+- `apps/yomu_desktop/windows/runner/main.cpp`;
+- `apps/yomu_desktop/windows/runner/win32_window.cpp`;
+- `apps/yomu_desktop/windows/runner/win32_window.h`;
+- `packages/yomu_ui/lib/src/theme/yomu_tokens.dart`;
+- `packages/yomu_ui/lib/src/widgets/app_shell.dart`;
+- `docs/current-handoff.md`.
+
+Ficam fora todos os demais arquivos status-only/EOL, `design_prod/**`,
+`.playwright-cli/**`, `mcps/tasks/tools/**`, builds e artefatos temporários. O
+usuário autorizou explicitamente staging nominal, um commit e push normal deste
+checkpoint; o resultado efetivo deve ser revalidado no Git após cada operação.

@@ -206,6 +206,11 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     String? selected;
     var serverTaps = 0;
+    var windowDrags = 0;
+    var windowMinimizes = 0;
+    var windowMaximizes = 0;
+    var windowCloses = 0;
+    YomuWindowResizeEdge? windowResizeEdge;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -228,10 +233,78 @@ void main() {
           onSelect: (id) => selected = id,
           serverLabel: 'Motor running',
           onServerTap: () => serverTaps++,
+          onWindowDrag: () => windowDrags++,
+          onWindowMinimize: () => windowMinimizes++,
+          onWindowToggleMaximize: () => windowMaximizes++,
+          onWindowClose: () => windowCloses++,
+          onWindowResize: (edge) => windowResizeEdge = edge,
           body: const Center(child: Text('Conteúdo')),
         ),
       ),
     );
+
+    expect(
+      tester
+          .getSize(find.byKey(const ValueKey('yomu-window-title-bar')))
+          .height,
+      YomuTokens.windowTitleBarHeight,
+    );
+    final closeControl = find.byKey(const ValueKey('yomu-window-close'));
+    final minimizeControl = find.byKey(const ValueKey('yomu-window-minimize'));
+    final maximizeControl = find.byKey(const ValueKey('yomu-window-maximize'));
+    expect(tester.getSize(closeControl), const Size(20, 40));
+    expect(
+      tester.getCenter(minimizeControl).dx - tester.getCenter(closeControl).dx,
+      20,
+    );
+    expect(
+      tester.getCenter(maximizeControl).dx -
+          tester.getCenter(minimizeControl).dx,
+      20,
+    );
+    expect(
+      find.descendant(of: closeControl, matching: find.byType(IconButton)),
+      findsNothing,
+    );
+    final closeDot = find.descendant(
+      of: closeControl,
+      matching: find.byWidgetPredicate((widget) {
+        if (widget is! Container || widget.decoration is! BoxDecoration) {
+          return false;
+        }
+        return (widget.decoration! as BoxDecoration).shape == BoxShape.circle;
+      }),
+    );
+    expect(closeDot, findsOneWidget);
+    expect(tester.getSize(closeDot), const Size.square(12));
+    expect(find.bySemanticsLabel('Fechar'), findsOneWidget);
+    final titleBar = find.byKey(const ValueKey('yomu-window-title-bar'));
+    final windowTitle = find.byKey(const ValueKey('yomu-window-title'));
+    expect(tester.getCenter(windowTitle).dx, tester.getCenter(titleBar).dx);
+    final windowTitleText = tester.widget<Text>(windowTitle);
+    expect(windowTitleText.data, 'Yomu');
+    expect(windowTitleText.style?.fontFamily, 'Segoe UI Variable Display');
+    expect(windowTitleText.style?.fontSize, 13);
+    final rightResize = find.byKey(const ValueKey('yomu-window-resize-right'));
+    final rightResizeRegion = tester.widget<MouseRegion>(rightResize);
+    expect(rightResizeRegion.cursor, SystemMouseCursors.resizeRight);
+    final resizeGesture = await tester.startGesture(
+      tester.getCenter(rightResize),
+    );
+    expect(windowResizeEdge, YomuWindowResizeEdge.right);
+    await resizeGesture.up();
+    await tester.tap(minimizeControl);
+    await tester.tap(maximizeControl);
+    await tester.tap(find.byKey(const ValueKey('yomu-window-close')));
+    await tester.drag(
+      find.byKey(const ValueKey('yomu-window-drag-main')),
+      const Offset(30, 0),
+    );
+    expect(windowMinimizes, 1);
+    expect(windowMaximizes, 1);
+    expect(windowCloses, 1);
+    expect(windowDrags, 1);
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(
       tester

@@ -8,14 +8,42 @@ import 'package:yomu_ai/yomu_ai.dart';
 /// Windows waits for this response before completing a close request. Repeated
 /// requests share the same future so teardown remains idempotent.
 class DesktopExitCoordinator {
-  DesktopExitCoordinator({required Future<void> Function() shutdown})
-    : _shutdown = shutdown;
+  DesktopExitCoordinator({
+    required Future<bool> Function() confirmExit,
+    required Future<void> Function() shutdown,
+  }) : _confirmExit = confirmExit,
+       _shutdown = shutdown;
 
+  final Future<bool> Function() _confirmExit;
   final Future<void> Function() _shutdown;
   Future<ui.AppExitResponse>? _response;
 
   Future<ui.AppExitResponse> requestExit() {
-    return _response ??= _shutdown().then((_) => ui.AppExitResponse.exit);
+    final existing = _response;
+    if (existing != null) return existing;
+
+    final request = _confirmThenShutdown();
+    _response = request;
+    unawaited(
+      request.then(
+        (response) {
+          if (response == ui.AppExitResponse.cancel &&
+              identical(_response, request)) {
+            _response = null;
+          }
+        },
+        onError: (Object _, StackTrace __) {
+          if (identical(_response, request)) _response = null;
+        },
+      ),
+    );
+    return request;
+  }
+
+  Future<ui.AppExitResponse> _confirmThenShutdown() async {
+    if (!await _confirmExit()) return ui.AppExitResponse.cancel;
+    await _shutdown();
+    return ui.AppExitResponse.exit;
   }
 }
 

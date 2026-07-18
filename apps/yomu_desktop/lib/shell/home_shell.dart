@@ -26,6 +26,7 @@ import '../services/maya_provider_adapters.dart';
 import '../services/maya_provider_controller.dart';
 import '../services/suwayomi_maya_port.dart';
 import '../services/windows_maya_credential_store.dart';
+import '../services/windows_window_chrome.dart';
 import 'desktop_lifecycle.dart';
 
 Color _motorStateColor(SuwayomiProcessState state) => switch (state) {
@@ -138,7 +139,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    _exitCoordinator = DesktopExitCoordinator(shutdown: _coordinatedShutdown);
+    _exitCoordinator = DesktopExitCoordinator(
+      confirmExit: _confirmExit,
+      shutdown: _coordinatedShutdown,
+    );
     WidgetsBinding.instance.addObserver(this);
     unawaited(_bootstrap());
   }
@@ -664,6 +668,40 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     return _lifecycle.shutdown(_teardownOwnedResources);
   }
 
+  Future<bool> _confirmExit() async {
+    if (!mounted) return false;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('yomu-exit-dialog'),
+        title: const Text('Fechar o Yomu?'),
+        content: const Text(
+          'O Yomu encerrará o Core e os serviços locais com segurança antes '
+          'de sair.',
+        ),
+        actions: [
+          TextButton(
+            key: const ValueKey('yomu-exit-cancel'),
+            autofocus: true,
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            key: const ValueKey('yomu-exit-confirm'),
+            style: FilledButton.styleFrom(
+              backgroundColor: YomuTokens.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Fechar Yomu'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -899,6 +937,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       serverLabel: coreStatus.label,
       serverColor: coreStatus.color,
       onServerTap: () => setState(() => _selected = 'server'),
+      onWindowDrag: () => unawaited(WindowsWindowChrome.startDrag()),
+      onWindowMinimize: () => unawaited(WindowsWindowChrome.minimize()),
+      onWindowToggleMaximize: () =>
+          unawaited(WindowsWindowChrome.toggleMaximize()),
+      onWindowClose: () => unawaited(WindowsWindowChrome.close()),
+      onWindowResize: (edge) =>
+          unawaited(WindowsWindowChrome.startResize(edge.name)),
       body: _body(),
     );
   }

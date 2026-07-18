@@ -51,6 +51,7 @@ abstract final class YomuTokens {
   static const double controlHeight = 40;
   static const double iconButtonSize = 36;
   static const double minimumHitTarget = 44;
+  static const double windowTitleBarHeight = 40;
 
   static const Duration durationFast = Duration(milliseconds: 140);
   static const Duration durationMedium = Duration(milliseconds: 240);
