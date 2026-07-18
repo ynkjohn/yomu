@@ -7,10 +7,8 @@ import 'package:http/http.dart' as http;
 /// Full operation matrix is documented in docs/suwayomi-api-matrix.md and must
 /// be validated against the pinned JAR before building UI for each capability.
 class SuwayomiClient {
-  SuwayomiClient({
-    required this.baseUrl,
-    http.Client? httpClient,
-  }) : _http = httpClient ?? http.Client();
+  SuwayomiClient({required this.baseUrl, http.Client? httpClient})
+    : _http = httpClient ?? http.Client();
 
   final String baseUrl;
   final http.Client _http;
@@ -34,18 +32,14 @@ class SuwayomiClient {
           .post(
             _u('/api/graphql'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'query': '{ __typename }',
-            }),
+            body: jsonEncode({'query': '{ __typename }'}),
           )
           .timeout(const Duration(seconds: 3));
       if (gql.statusCode >= 200 && gql.statusCode < 500) return true;
     } catch (_) {}
 
     try {
-      final root = await _http
-          .get(_u('/'))
-          .timeout(const Duration(seconds: 3));
+      final root = await _http.get(_u('/')).timeout(const Duration(seconds: 3));
       return root.statusCode >= 200 && root.statusCode < 500;
     } catch (_) {
       return false;
@@ -96,6 +90,17 @@ class SuwayomiClient {
 
   Future<http.Response> restGet(String path) {
     return _http.get(_u(path)).timeout(const Duration(seconds: 30));
+  }
+
+  /// Starts a REST GET without buffering the response body or following
+  /// redirects. Reading-engine adapters use this to enforce their own byte
+  /// limits before media crosses the Yomu boundary.
+  Future<http.StreamedResponse> restGetStream(
+    String path, {
+    Duration timeout = const Duration(seconds: 30),
+  }) {
+    final request = http.Request('GET', _u(path))..followRedirects = false;
+    return _http.send(request).timeout(timeout);
   }
 
   Future<http.Response> restPost(String path, {Object? body}) {

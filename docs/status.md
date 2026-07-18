@@ -36,7 +36,8 @@
 | **P2C — provider personalizado OpenAI-compatible** | ✅ publicado em `eda852b` |
 | **Motor R0 — baseline factual** | ✅ commit `77cc650` |
 | **Motor R1 — contratos mínimos Yomu** | ✅ commit `98ddc91` |
-| **Motor R2 — bundle offline + GPLv2 §3(a)** | ✅ validada nesta subfase |
+| **Motor R2 — bundle offline + GPLv2 §3(a)** | ✅ commit `be77c1b` |
+| **Motor R3 — Biblioteca sobre contratos Yomu** | ✅ concluída nesta subfase |
 
 ## Phases
 
@@ -53,7 +54,8 @@
 | P2C provider personalizado | ✅ commit `eda852b` (schema v5) |
 | Motor Interno Transparente R0 | ✅ commit `77cc650` |
 | Motor Interno Transparente R1 | ✅ commit `98ddc91` |
-| Motor Interno Transparente R2 | ✅ gates técnicos concluídos; schema v5 intacto |
+| Motor Interno Transparente R2 | ✅ commit `be77c1b`; schema v5 intacto |
+| Motor Interno Transparente R3 | ✅ Biblioteca sem API/DTO/URL do fornecedor |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |

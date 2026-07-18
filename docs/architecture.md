@@ -37,6 +37,20 @@ release under MPL-2.0. Installer formats fail closed until a content-aware gate
 can inspect them. Binary and source archives are release inputs, never Git
 contents.
 
+## Migrated reading-engine capabilities
+
+R3 migrates the first real desktop consumer: `LibraryScreen` receives only
+`LibraryGateway`, `EngineMediaGateway`, `EngineReadinessSnapshot` and Yomu
+models. The Suwayomi adapter maps protocol DTOs to `LibraryManga`, converts
+process status to sanitized product readiness and represents covers with an
+opaque `MediaReference`. Cover bytes are fetched only through the adapter with
+an explicit 8 MiB consumer limit and redirects disabled.
+
+Opening details and continuing a chapter still use the legacy API only inside
+the desktop composition root. Details, reader, Home, catalog, downloads, Maya
+and Yomu Core/PWA remain later migration slices; R3 does not expand their
+contracts or move any data ownership.
+
 ## Dual catalog (Source Builder)
 
 - Extension sources: runtime = Suwayomi; appear in Suwayomi UI/API.

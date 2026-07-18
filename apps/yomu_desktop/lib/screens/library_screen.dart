@@ -1,19 +1,22 @@
 import 'package:flutter/material.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
-
-import 'manga_detail_screen.dart';
-import 'reader_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({
     super.key,
-    required this.api,
-    required this.engineReady,
+    required this.library,
+    required this.media,
+    required this.readiness,
+    required this.onOpenManga,
+    required this.onContinueReading,
   });
 
-  final SuwayomiApi? api;
-  final bool engineReady;
+  final LibraryGateway? library;
+  final EngineMediaGateway? media;
+  final EngineReadinessSnapshot readiness;
+  final Future<void> Function(LibraryManga manga) onOpenManga;
+  final Future<void> Function(LibraryManga manga) onContinueReading;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -23,7 +26,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   final _filterController = TextEditingController();
   bool _loading = false;
   String? _error;
-  List<MangaSummary> _items = [];
+  List<LibraryManga> _items = [];
   String _filter = '';
   int _loadGeneration = 0;
 
@@ -42,7 +45,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.engineReady) {
+    if (widget.readiness.isReady) {
       _load();
     }
   }
@@ -50,9 +53,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void didUpdateWidget(covariant LibraryScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.engineReady && !oldWidget.engineReady) {
+    if (widget.readiness.isReady &&
+        (!oldWidget.readiness.isReady ||
+            !identical(widget.library, oldWidget.library))) {
       _load();
-    } else if (!widget.engineReady && oldWidget.engineReady) {
+    } else if (!widget.readiness.isReady && oldWidget.readiness.isReady) {
       _loadGeneration++;
       _loading = false;
       _error = null;
@@ -60,7 +65,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
-  List<MangaSummary> get _filtered {
+  List<LibraryManga> get _filtered {
     final query = _filter.trim().toLowerCase();
     if (query.isEmpty) return _items;
     return _items
@@ -69,89 +74,92 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _load() async {
-    final api = widget.api;
-    if (api == null || !widget.engineReady) return;
+    if (!widget.readiness.isReady) return;
+    final library = widget.library;
+    if (library == null) {
+      setState(() {
+        _loading = false;
+        _error = 'Recursos de leitura temporariamente indisponíveis.';
+      });
+      return;
+    }
     final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final list = await api.listLibrary();
+      final list = await library.listLibrary();
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _items = list;
         _loading = false;
       });
-    } catch (e) {
+    } on EngineException catch (error) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _error = e.toString();
+        _error = error.failure.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _error = 'Não foi possível carregar a biblioteca.';
         _loading = false;
       });
     }
   }
 
-  Future<void> _continueReading(MangaSummary m) async {
-    final api = widget.api;
-    if (api == null) return;
-    final last = m.lastReadChapter;
-    if (last == null) {
-      // Open detail so user picks a chapter.
-      _openDetail(m.id);
-      return;
-    }
+  Future<void> _continueReading(LibraryManga manga) async {
     try {
-      var chapters = await api.listMangaChapters(m.id);
-      if (chapters.isEmpty) {
-        chapters = await api.fetchMangaChapters(m.id);
-      }
-      ChapterInfo chapter = last;
-      final match = chapters.where((c) => c.id == last.id);
-      if (match.isNotEmpty) {
-        chapter = match.first;
-      }
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ReaderScreen(
-            api: api,
-            mangaId: m.id,
-            mangaTitle: m.title,
-            chapter: chapter,
-            chapters: chapters.isEmpty ? [chapter] : chapters,
-          ),
-        ),
-      );
-      await _load();
-    } catch (e) {
+      await widget.onContinueReading(manga);
+      if (mounted && widget.readiness.isReady) await _load();
+    } on EngineException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Continuar leitura falhou: $e')));
+      ).showSnackBar(SnackBar(content: Text(error.failure.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Não foi possível continuar a leitura.')),
+      );
     }
   }
 
-  void _openDetail(int id) {
-    final api = widget.api;
-    if (api == null) return;
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute<void>(
-            builder: (_) => MangaDetailScreen(api: api, mangaId: id),
-          ),
-        )
-        .then((_) => _load());
+  Future<void> _openDetail(LibraryManga manga) async {
+    try {
+      await widget.onOpenManga(manga);
+      if (mounted && widget.readiness.isReady) await _load();
+    } on EngineException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.failure.message)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Não foi possível abrir este título.')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.engineReady) {
-      return const AsyncBody(
-        isLoading: false,
-        isEmpty: true,
-        emptyMessage: 'Inicie o Suwayomi para ver a biblioteca.',
-        child: SizedBox.shrink(),
+    if (!widget.readiness.isReady) {
+      final preparing = switch (widget.readiness.state) {
+        EngineReadinessState.initializing ||
+        EngineReadinessState.starting ||
+        EngineReadinessState.recovering => true,
+        _ => false,
+      };
+      return AsyncBody(
+        isLoading: preparing,
+        isEmpty: !preparing,
+        emptyMessage:
+            widget.readiness.failure?.message ??
+            'Recursos de leitura não estão disponíveis no momento.',
+        child: const SizedBox.shrink(),
       );
     }
 
@@ -310,10 +318,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               final manga = list[index];
                               return _LibraryCard(
                                 manga: manga,
-                                thumbnailUrl: widget.api?.absoluteUrl(
-                                  manga.thumbnailUrl,
-                                ),
-                                onOpen: () => _openDetail(manga.id),
+                                media: widget.media,
+                                onOpen: () => _openDetail(manga),
                                 onContinue: manga.lastReadChapter == null
                                     ? null
                                     : () => _continueReading(manga),
@@ -502,13 +508,13 @@ class _LibraryMetric extends StatelessWidget {
 class _LibraryCard extends StatelessWidget {
   const _LibraryCard({
     required this.manga,
-    required this.thumbnailUrl,
+    required this.media,
     required this.onOpen,
     this.onContinue,
   });
 
-  final MangaSummary manga;
-  final String? thumbnailUrl;
+  final LibraryManga manga;
+  final EngineMediaGateway? media;
   final VoidCallback onOpen;
   final VoidCallback? onContinue;
 
@@ -518,6 +524,7 @@ class _LibraryCard extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
+        key: ValueKey('library-manga-${manga.id}'),
         onTap: onOpen,
         onDoubleTap: onContinue,
         borderRadius: BorderRadius.circular(12),
@@ -528,7 +535,11 @@ class _LibraryCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  _LibraryCover(url: thumbnailUrl, title: manga.title),
+                  _LibraryCover(
+                    reference: manga.thumbnail,
+                    media: media,
+                    title: manga.title,
+                  ),
                   if (unread > 0)
                     Positioned(
                       top: 7,
@@ -582,11 +593,47 @@ class _LibraryCard extends StatelessWidget {
   }
 }
 
-class _LibraryCover extends StatelessWidget {
-  const _LibraryCover({required this.url, required this.title});
+class _LibraryCover extends StatefulWidget {
+  const _LibraryCover({
+    required this.reference,
+    required this.media,
+    required this.title,
+  });
 
-  final String? url;
+  final MediaReference? reference;
+  final EngineMediaGateway? media;
   final String title;
+
+  @override
+  State<_LibraryCover> createState() => _LibraryCoverState();
+}
+
+class _LibraryCoverState extends State<_LibraryCover> {
+  static const _maxCoverBytes = 8 * 1024 * 1024;
+  Future<MediaPayload>? _payload;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LibraryCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.reference != widget.reference ||
+        !identical(oldWidget.media, widget.media)) {
+      _resolve();
+    }
+  }
+
+  void _resolve() {
+    final reference = widget.reference;
+    final media = widget.media;
+    _payload = reference == null || media == null
+        ? null
+        : media.fetch(reference, maxBytes: _maxCoverBytes);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -601,7 +648,7 @@ class _LibraryCover extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
-        title.isEmpty ? 'Y' : title[0].toUpperCase(),
+        widget.title.isEmpty ? 'Y' : widget.title[0].toUpperCase(),
         style: const TextStyle(
           color: Color(0xBFFFFFFF),
           fontSize: 30,
@@ -609,14 +656,23 @@ class _LibraryCover extends StatelessWidget {
         ),
       ),
     );
-    if (url == null || url!.isEmpty) return fallback;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Image.network(
-        url!,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => fallback,
-      ),
+    final payload = _payload;
+    if (payload == null) return fallback;
+    return FutureBuilder<MediaPayload>(
+      future: payload,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data?.bytes;
+        if (bytes == null || bytes.isEmpty) return fallback;
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.memory(
+            bytes,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => fallback,
+          ),
+        );
+      },
     );
   }
 }

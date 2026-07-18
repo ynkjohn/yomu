@@ -517,3 +517,66 @@ teste, PowerShell e `java -version` pertencentes aos gates foram executados. O
 bundle Release gerado foi removido após registrar a evidência para liberar
 espaço; o Profile permanece como artefato ignorado. `AGENTS.md` continua com a
 alteração inicial do usuário e fica fora do commit R2.
+
+## Checkpoint R3 — primeira vertical real da Biblioteca
+
+R3 parte do commit R2 `be77c1b` e migra somente a tela desktop Biblioteca para
+os contratos introduzidos em R1. Não altera schema, persistência, ownership,
+portas, bundle, JAR, JRE, SDK ou dependências. O SQLite Yomu permanece no
+schema v5.
+
+Fronteira implementada:
+
+- `SuwayomiLibraryAdapter` mapeia `MangaSummary` e capítulo de retomada para
+  `LibraryManga` e `LibraryResumePoint`;
+- capas cruzam a fronteira apenas como `MediaReference` opaca e são obtidas pelo
+  endpoint loopback de thumbnail com redirect desativado e limite explícito de
+  8 MiB no consumidor;
+- `SuwayomiEngineReadinessAdapter` converte o lifecycle legado em readiness de
+  produto sem PID, Java, porta, URL ou mensagem upstream;
+- `LibraryScreen` importa somente `yomu_core` e `yomu_ui`, recebe gateways
+  estreitos, mostra falhas sanitizadas e não usa `Image.network`;
+- detalhe e retomada permanecem temporariamente como callbacks legados no
+  `HomeShell`, o composition root autorizado; nenhum contrato de reader,
+  capítulos ou progresso foi antecipado;
+- Core/PWA, Home, detalhes, reader, catálogo, extensões, downloads e Maya ficam
+  explicitamente fora de R3.
+
+Validação de R3:
+
+- adapter/readiness direcionados: 5/5;
+- Biblioteca + regressões promovidas direcionadas: 21/21;
+- `yomu_core`: 8/8;
+- `yomu_suwayomi`: 56/56;
+- `yomu_local_server`: 38/38;
+- `yomu_ai`: 62/62;
+- `yomu_storage`: 39/39;
+- desktop completo: 200/200;
+- PWA preload e reader races: aprovados;
+- analyzers afetados e analyzer da raiz: limpos;
+- `tool\verify_workspace.ps1`: `ALL CHECKS PASSED`;
+- build Windows Debug aprovado em 21,1 s;
+- `git diff --check` limpo e boundary scan da tela sem Suwayomi, DTO, URL
+  loopback ou `Image.network`;
+- reviewer independente: `PASS`, sem achado obrigatório;
+- nenhum processo do produto ou listener 8787/14567 foi iniciado; não houve
+  prova runtime ou captura externa porque a estrutura visual da tela não mudou.
+
+Allowlist nominal de R3:
+
+- `apps/yomu_desktop/lib/screens/library_screen.dart`;
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_desktop/test/library_screen_test.dart`;
+- `apps/yomu_desktop/test/promoted_regressions_test.dart`;
+- `packages/yomu_suwayomi/lib/yomu_suwayomi.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_engine_readiness.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_library_adapter.dart`;
+- `packages/yomu_suwayomi/lib/src/client/suwayomi_client.dart`;
+- `packages/yomu_suwayomi/test/reading_engine_adapter_test.dart`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/status.md`.
+
+`AGENTS.md`, arquivos status-only/EOL, `design_prod/**`, `.playwright-cli/**`,
+`mcps/tasks/tools/**`, builds e artefatos temporários permanecem fora. R4 deve
+começar somente após o commit próprio de R3 e nova revalidação do baseline.

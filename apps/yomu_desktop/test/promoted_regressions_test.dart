@@ -49,17 +49,27 @@ void main() {
 
   testWidgets('Library filters the real collection by title', (tester) async {
     await setDesktopSurface(tester);
-    final api = _FakeSuwayomiApi(
+    final library = _FakeLibraryGateway(
       library: const [
-        MangaSummary(id: 1, title: 'Frieren', inLibrary: true),
-        MangaSummary(id: 2, title: 'Vagabond', inLibrary: true),
+        LibraryManga(id: 1, title: 'Frieren', inLibrary: true),
+        LibraryManga(id: 2, title: 'Vagabond', inLibrary: true),
       ],
     );
 
     await tester.pumpWidget(
       MaterialApp(
         theme: buildYomuTheme(),
-        home: Scaffold(body: LibraryScreen(api: api, engineReady: true)),
+        home: Scaffold(
+          body: LibraryScreen(
+            library: library,
+            media: const _EmptyMediaGateway(),
+            readiness: const EngineReadinessSnapshot(
+              state: EngineReadinessState.ready,
+            ),
+            onOpenManga: (_) async {},
+            onContinueReading: (_) async {},
+          ),
+        ),
       ),
     );
     await tester.pump();
@@ -959,6 +969,25 @@ class _FakeSuwayomiApi extends SuwayomiApi {
     clearDownloaderCalls++;
     downloadStatus = const DownloadStatusInfo(state: 'STOPPED', queue: []);
   }
+}
+
+class _FakeLibraryGateway implements LibraryGateway {
+  const _FakeLibraryGateway({this.library = const []});
+
+  final List<LibraryManga> library;
+
+  @override
+  Future<List<LibraryManga>> listLibrary() async => library;
+}
+
+class _EmptyMediaGateway implements EngineMediaGateway {
+  const _EmptyMediaGateway();
+
+  @override
+  Future<MediaPayload> fetch(
+    MediaReference reference, {
+    required int maxBytes,
+  }) async => MediaPayload(bytes: const []);
 }
 
 class _NoopMayaPort implements MayaLibraryPort {

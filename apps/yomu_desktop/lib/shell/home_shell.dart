@@ -19,6 +19,7 @@ import '../screens/library_screen.dart';
 import '../screens/manga_detail_screen.dart';
 import '../screens/maya_screen.dart';
 import '../screens/placeholder_screen.dart';
+import '../screens/reader_screen.dart';
 import '../screens/server_screen.dart';
 import '../services/maya_credential_store.dart';
 import '../services/maya_provider_adapters.dart';
@@ -105,6 +106,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   YomuDatabase? _db;
   SuwayomiProcessManager? _manager;
   SuwayomiApi? _api;
+  SuwayomiLibraryAdapter? _libraryAdapter;
+  SuwayomiEngineReadinessAdapter? _engineReadiness;
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
   MayaService? _maya;
@@ -134,6 +137,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       _manager != null &&
       _api != null &&
       _suwayomiStatus.state == SuwayomiProcessState.running;
+
+  EngineReadinessSnapshot get _readingEngineReadiness =>
+      _engineReadiness?.current ??
+      const EngineReadinessSnapshot(state: EngineReadinessState.initializing);
 
   @override
   void initState() {
@@ -277,6 +284,11 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             // locals are nulled after transfer; the listener must not close over
             // those locals or a later running status will null-check-crash.
             final listenedManager = manager!;
+            final readingApi = SuwayomiApi(listenedManager.createClient());
+            final libraryAdapter = SuwayomiLibraryAdapter(readingApi);
+            final engineReadiness = SuwayomiEngineReadinessAdapter.fromManager(
+              listenedManager,
+            );
             statusSub = listenedManager.statusStream.listen((s) {
               if (!mounted) return;
               setState(() {
@@ -322,6 +334,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             auth = null;
             setState(() {
               _api = SuwayomiApi(liveManager.createClient());
+              _libraryAdapter = libraryAdapter;
+              _engineReadiness = engineReadiness;
               _maya = liveMaya;
               _mayaProvider = liveMayaProvider;
               _mayaUnavailableReason = liveMayaUnavailableReason;
@@ -359,6 +373,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _mayaProvider = null;
         _mayaUnavailableReason = null;
         _api = null;
+        _libraryAdapter = null;
+        _engineReadiness = null;
         if (!mounted) return;
         final msg = e is YomuAlreadyRunningException
             ? e.toString()
@@ -426,6 +442,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     _mayaUnavailableReason = null;
     _auth = null;
     _manager = null;
+    _libraryAdapter = null;
+    _engineReadiness = null;
     _db = null;
     await _teardownResources(
       statusSub: sub,
@@ -799,6 +817,73 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _openLibraryManga(LibraryManga manga) async {
+    final api = _api;
+    if (api == null || !_engineReady) throw _readingUnavailableException;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => MangaDetailScreen(api: api, mangaId: manga.id),
+        ),
+      );
+    } catch (_) {
+      throw const EngineException(
+        EngineFailure(
+          kind: EngineFailureKind.temporarilyUnavailable,
+          code: 'engine_manga_unavailable',
+          message: 'Não foi possível abrir este título.',
+          retryable: true,
+        ),
+      );
+    }
+  }
+
+  Future<void> _continueLibraryManga(LibraryManga manga) async {
+    final api = _api;
+    if (api == null || !_engineReady) throw _readingUnavailableException;
+    final last = manga.lastReadChapter;
+    if (last == null) {
+      await _openLibraryManga(manga);
+      return;
+    }
+    try {
+      var chapters = await api.listMangaChapters(manga.id);
+      if (chapters.isEmpty) {
+        chapters = await api.fetchMangaChapters(manga.id);
+      }
+      final matches = chapters.where((chapter) => chapter.id == last.id);
+      final chapter = matches.isEmpty
+          ? ChapterInfo(
+              id: last.id,
+              name: last.name,
+              lastPageRead: last.lastPageRead,
+              mangaId: manga.id,
+            )
+          : matches.first;
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ReaderScreen(
+            api: api,
+            mangaId: manga.id,
+            mangaTitle: manga.title,
+            chapter: chapter,
+            chapters: chapters.isEmpty ? [chapter] : chapters,
+          ),
+        ),
+      );
+    } catch (_) {
+      throw const EngineException(
+        EngineFailure(
+          kind: EngineFailureKind.temporarilyUnavailable,
+          code: 'engine_reader_unavailable',
+          message: 'Não foi possível continuar a leitura.',
+          retryable: true,
+        ),
+      );
+    }
+  }
+
   Widget _body() {
     if (_bootstrapping) {
       return const AsyncBody(isLoading: true, child: SizedBox.shrink());
@@ -896,7 +981,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         },
       ),
       'explore' => ExploreScreen(api: _api, engineReady: _engineReady),
-      'library' => LibraryScreen(api: _api, engineReady: _engineReady),
+      'library' => LibraryScreen(
+        library: _libraryAdapter,
+        media: _libraryAdapter,
+        readiness: _readingEngineReadiness,
+        onOpenManga: _openLibraryManga,
+        onContinueReading: _continueLibraryManga,
+      ),
       'downloads' => DownloadsScreen(api: _api, engineReady: _engineReady),
       'maya' => MayaScreen(
         service: _maya,
@@ -959,3 +1050,12 @@ const _mayaLegacyMigrationBlockedMessage =
 
 /// Clean abort for unmount/shutdown mid-bootstrap (not user-facing).
 class _BootstrapAborted implements Exception {}
+
+const _readingUnavailableException = EngineException(
+  EngineFailure(
+    kind: EngineFailureKind.temporarilyUnavailable,
+    code: 'engine_temporarily_unavailable',
+    message: 'Recursos de leitura temporariamente indisponíveis.',
+    retryable: true,
+  ),
+);
