@@ -1,5 +1,9 @@
 # Yomu Architecture
 
+The replaceable internal reading-engine boundary is defined by
+[`adr/0001-yomu-reading-engine.md`](adr/0001-yomu-reading-engine.md). Suwayomi
+is the current adapter implementation, not a product surface.
+
 ## Verdict
 
 | Concern | Owner |
@@ -74,7 +78,7 @@ detalhados estão em `docs/p2b-maya-providers.md` e
 4. Library / downloads (hard gate)
 5. PWA mínima (LAN opt-in + pairing + library/reader)
 6. Maya persistente + providers opcionais + ActionProposal — **done**
-7. P2C custom OpenAI-compatible, schema v5 — **implemented; commit pending**
+7. P2C custom OpenAI-compatible, schema v5 — **published in `eda852b`**
 
 P2B concluída no código: schema v4 e providers compostos no bootstrap desktop.
 O controlador usa a factory real, é injetado no

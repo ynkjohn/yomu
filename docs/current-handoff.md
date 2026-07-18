@@ -395,3 +395,33 @@ Ficam fora todos os demais arquivos status-only/EOL, `design_prod/**`,
 `.playwright-cli/**`, `mcps/tasks/tools/**`, builds e artefatos temporários. O
 usuário autorizou explicitamente staging nominal, um commit e push normal deste
 checkpoint; o resultado efetivo deve ser revalidado no Git após cada operação.
+
+## Checkpoint R1 — fronteira mínima do motor
+
+R1 registra o ADR aceito “Yomu owns a replaceable reading-engine boundary” e
+introduz somente a primeira vertical de contratos no `yomu_core`:
+
+- readiness de produto sem PID, Java, porta, URL ou fornecedor;
+- falha e exceção tipadas com mensagem sanitizada;
+- biblioteca read-only com `LibraryManga` e `LibraryResumePoint`;
+- `MediaReference` opaca e fetch de mídia limitado por bytes;
+- nenhum catálogo, detalhes, reader, progresso, downloads ou extensões ainda;
+- nenhum agregador criado antes do composition root real;
+- `SuwayomiStatus` legado permanece temporariamente para consumidores ainda não
+  migrados.
+
+R1 não altera dependências, persistência ou ownership. O SQLite permanece no
+schema v5. O analyzer inicialmente detectou colisão entre o DTO legado
+`MangaSummary` e um nome de domínio igual; o contrato foi estreitado para
+`LibraryManga`, eliminando a ambiguidade sem editar consumidores existentes.
+
+Validação de R1:
+
+- `yomu_core`: analyzer limpo e 8/8 testes;
+- `yomu_storage`: 39/39;
+- analyzer da raiz: limpo;
+- `tool\verify_workspace.ps1`: aprovado em 180,7 s;
+- desktop completo: 197/197;
+- build Windows Debug aprovado;
+- `design_prod` preservado;
+- nenhuma prova runtime ou processo persistente foi necessário.
