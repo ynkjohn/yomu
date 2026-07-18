@@ -36,9 +36,13 @@ client that asks the user to administer a server.
   drain only after a real upstream proof confirms preservation of queue, state
   and files.
 - Release distribution contains the already-pinned JRE and JAR and does not
-  download the engine on first use. Redistributing those artifacts remains
-  blocked until official license and notice evidence is recorded. Artifact
-  versions are changed only in a separately approved update.
+  download the engine on first use. Temurin redistribution follows GPLv2
+  section 3(a): the exact OpenJDK source, Temurin build source and provenance
+  are separate assets in the same release download location as the Yomu
+  portable ZIP. Suwayomi exact source is published there as well. A fail-closed
+  gate inspects the ZIP and verifies the complete set before publication.
+  Installer formats remain blocked until a format-specific content gate exists.
+  Artifact versions are changed only in a separately approved update.
 - Sensitive Maya actions continue to require `ActionProposal` and explicit
   confirmation; the reading engine gains no autonomous authority.
 - The migration is incremental. A capability is introduced only when a real

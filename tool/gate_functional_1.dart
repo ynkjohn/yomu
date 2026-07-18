@@ -4,7 +4,6 @@
 //   dart run tool/gate_functional_1.dart
 //
 // Exit 0 only if at least one chapter page URL is returned.
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -68,18 +67,7 @@ Future<void> main(List<String> args) async {
   }
   root.createSync(recursive: true);
 
-  final manifestFile = File(
-    p.join(
-      Directory.current.path,
-      'packages',
-      'yomu_suwayomi',
-      'vendor',
-      'manifest.json',
-    ),
-  );
-  final manifest = VendorManifest.fromJson(
-    jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>,
-  );
+  final manifest = await VendorManifest.loadForRuntime();
 
   final manager = SuwayomiProcessManager(
     paths: SuwayomiPaths(root),

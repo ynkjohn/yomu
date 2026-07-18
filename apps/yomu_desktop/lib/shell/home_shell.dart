@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:yomu_ai/yomu_ai.dart';
 import 'package:yomu_core/yomu_core.dart';
@@ -245,16 +244,21 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             final paths = SuwayomiPaths(root);
             await paths.ensureLayout();
 
-            final manifestJson = await rootBundle.loadString(
-              'assets/vendor/manifest.json',
-            );
-            final manifest = VendorManifest.fromJson(
-              jsonDecode(manifestJson) as Map<String, dynamic>,
+            final packagedRuntime = kReleaseMode || kProfileMode;
+            final manifest = await VendorManifest.loadForRuntime(
+              packagedOnly: packagedRuntime,
             );
 
             manager = SuwayomiProcessManager(
               paths: paths,
               manifest: manifest,
+              javaResolver: JavaResolver(
+                mode: packagedRuntime
+                    ? JavaResolutionMode.packagedOnly
+                    : JavaResolutionMode.development,
+              ),
+              allowArtifactDownload: !packagedRuntime,
+              packagedArtifactsOnly: packagedRuntime,
               host: '127.0.0.1',
               port: kYomuSuwayomiPort,
             );

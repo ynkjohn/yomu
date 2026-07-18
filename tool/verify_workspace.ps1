@@ -1,6 +1,10 @@
 # Yomu workspace verification (Windows PowerShell)
 # Usage (from repo root):
 #   powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
+param(
+  [switch]$VerifyOfflineEngineBundle
+)
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -64,6 +68,18 @@ Push-Location apps/yomu_desktop
 flutter build windows --debug
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
+
+if ($VerifyOfflineEngineBundle) {
+  Write-Host '== offline engine bundle + corresponding source =='
+  $engineManifest = Get-Content `
+    'packages/yomu_suwayomi/vendor/engine_manifest.json' -Raw | ConvertFrom-Json
+  $sourceArchive = Join-Path $root `
+    "packages/yomu_suwayomi/vendor/.jre_cache/$($engineManifest.jre.source.archiveFile)"
+  & (Join-Path $root 'tool/verify_engine_bundle.ps1') `
+    -BundleRoot (Join-Path $root 'apps/yomu_desktop/build/windows/x64/runner/Debug') `
+    -SourceArchivePath $sourceArchive
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 Write-Host '== ALL CHECKS PASSED =='
 exit 0

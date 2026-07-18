@@ -21,6 +21,22 @@ is the current adapter implementation, not a product surface.
 
 iPhone Safari/PWA talks **only** to Yomu Core.
 
+## Offline engine distribution
+
+Profile/Release resolve the unified `engine_manifest.json` only beside the
+executable, execute only the packaged Temurin JRE and seed only the packaged
+Suwayomi JAR. There is no system-Java or network fallback in publishable
+builds. The bundle retains upstream JRE legal/notice files and Yomu third-party
+notices.
+
+Temurin redistribution uses GPLv2 section 3(a). The exact OpenJDK source,
+Temurin build-source archive and official build provenance must be released as
+separate assets in the same download location as every verified Yomu portable
+ZIP containing that JRE. The exact Suwayomi source archive accompanies the
+release under MPL-2.0. Installer formats fail closed until a content-aware gate
+can inspect them. Binary and source archives are release inputs, never Git
+contents.
+
 ## Dual catalog (Source Builder)
 
 - Extension sources: runtime = Suwayomi; appear in Suwayomi UI/API.

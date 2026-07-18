@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "notes": "Pinned engine distribution for Yomu. Versions and hashes change only in a separately approved update.",
+  "noticesFile": "THIRD_PARTY_NOTICES.md",
+  "suwayomi": {
+    "downloadUrl": "https://github.com/Suwayomi/Suwayomi-Server/releases/download/v2.3.2238/Suwayomi-Server-v2.3.2238.jar",
+    "sourceUrl": "https://github.com/Suwayomi/Suwayomi-Server/tree/a1770cb0553e37c1f660a88c23afd7badde11328",
+    "sourceCommit": "a1770cb0553e37c1f660a88c23afd7badde11328",
+    "sourceArchiveFile": "Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328.tar.gz",
+    "sourceArchiveUrl": "https://github.com/Suwayomi/Suwayomi-Server/archive/a1770cb0553e37c1f660a88c23afd7badde11328.tar.gz",
+    "sourceSha256": "d43dd41e2cd86ece24df1ad42c8495edc2729af1ef292f1c3d68ffb509ac4f86",
+    "sourceRequiredEntries": [
+      "Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328/LICENSE",
+      "Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328/gradlew",
+      "Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328/gradle/wrapper/gradle-wrapper.properties",
+      "Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328/build.gradle.kts",
+      "Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328/settings.gradle.kts"
+    ],
+    "checksumUrl": "https://github.com/Suwayomi/Suwayomi-Server/releases/download/v2.3.2238/Checksums.sha256",
+    "revision": "r2238",
+    "version": "v2.3.2238",
+    "minJre": 21,
+    "sha256": "9ee45c37dac659a284e4a1885dcddec54a7018ead2f18620bcb1fd29751c9786",
+    "jarFile": "Suwayomi-Server-v2.3.2238.jar",
+    "license": "MPL-2.0",
+    "licenseUrl": "https://raw.githubusercontent.com/Suwayomi/Suwayomi-Server/v2.3.2238/LICENSE"
+  },
+  "jre": {
+    "vendor": "Eclipse Temurin",
+    "version": "21.0.11+10",
+    "os": "windows",
+    "arch": "x64",
+    "archiveFile": "OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip",
+    "downloadUrl": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip",
+    "checksumUrl": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip.sha256.txt",
+    "sha256": "be26677aaa20b39a62edcaab4c8857a8b76673b0f45abc0b6143b142b62717e4",
+    "license": "GPL-2.0-with-classpath-exception",
+    "licenseUrl": "https://openjdk.org/legal/gplv2+ce.html",
+    "noticeFile": "NOTICE",
+    "requiredNoticePaths": [
+      "NOTICE",
+      "legal/java.base/LICENSE",
+      "legal/java.base/ADDITIONAL_LICENSE_INFO",
+      "legal/java.base/ASSEMBLY_EXCEPTION"
+    ],
+    "executable": "bin/java.exe",
+    "localVendorPath": "jre21",
+    "source": {
+      "archiveFile": "OpenJDK21U-jdk-sources_21.0.11_10.tar.gz",
+      "downloadUrl": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk-sources_21.0.11_10.tar.gz",
+      "checksumUrl": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jdk-sources_21.0.11_10.tar.gz.sha256.txt",
+      "sha256": "891a3dd2341c37580fb81b56c4262f135e90c8f2acb059adb6ff0fdd76ae4385",
+      "distributionPolicy": "GPL-2.0-section-3a-same-download-location",
+      "scmRef": "jdk-21.0.11+10_adopt",
+      "openJdkSourceCommit": "254494ad7d75b37f1c033245fb4dbd460d0347b5",
+      "requiredEntries": [
+        "jdk-21.0.11+10-src/configure",
+        "jdk-21.0.11+10-src/make/",
+        "jdk-21.0.11+10-src/doc/building.html",
+        "jdk-21.0.11+10-src/LICENSE",
+        "jdk-21.0.11+10-src/ADDITIONAL_LICENSE_INFO",
+        "jdk-21.0.11+10-src/ASSEMBLY_EXCEPTION"
+      ],
+      "build": {
+        "commit": "a612825ee82a20ac872d60958c349854c1f29a8e",
+        "archiveFile": "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e.tar.gz",
+        "downloadUrl": "https://github.com/adoptium/temurin-build/archive/a612825ee82a20ac872d60958c349854c1f29a8e.tar.gz",
+        "sha256": "1c0cdcec98d7f43652ad26b7a54f33172089018ca58759ffc6d6fc0ee18ebd3f",
+        "license": "Apache-2.0",
+        "requiredEntries": [
+          "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e/LICENSE",
+          "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e/NOTICE",
+          "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e/makejdk-any-platform.sh",
+          "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e/sbin/build.sh",
+          "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e/security/certdata.txt",
+          "temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e/security/mk-cacerts.sh"
+        ]
+      },
+      "provenance": {
+        "metadataFile": "OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip.json",
+        "downloadUrl": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.11%2B10/OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip.json",
+        "sha256": "7fff112ea1f3f24f92113f0626440deb08b9d0f28e73d9fda3a5ef3a5596665c"
+      }
+    }
+  }
+}

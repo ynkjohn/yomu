@@ -16,6 +16,8 @@ class JavaResolution {
   final String source;
 }
 
+enum JavaResolutionMode { development, packagedOnly }
+
 /// Locates a JRE/JDK suitable for Suwayomi (default min 21).
 ///
 /// Priority:
@@ -26,11 +28,14 @@ class JavaResolution {
 /// 5. JAVA_HOME / PATH (system; never preferred over packaged 21)
 class JavaResolver {
   const JavaResolver({
+    this.mode = JavaResolutionMode.development,
     this.resolvedExecutableForTest,
     this.environmentForTest,
     this.versionProbeForTest,
     this.searchRootsForTest,
   });
+
+  final JavaResolutionMode mode;
 
   /// Fake [Platform.resolvedExecutable] (isolated bundle tests).
   final String? resolvedExecutableForTest;
@@ -44,15 +49,12 @@ class JavaResolver {
   /// Optional monorepo search roots override (empty = no vendor walk).
   final List<String>? searchRootsForTest;
 
-  Map<String, String> get _env =>
-      environmentForTest ?? Platform.environment;
+  Map<String, String> get _env => environmentForTest ?? Platform.environment;
 
   Future<JavaResolution?> resolve({
     required SuwayomiPaths paths,
     int minMajor = 21,
   }) async {
-    await ensureManagedJre(paths);
-
     final candidates = <({String exe, String source})>[];
     final seen = <String>{};
 
@@ -65,36 +67,37 @@ class JavaResolver {
       candidates.add((exe: norm, source: source));
     }
 
-    // 1) Explicit override first (documented as override, not "force").
-    final yomuJava = _env['YOMU_JAVA_HOME'];
-    if (yomuJava != null && yomuJava.isNotEmpty) {
-      add(
-        p.join(yomuJava, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
-        'YOMU_JAVA_HOME',
-      );
+    if (mode == JavaResolutionMode.development) {
+      // Explicit development override first.
+      final yomuJava = _env['YOMU_JAVA_HOME'];
+      if (yomuJava != null && yomuJava.isNotEmpty) {
+        add(
+          p.join(yomuJava, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
+          'YOMU_JAVA_HOME',
+        );
+      }
     }
 
-    // 2) Packaged beside executable (installer / Release layout).
+    // Packaged beside executable is the only candidate in packaged mode.
     add(_packagedBesideExecutable(), 'packaged-jre');
 
-    // 3) Managed runtime under app support.
-    add(_bundledJava(paths), 'managed-jre');
-
-    // 4) Dev monorepo vendor.
-    for (final v in _findVendorJreExecutables()) {
-      add(v, 'vendor-jre21');
-    }
-
-    // 5) System fallbacks.
-    final fromEnv = _env['JAVA_HOME'];
-    if (fromEnv != null && fromEnv.isNotEmpty) {
-      add(
-        p.join(fromEnv, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
-        'JAVA_HOME',
-      );
-    }
-    if (environmentForTest == null) {
-      add(await _whichJava(), 'PATH');
+    if (mode == JavaResolutionMode.development) {
+      // Backward-compatible managed runtime, local vendor and system fallbacks
+      // are development conveniences only. Release/Profile never inspect them.
+      add(_bundledJava(paths), 'managed-jre');
+      for (final v in _findVendorJreExecutables()) {
+        add(v, 'vendor-jre21');
+      }
+      final fromEnv = _env['JAVA_HOME'];
+      if (fromEnv != null && fromEnv.isNotEmpty) {
+        add(
+          p.join(fromEnv, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
+          'JAVA_HOME',
+        );
+      }
+      if (environmentForTest == null) {
+        add(await _whichJava(), 'PATH');
+      }
     }
 
     JavaResolution? bestTooOld;
@@ -134,33 +137,10 @@ class JavaResolver {
     return null;
   }
 
-  /// Seeds managed JRE from packaged-next-to-exe or monorepo vendor.
-  Future<void> ensureManagedJre(SuwayomiPaths paths) async {
-    final destJava = File(
-      p.join(paths.jreDir.path, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
-    );
-    if (destJava.existsSync()) return;
-
-    String? seedRoot;
-    final packaged = _packagedBesideExecutable();
-    if (packaged != null) {
-      seedRoot = p.dirname(p.dirname(packaged)); // .../jre/bin/java → jre
-    } else {
-      seedRoot = _findVendorJreRoot();
-    }
-    if (seedRoot == null) return;
-
-    try {
-      await paths.jreDir.create(recursive: true);
-      await _copyDir(Directory(seedRoot), paths.jreDir);
-    } catch (_) {}
-  }
-
   /// `{exeDir}/jre/bin/java(.exe)` for Release bundles.
   String? _packagedBesideExecutable() {
     try {
-      final exePath =
-          resolvedExecutableForTest ?? Platform.resolvedExecutable;
+      final exePath = resolvedExecutableForTest ?? Platform.resolvedExecutable;
       final exeDir = File(exePath).parent.path;
       final java = p.join(
         exeDir,
@@ -171,19 +151,6 @@ class JavaResolver {
       if (File(java).existsSync()) return java;
     } catch (_) {}
     return null;
-  }
-
-  Future<void> _copyDir(Directory from, Directory to) async {
-    await to.create(recursive: true);
-    await for (final entity in from.list(recursive: false, followLinks: false)) {
-      final name = p.basename(entity.path);
-      final destPath = p.join(to.path, name);
-      if (entity is Directory) {
-        await _copyDir(entity, Directory(destPath));
-      } else if (entity is File) {
-        await entity.copy(destPath);
-      }
-    }
   }
 
   List<String> _findVendorJreExecutables() {
@@ -220,7 +187,9 @@ class JavaResolver {
   }
 
   List<String> _searchRoots() {
-    if (searchRootsForTest != null) return List<String>.from(searchRootsForTest!);
+    if (searchRootsForTest != null) {
+      return List<String>.from(searchRootsForTest!);
+    }
 
     final roots = <String>[];
     void walk(String start, int maxUp) {
@@ -235,8 +204,7 @@ class JavaResolver {
 
     walk(Directory.current.path, 14);
     try {
-      final exe =
-          resolvedExecutableForTest ?? Platform.resolvedExecutable;
+      final exe = resolvedExecutableForTest ?? Platform.resolvedExecutable;
       walk(File(exe).parent.path, 14);
     } catch (_) {}
 
@@ -246,7 +214,11 @@ class JavaResolver {
 
   String? _bundledJava(SuwayomiPaths paths) {
     final candidates = [
-      p.join(paths.jreDir.path, 'bin', Platform.isWindows ? 'java.exe' : 'java'),
+      p.join(
+        paths.jreDir.path,
+        'bin',
+        Platform.isWindows ? 'java.exe' : 'java',
+      ),
       p.join(paths.jreDir.path, 'Contents', 'Home', 'bin', 'java'),
     ];
     for (final c in candidates) {
@@ -257,11 +229,9 @@ class JavaResolver {
 
   Future<String?> _whichJava() async {
     try {
-      final result = await Process.run(
-        Platform.isWindows ? 'where' : 'which',
-        ['java'],
-        runInShell: true,
-      );
+      final result = await Process.run(Platform.isWindows ? 'where' : 'which', [
+        'java',
+      ], runInShell: true);
       if (result.exitCode != 0) return null;
       final lines = (result.stdout as String)
           .split(RegExp(r'\r?\n'))

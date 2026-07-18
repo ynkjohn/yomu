@@ -50,6 +50,9 @@ class SuwayomiProcessManager {
     required this.paths,
     required this.manifest,
     this.javaResolver = const JavaResolver(),
+    this.allowArtifactDownload = true,
+    this.packagedArtifactsOnly = false,
+    this.packagedEngineDirectoryForTest,
     this.host = '127.0.0.1',
     this.port = kYomuSuwayomiPort,
     ProcessOwnershipProbe? ownershipProbe,
@@ -65,6 +68,9 @@ class SuwayomiProcessManager {
   final SuwayomiPaths paths;
   final VendorManifest manifest;
   final JavaResolver javaResolver;
+  final bool allowArtifactDownload;
+  final bool packagedArtifactsOnly;
+  final Directory? packagedEngineDirectoryForTest;
   final String host;
   final int port;
   final http.Client _http;
@@ -123,31 +129,42 @@ class SuwayomiProcessManager {
     return c.future;
   }
 
-  Future<Result<File>> ensureJar({bool downloadIfMissing = true}) async {
+  Future<Result<File>> ensureJar({bool? downloadIfMissing}) async {
     await paths.ensureLayout();
     final jar = paths.jarFile(manifest.suwayomi.jarFile);
     final expected = manifest.suwayomi.sha256;
+    final allowDownload = downloadIfMissing ?? allowArtifactDownload;
+
+    File? packagedSeed;
+    if (packagedArtifactsOnly) {
+      packagedSeed = _findPackagedSeedJar();
+      if (packagedSeed == null) {
+        return const Err(
+          'Motor empacotado ausente. Repare ou reinstale o Yomu.',
+        );
+      }
+      if (!await _verifySha256(packagedSeed, expected)) {
+        return const Err(
+          'Motor empacotado inválido. Repare ou reinstale o Yomu.',
+        );
+      }
+    }
 
     if (jar.existsSync()) {
       final ok = await _verifySha256(jar, expected);
-      if (ok) return Ok(jar);
+      if (ok) {
+        await _writeManifestCopyAtomically();
+        return Ok(jar);
+      }
       await jar.delete();
     }
 
-    final seed = await _findSeedJar();
+    final seed = packagedSeed ?? await _findDevelopmentSeedJar();
     if (seed != null) {
-      final ok = await _verifySha256(seed, expected);
-      if (!ok) {
-        return Err('JAR seed encontrado mas SHA-256 inválido: ${seed.path}');
-      }
-      await seed.copy(jar.path);
-      await paths.vendorManifestCopy.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
-      );
-      return Ok(jar);
+      return _installVerifiedJar(seed: seed, destination: jar);
     }
 
-    if (!downloadIfMissing) {
+    if (!allowDownload) {
       return Err('Suwayomi JAR ausente ou hash inválido: ${jar.path}');
     }
 
@@ -158,6 +175,7 @@ class SuwayomiProcessManager {
       ),
     );
 
+    File? downloadTemp;
     try {
       final response = await _http.get(
         Uri.parse(manifest.suwayomi.downloadUrl),
@@ -165,24 +183,43 @@ class SuwayomiProcessManager {
       if (response.statusCode != 200) {
         return Err('Falha ao baixar Suwayomi (HTTP ${response.statusCode}).');
       }
-      await jar.writeAsBytes(response.bodyBytes, flush: true);
-      final ok = await _verifySha256(jar, expected);
+      downloadTemp = _temporarySibling(jar);
+      await downloadTemp.writeAsBytes(response.bodyBytes, flush: true);
+      final ok = await _verifySha256(downloadTemp, expected);
       if (!ok) {
-        await jar.delete();
+        await downloadTemp.delete();
+        downloadTemp = null;
         return const Err(
           'Checksum SHA-256 do JAR Suwayomi não confere com o manifest pinado.',
         );
       }
-      await paths.vendorManifestCopy.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
+      final result = await _promoteVerifiedJar(
+        temp: downloadTemp,
+        destination: jar,
       );
-      return Ok(jar);
+      downloadTemp = null;
+      return result;
     } catch (e) {
+      if (downloadTemp?.existsSync() ?? false) await downloadTemp!.delete();
       return Err('Erro ao obter Suwayomi JAR: $e', e);
     }
   }
 
-  Future<File?> _findSeedJar() async {
+  File? _findPackagedSeedJar() {
+    final engineDir =
+        packagedEngineDirectoryForTest ??
+        Directory(
+          p.join(File(Platform.resolvedExecutable).parent.path, 'engine'),
+        );
+    final candidate = File(p.join(engineDir.path, manifest.suwayomi.jarFile));
+    return candidate.existsSync() ? candidate : null;
+  }
+
+  Future<File?> _findDevelopmentSeedJar() async {
+    final packaged = _findPackagedSeedJar();
+    if (packaged != null) return packaged;
+    if (packagedArtifactsOnly) return null;
+
     final envPath = Platform.environment['YOMU_SUWAYOMI_JAR'];
     if (envPath != null && envPath.isNotEmpty) {
       final f = File(envPath);
@@ -206,6 +243,65 @@ class SuwayomiProcessManager {
       dir = parent;
     }
     return null;
+  }
+
+  Future<Result<File>> _installVerifiedJar({
+    required File seed,
+    required File destination,
+  }) async {
+    if (!await _verifySha256(seed, manifest.suwayomi.sha256)) {
+      return Err('JAR seed encontrado mas SHA-256 inválido: ${seed.path}');
+    }
+
+    final temp = _temporarySibling(destination);
+    try {
+      await seed.copy(temp.path);
+      if (!await _verifySha256(temp, manifest.suwayomi.sha256)) {
+        await temp.delete();
+        return const Err('Falha de integridade ao preparar o motor interno.');
+      }
+      return _promoteVerifiedJar(temp: temp, destination: destination);
+    } catch (e) {
+      if (temp.existsSync()) await temp.delete();
+      return Err('Erro ao instalar o motor interno empacotado: $e', e);
+    }
+  }
+
+  Future<Result<File>> _promoteVerifiedJar({
+    required File temp,
+    required File destination,
+  }) async {
+    try {
+      if (destination.existsSync()) await destination.delete();
+      final installed = await temp.rename(destination.path);
+      await _writeManifestCopyAtomically();
+      return Ok(installed);
+    } catch (e) {
+      if (temp.existsSync()) await temp.delete();
+      return Err('Erro ao ativar o motor interno verificado: $e', e);
+    }
+  }
+
+  Future<void> _writeManifestCopyAtomically() async {
+    final destination = paths.vendorManifestCopy;
+    final temp = _temporarySibling(destination);
+    try {
+      await temp.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(manifest.toJson()),
+        flush: true,
+      );
+      if (destination.existsSync()) await destination.delete();
+      await temp.rename(destination.path);
+    } finally {
+      if (temp.existsSync()) await temp.delete();
+    }
+  }
+
+  File _temporarySibling(File destination) {
+    final suffix =
+        '${DateTime.now().microsecondsSinceEpoch}-'
+        '${Random.secure().nextInt(1 << 32)}';
+    return File('${destination.path}.tmp-$suffix');
   }
 
   Future<bool> _verifySha256(File file, String expectedHex) async {

@@ -107,10 +107,23 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
 
-# --- Yomu: ship JRE 21 + PWA next to the executable (Release/install layout) ---
-# Runtime: {exeDir}/jre/bin/java.exe  and  {exeDir}/pwa/index.html
+# --- Yomu: ship the complete offline reading engine + PWA ---
+# Runtime:
+#   {exeDir}/jre/bin/java.exe
+#   {exeDir}/engine/engine_manifest.json
+#   {exeDir}/engine/Suwayomi-Server-v2.3.2238.jar
+#   {exeDir}/licenses/THIRD_PARTY_NOTICES.md
+#   {exeDir}/pwa/index.html
 # windows/ -> yomu_desktop/ -> apps/ -> monorepo root
-set(YOMU_VENDOR_JRE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../packages/yomu_suwayomi/vendor/jre21")
+set(YOMU_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../..")
+set(YOMU_VENDOR_DIR "${YOMU_REPO_ROOT}/packages/yomu_suwayomi/vendor")
+set(YOMU_VENDOR_JRE_DIR "${YOMU_VENDOR_DIR}/jre21")
+set(YOMU_ENGINE_MANIFEST "${YOMU_VENDOR_DIR}/engine_manifest.json")
+set(YOMU_ENGINE_JAR "${YOMU_VENDOR_DIR}/Suwayomi-Server-v2.3.2238.jar")
+set(YOMU_ENGINE_SOURCE_ARCHIVE "${YOMU_VENDOR_DIR}/.jre_cache/OpenJDK21U-jdk-sources_21.0.11_10.tar.gz")
+set(YOMU_THIRD_PARTY_NOTICES "${YOMU_REPO_ROOT}/THIRD_PARTY_NOTICES.md")
+set(YOMU_VERIFY_ENGINE_BUNDLE "${YOMU_REPO_ROOT}/tool/verify_engine_bundle.ps1")
+set(YOMU_VERIFY_ENGINE_SOURCES "${YOMU_REPO_ROOT}/tool/verify_engine_sources.ps1")
 set(YOMU_PWA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../apps/yomu_mobile_pwa")
 
 if(EXISTS "${YOMU_VENDOR_JRE_DIR}/bin/java.exe")
@@ -132,6 +145,23 @@ else()
       endif()
       " COMPONENT Runtime)
   endif()
+endif()
+
+if(EXISTS "${YOMU_ENGINE_MANIFEST}" AND EXISTS "${YOMU_ENGINE_JAR}")
+  install(FILES
+    "${YOMU_ENGINE_MANIFEST}"
+    "${YOMU_ENGINE_JAR}"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/engine"
+    COMPONENT Runtime)
+  message(STATUS "Yomu: bundling pinned reading engine from ${YOMU_VENDOR_DIR}")
+else()
+  message(WARNING "Yomu: pinned engine JAR or manifest is missing")
+endif()
+
+if(EXISTS "${YOMU_THIRD_PARTY_NOTICES}")
+  install(FILES "${YOMU_THIRD_PARTY_NOTICES}"
+    DESTINATION "${CMAKE_INSTALL_PREFIX}/licenses"
+    COMPONENT Runtime)
 endif()
 
 if(EXISTS "${YOMU_PWA_DIR}/index.html")
@@ -163,3 +193,34 @@ else()
     " COMPONENT Runtime)
 endif()
 
+# Profile/Release are publishable artifacts: fail closed unless the complete
+# offline bundle and the GPLv2 section 3(a) corresponding-source asset pass.
+install(CODE "
+  if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Release\" OR
+     \"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Profile\")
+    foreach(required_file
+      \"${YOMU_VENDOR_JRE_DIR}/bin/java.exe\"
+      \"${YOMU_ENGINE_MANIFEST}\"
+      \"${YOMU_ENGINE_JAR}\"
+      \"${YOMU_THIRD_PARTY_NOTICES}\"
+      \"${YOMU_VERIFY_ENGINE_BUNDLE}\"
+      \"${YOMU_VERIFY_ENGINE_SOURCES}\"
+      \"${YOMU_ENGINE_SOURCE_ARCHIVE}\")
+      if(NOT EXISTS \"\${required_file}\")
+        message(FATAL_ERROR
+          \"Yomu Profile/Release prerequisite missing: \${required_file}. Run tool/fetch_jre21_windows.ps1.\")
+      endif()
+    endforeach()
+
+    execute_process(
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File \"${YOMU_VERIFY_ENGINE_BUNDLE}\"
+        -BundleRoot \"${CMAKE_INSTALL_PREFIX}\"
+        -SourceArchivePath \"${YOMU_ENGINE_SOURCE_ARCHIVE}\"
+      RESULT_VARIABLE verify_result)
+    if(NOT verify_result EQUAL 0)
+      message(FATAL_ERROR
+        \"Yomu engine bundle/source verification failed with exit code \${verify_result}.\")
+    endif()
+  endif()
+  " COMPONENT Runtime)

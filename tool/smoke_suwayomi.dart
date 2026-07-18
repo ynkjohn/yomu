@@ -46,18 +46,7 @@ Future<void> main(List<String> args) async {
       globalTachidesk.renameSync(renamedBackup.path);
     }
 
-    final manifestFile = File(
-      p.join(
-        Directory.current.path,
-        'packages',
-        'yomu_suwayomi',
-        'vendor',
-        'manifest.json',
-      ),
-    );
-    final manifest = VendorManifest.fromJson(
-      jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>,
-    );
+    final manifest = await VendorManifest.loadForRuntime();
     final paths = SuwayomiPaths(root);
     final manager = SuwayomiProcessManager(
       paths: paths,

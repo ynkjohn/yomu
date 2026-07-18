@@ -8,8 +8,10 @@ Suwayomi-Server is the **extension engine** (Tachiyomi/Mihon). Yomu never reimpl
 
 Managed process uses **only**:
 
-1. Pinned JAR + sha256 (`packages/yomu_suwayomi/vendor/manifest.json`)
-2. Managed JRE (bundled / `vendor/jre21` / JAVA_HOME ≥ 21)
+1. Pinned JAR + SHA-256 from
+   `packages/yomu_suwayomi/vendor/engine_manifest.json`
+2. Profile/Release: only the packaged Temurin JRE beside the executable;
+   Debug may use explicit development fallbacks
 3. Data root under `{appSupport}/yomu/data/suwayomi`
 4. Loopback `127.0.0.1:14567`
 
@@ -50,7 +52,7 @@ Optional rename of global Tachidesk is restored in `finally`.
 ```
 {appSupport}/yomu/
   runtime/suwayomi/<jar>
-  runtime/jre/                 # optional
+  runtime/jre/                 # legacy development fallback only
   data/suwayomi/               # server.rootDir (conf, H2, extensions, downloads)
   config/server.conf           # Yomu mirror only (not Tachidesk AppData)
   logs/suwayomi.log
@@ -58,7 +60,9 @@ Optional rename of global Tachidesk is restored in `finally`.
 
 ## Version pin
 
-See `packages/yomu_suwayomi/vendor/manifest.json`. Bump only with hash verification.
+See `packages/yomu_suwayomi/vendor/engine_manifest.json`. It is the single
+pin for the JAR, JRE, sources, notices and provenance. Bump only in a separately
+approved update with hash and compatibility verification.
 
 ## Network
 

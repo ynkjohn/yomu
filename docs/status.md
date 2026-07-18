@@ -34,6 +34,9 @@
 | **P2A — histórico/propostas Maya no SQLite (schema v3)** | ✅ commit `d200521` |
 | **P2B — providers Maya (schema v4)** | ✅ commit `7a35094` |
 | **P2C — provider personalizado OpenAI-compatible** | ✅ publicado em `eda852b` |
+| **Motor R0 — baseline factual** | ✅ commit `77cc650` |
+| **Motor R1 — contratos mínimos Yomu** | ✅ commit `98ddc91` |
+| **Motor R2 — bundle offline + GPLv2 §3(a)** | ✅ validada nesta subfase |
 
 ## Phases
 
@@ -48,6 +51,9 @@
 | P2A Maya persistence schema bump | ✅ commit `d200521` |
 | P2B Maya providers schema bump | ✅ commit `7a35094` |
 | P2C provider personalizado | ✅ commit `eda852b` (schema v5) |
+| Motor Interno Transparente R0 | ✅ commit `77cc650` |
+| Motor Interno Transparente R1 | ✅ commit `98ddc91` |
+| Motor Interno Transparente R2 | ✅ gates técnicos concluídos; schema v5 intacto |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |

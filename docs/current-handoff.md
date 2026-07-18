@@ -425,3 +425,95 @@ Validação de R1:
 - build Windows Debug aprovado;
 - `design_prod` preservado;
 - nenhuma prova runtime ou processo persistente foi necessário.
+
+## Checkpoint R2 — distribuição offline determinística
+
+R2 parte do commit R1 `98ddc91` e não altera schema, persistência, ownership,
+portas, JAR, JRE, SDK ou dependências. O SQLite Yomu permanece no schema v5.
+
+O pin de distribuição agora possui uma única fonte de verdade em
+`packages/yomu_suwayomi/vendor/engine_manifest.json`. Os manifests antigos e o
+asset Flutter duplicado foram removidos. O manifest tipado rejeita schema,
+hash, commit, URL, filename e path relativo inválidos.
+
+Em Profile/Release:
+
+- o manifest é resolvido somente em `{exeDir}/engine`;
+- Java é resolvido somente em `{exeDir}/jre`;
+- o JAR é aceito somente do bundle, verificado antes da cópia e promovido ao
+  runtime gerenciado por temporário + rename;
+- não há download de JAR nem fallback para `YOMU_JAVA_HOME`, `JAVA_HOME`, PATH,
+  monorepo ou Java arbitrário do sistema;
+- CMake inclui JRE, JAR, manifest, PWA e notices e executa o gate offline.
+
+Debug preserva os overrides de desenvolvimento e pode omitir os inputs offline.
+`tool\verify_workspace.ps1` continua utilizável nesse modo; o gate completo é
+ativado nominalmente por `-VerifyOfflineEngineBundle`.
+
+### GPLv2 §3(a) e MPL-2.0
+
+Cada release que contenha Temurin 21.0.11+10 deve publicar, como assets
+separados no mesmo local do binário Yomu:
+
+- `OpenJDK21U-jdk-sources_21.0.11_10.tar.gz` —
+  `891a3dd2341c37580fb81b56c4262f135e90c8f2acb059adb6ff0fdd76ae4385`;
+- `temurin-build-a612825ee82a20ac872d60958c349854c1f29a8e.tar.gz` —
+  `1c0cdcec98d7f43652ad26b7a54f33172089018ca58759ffc6d6fc0ee18ebd3f`;
+- `OpenJDK21U-jre_x64_windows_hotspot_21.0.11_10.zip.json` —
+  `7fff112ea1f3f24f92113f0626440deb08b9d0f28e73d9fda3a5ef3a5596665c`;
+- `Suwayomi-Server-a1770cb0553e37c1f660a88c23afd7badde11328.tar.gz` —
+  `d43dd41e2cd86ece24df1ad42c8495edc2729af1ef292f1c3d68ffb509ac4f86`.
+
+O source OpenJDK é vinculado pela proveniência oficial ao commit
+`254494ad7d75b37f1c033245fb4dbd460d0347b5`; os scripts Temurin são vinculados
+ao commit `a612825ee82a20ac872d60958c349854c1f29a8e`. O gate confirma hashes,
+versão, SCM refs, argumentos de build, `configure`, árvore `make/`, documentação
+de build, certdata, scripts de certificados, o `NOTICE` do temurin-build e textos
+GPLv2, Classpath Exception, Apache-2.0 e MPL-2.0. O JRE conserva `NOTICE` e toda
+a árvore `legal/`.
+
+Esses quatro assets e os binários permanecem ignorados pelo Git. Os sources não
+entram no instalador. Não existe oferta escrita de três anos; a política adotada
+é GPLv2 §3(a). `tool\verify_engine_release.ps1` inspeciona o ZIP publicado e
+impede o gate se ele não contiver o bundle pinado ou se o ZIP e o source set não
+estiverem diretamente na mesma pasta de release. Instaladores `.exe` permanecem
+bloqueados até existir um verificador específico do formato.
+
+### Validação R2
+
+- analyzer do `yomu_suwayomi`: limpo;
+- testes direcionados de manifest, Java e distribuição: 12/12 na validação
+  inicial e 9/9 na revalidação pós-review;
+- `tool\verify_workspace.ps1 -VerifyOfflineEngineBundle`: aprovado;
+- `yomu_core`: 8/8;
+- `yomu_suwayomi`: 51/51;
+- `yomu_local_server`: 38/38;
+- `yomu_ai`: 62/62;
+- `yomu_storage`: 39/39;
+- desktop: 197/197;
+- PWA preload e reader races: aprovados;
+- build Windows Debug e gate offline: aprovados;
+- build Windows Release: aprovado, bundle medido em 338,8 MiB;
+- build Windows Profile: aprovado inicialmente e recompilado após a correção do
+  gate, bundle medido em 345,8 MiB;
+- fetch e verificadores executados com Windows PowerShell 5.1: aprovados;
+- gate positivo de release ZIP: aprovado com inspeção direta do executável,
+  árvore JRE completa e idêntica ao input canônico, JAR, manifest, notices e PWA
+  contidos no arquivo;
+- gates negativos falharam fechados para source OpenJDK ausente, build source
+  ausente, proveniência ausente, source Suwayomi ausente, hash adulterado e
+  material obrigatório ausente;
+- revalidação pós-review também rejeitou instalador não inspecionável, build
+  source ausente, o antigo parâmetro `BundleRoot` externo e entrada de diretório
+  ZIP-slip `../outside/`.
+
+O primeiro install Release revelou que `Get-FileHash` não estava disponível no
+Windows PowerShell iniciado pelo CMake. Os verificadores passaram a calcular
+SHA-256 diretamente por `System.Security.Cryptography.SHA256`; o mesmo build
+Release passou depois da correção.
+
+Nenhum Yomu ou Suwayomi foi iniciado. Somente processos transitórios de build,
+teste, PowerShell e `java -version` pertencentes aos gates foram executados. O
+bundle Release gerado foi removido após registrar a evidência para liberar
+espaço; o Profile permanece como artefato ignorado. `AGENTS.md` continua com a
+alteração inicial do usuário e fica fora do commit R2.

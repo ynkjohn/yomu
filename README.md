@@ -15,7 +15,9 @@ Private, local-first manga/manhwa/webtoon reader.
 - Windows 10/11 x64
 - Flutter 3.32.5 / Dart 3.8.1 (fixed for the current phases)
 - Drift 2.28.0 / sqlite3 2.9.4; no `sqlite3_flutter_libs`
-- **JRE 21+** to run Suwayomi (Java 17 is not enough)
+- **Development:** JRE 21+ is prepared by the repository tooling; Java 17 is
+  not enough. Profile/Release ship the pinned Temurin runtime and do not use an
+  arbitrary system Java.
 - Visual Studio Build Tools with Windows desktop C++ workload
 
 No Docker required.
@@ -88,6 +90,13 @@ Isso roda analyzer, testes dos packages e do desktop, gates PWA e
 `flutter build windows --debug`. Não execute o build enquanto o Yomu estiver
 aberto; em `LNK1168`, peça fechamento normal ao usuário.
 
+Para incluir também o gate do bundle offline já preparado:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1 `
+  -VerifyOfflineEngineBundle
+```
+
 ### Gates
 
 | Gate | Estado |
@@ -107,8 +116,19 @@ públicos ou HTTP para loopback literal e chave opcional no WinCred.
 
 ### Suwayomi JAR
 
-Pinned in `packages/yomu_suwayomi/vendor/manifest.json` (version + sha256).  
-JAR may live under `vendor/` (gitignored if large) or downloaded on first start after hash verify.
+JAR, JRE, notices, source coordinates and hashes are pinned in the single
+`packages/yomu_suwayomi/vendor/engine_manifest.json`. Debug development may
+download the pinned JAR after hash verification. Profile/Release use only the
+JRE and JAR shipped beside the executable and never fall back to network or
+system Java.
+
+Every release containing Temurin 21.0.11+10 must publish the exact OpenJDK
+source, Temurin build-source archive, provenance metadata and pinned Suwayomi
+source as separate assets beside the Yomu portable ZIP.
+`tool/verify_engine_release.ps1` inspects that ZIP and fails closed if the
+embedded engine or release-source set is absent or inconsistent. Installer
+formats remain blocked until they have a content-aware gate of their own.
+Binary/source archives remain outside Git and the installer.
 
 ## Estado e arquitetura
 
