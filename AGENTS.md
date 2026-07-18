@@ -20,15 +20,15 @@
 ## Baseline atual
 
 - Branch esperada: `master`.
-- HEAD remoto/local auditado em 2026-07-16:
-  `7a35094b80b9359327c49e198258fc3c3d255571`
-  (`feat(maya): add provider integrations`).
-- P0, checkpoint pós-P0, P1, P2A e P2B estão concluídos e commitados
-  separadamente. O SQLite Yomu está no schema v4.
-- A próxima necessidade de produto registrada é **P2C — provider personalizado
-  OpenAI-compatible**. Ela ainda não foi implementada. Primeiro faça auditoria
-  e plano; implementação, schema bump, staging e commit exigem aprovações
-  explícitas próprias.
+- HEAD local/upstream/remoto auditado em 2026-07-18:
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`
+  (`fix(desktop): integrate Windows window chrome`).
+- P0, checkpoint pós-P0, P1, P2A, P2B e P2C estão concluídos, commitados e
+  publicados separadamente. O SQLite Yomu está no schema v5.
+- A fase ativa autorizada é **Motor Interno Transparente do Yomu**, R0–R8, sem
+  incluir “Novidades desktop”. Essas subfases são arquiteturais e não criam
+  schema bump artificial. Persistência nova ou migração continua sendo stop
+  condition e exige decisão explícita do usuário.
 - O estado completo e a ordem dos commits estão em
   `docs/current-handoff.md`. Documentos de fases antigas preservam o estado
   histórico da época e não prevalecem sobre código, diff e o handoff atual.

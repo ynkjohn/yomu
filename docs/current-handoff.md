@@ -1,7 +1,8 @@
 # Yomu — handoff atual
 
-Snapshot factual preparado em 2026-07-16 durante o fechamento da P2C. Código,
-diff e comportamento atual prevalecem sobre este documento.
+Snapshot factual atualizado em 2026-07-18 na abertura de R0 do Motor Interno
+Transparente. Código, Git, processos e comportamento atual prevalecem sobre
+este documento.
 
 ## Retomada obrigatória
 
@@ -17,7 +18,25 @@ git status --short --untracked-files=all
 
 Não acesse `C:\Users\joaop\Projetos\multiyomi`.
 
-## Autorizações e stop conditions
+## Goal ativa — Motor Interno Transparente
+
+O usuário autorizou a execução autônoma de R0–R8, sem “Novidades desktop”, com
+revisão independente ao fim de cada subfase, staging nominal, um commit próprio
+por subfase e push normal somente após o `PASS` integrado final. A autorização
+inclui testes, analyzers, verificadores, build e provas runtime isoladas, além de
+processos criados pela própria goal com ownership comprovada.
+
+As subfases R0–R8 são arquiteturais. O SQLite Yomu deve permanecer no schema
+v5; não haverá bump ou migração artificial. Persistência nova, atualização de
+JAR/JRE/SDK/dependência, processo estrangeiro, ownership inconclusiva, licença
+não resolvida, mudança das portas ou qualquer outra stop condition do prompt e
+do `AGENTS.md` continuam bloqueantes.
+
+Na abertura de R0, Git local, upstream e remoto estavam sincronizados em
+`31c6764314ee52d5a9c30efe0b5b291e840f50e9`, divergência zero. As portas 8787 e
+14567 estavam livres e não havia Yomu, Java, Dart ou Flutter preexistente.
+
+## Autorizações históricas da P2C
 
 O usuário autorizou a implementação P2C e o único schema bump `4 → 5`.
 Também autorizou encerrar somente processos órfãos criados pelas tentativas de
@@ -37,14 +56,20 @@ exige autorização própria. Nunca use `git add .`.
 - Repositório: `C:\Users\joaop\Projetos\yomu`.
 - Branch: `master`.
 - Remoto: `https://github.com/ynkjohn/yomu.git`.
-- Na auditoria imediatamente após o push, HEAD local, `origin/master` e
+- Na abertura de R0 em 2026-07-18, HEAD local, `origin/master` e
   `ls-remote origin master` estavam em
-  `673734b742c9b0fac99f4090ba0eb14a4d15f175`, divergência zero. Revalide o
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, divergência zero. Revalide o
   estado efetivo em qualquer retomada.
 - O commit P2C é `eda852bcc17f1b04c5045e32388bf6c78a6945fb`
   (`feat(maya): add OpenAI-compatible provider`).
 - O handoff pós-P2C é `673734b742c9b0fac99f4090ba0eb14a4d15f175`
   (`docs: record post-P2C handoff`).
+- A sincronização factual de publicação é
+  `1e195c28e769f1896a32e91016db6afa722134ba`
+  (`docs: record P2C publication`).
+- O checkpoint posterior do chrome Windows é
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`
+  (`fix(desktop): integrate Windows window chrome`).
 - P0, checkpoint pós-P0, P1, P2A, P2B, P2C e seus handoffs estão publicados.
 - O schema publicado do SQLite Yomu é v5.
 
@@ -64,6 +89,12 @@ A P2C formou um único checkpoint/commit próprio com o bump v5 e não foi
 misturada com outra fase de persistência.
 
 ## Working tree e proteções
+
+Na abertura da goal atual havia zero staged, 13 arquivos tracked apenas com
+status/EOL e hash igual ao índice, 180 untracked protegidos e uma alteração
+material preexistente em `AGENTS.md`: a seção “Subagentes e revisão delegada”.
+Essa alteração pertence ao working tree inicial e deve ser preservada fora dos
+commits da goal; os commits podem incluir somente os hunks produzidos pela goal.
 
 Antes da implementação P2C, o baseline material estava limpo e preservava:
 

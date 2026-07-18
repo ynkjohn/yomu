@@ -2,15 +2,16 @@
 
 ## Baseline atual
 
-- Na auditoria de publicação de 2026-07-17, `master`, `origin/master` e o remoto
-  estavam sincronizados em `673734b742c9b0fac99f4090ba0eb14a4d15f175`.
-  Revalide o HEAD efetivo no Git.
-- P0, checkpoint pós-P0, P1, P2A, P2B e o handoff pós-P2B estão commitados
-  e publicados separadamente.
+- Na abertura de R0 em 2026-07-18, `master`, `origin/master` e o remoto estavam
+  sincronizados em `31c6764314ee52d5a9c30efe0b5b291e840f50e9`. Revalide o
+  HEAD efetivo no Git.
+- P0, checkpoint pós-P0, P1, P2A, P2B, P2C e seus handoffs estão commitados e
+  publicados separadamente.
 - A P2C está publicada em `eda852b`, com schema SQLite Yomu v5; o handoff
   pós-P2C está publicado em `673734b`.
-- Esta sincronização factual de publicação altera somente seis documentos, sem
-  código ou schema.
+- A goal ativa é Motor Interno Transparente R0–R8, sem “Novidades desktop”. As
+  subfases são arquiteturais e não criam bump ou migração artificial; o schema
+  permanece v5.
 - A prova runtime isolada e a captura visual externa da P2C foram concluídas sem
   tocar o perfil real do usuário.
 - Handoff operacional: `docs/current-handoff.md`.
