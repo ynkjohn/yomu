@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yomu_desktop/screens/explore_screen.dart';
 import 'package:yomu_desktop/screens/extensions_screen.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 class _FetchCall {
@@ -17,34 +17,51 @@ class _FetchCall {
   });
 
   final String sourceId;
-  final SourceMangaFetchType type;
+  final ExploreCatalogMode type;
   final String? query;
   final int page;
 }
 
-class _FakeSuwayomiApi extends SuwayomiApi {
-  _FakeSuwayomiApi() : super(SuwayomiClient(baseUrl: 'http://127.0.0.1:14567'));
+class _TestExtensionReference implements ExtensionReference {
+  const _TestExtensionReference(this.id);
 
-  Future<List<SourceInfo>> Function()? listSourcesHandler;
-  Future<SourceMangaPage> Function(_FetchCall call)? fetchMangaHandler;
-  Future<List<ExtensionStoreInfo>> Function()? listStoresHandler;
-  Future<List<ExtensionInfo>> Function()? listExtensionsHandler;
-  Future<ExtensionInfo> Function(String pkg)? installHandler;
+  final int id;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _TestExtensionReference && other.id == id;
+
+  @override
+  int get hashCode => id.hashCode;
+}
+
+class _FakeReadingEngine
+    implements CatalogGateway, ExtensionsGateway, EngineMediaGateway {
+  Future<List<CatalogSource>> Function()? listSourcesHandler;
+  Future<CatalogPage> Function(_FetchCall call)? fetchMangaHandler;
+  Future<List<ExtensionRepository>> Function()? listStoresHandler;
+  Future<List<ReadingExtension>> Function()? listExtensionsHandler;
+  Future<ReadingExtension> Function(ExtensionReference reference)?
+  installHandler;
+  Future<ExtensionCatalogSync> Function()? synchronizeHandler;
+  Future<ExtensionRepository> Function()? ensureRepositoryHandler;
+  Future<ReadingExtension> Function()? installRecommendedHandler;
+  Future<MediaPayload> Function(MediaReference reference, int maxBytes)?
+  mediaHandler;
 
   int listSourcesCalls = 0;
   int listExtensionsCalls = 0;
   final List<_FetchCall> fetchCalls = [];
 
   @override
-  Future<List<SourceInfo>> listSources() {
+  Future<List<CatalogSource>> listSources() {
     listSourcesCalls++;
     return listSourcesHandler?.call() ?? Future.value(const []);
   }
 
-  @override
-  Future<SourceMangaPage> fetchSourceManga({
+  Future<CatalogPage> _fetch({
     required String sourceId,
-    required SourceMangaFetchType type,
+    required ExploreCatalogMode type,
     String? query,
     int page = 1,
   }) {
@@ -57,40 +74,104 @@ class _FakeSuwayomiApi extends SuwayomiApi {
     fetchCalls.add(call);
     return fetchMangaHandler?.call(call) ??
         Future.value(
-          SourceMangaPage(items: const [], hasNextPage: false, page: page),
+          CatalogPage(items: const [], hasNextPage: false, page: page),
         );
   }
 
   @override
-  Future<List<ExtensionStoreInfo>> listExtensionStores() {
+  Future<CatalogPage> search({
+    required String sourceId,
+    required String query,
+    int page = 1,
+  }) => _fetch(
+    sourceId: sourceId,
+    type: ExploreCatalogMode.search,
+    query: query,
+    page: page,
+  );
+
+  @override
+  Future<CatalogPage> popular({required String sourceId, int page = 1}) =>
+      _fetch(sourceId: sourceId, type: ExploreCatalogMode.popular, page: page);
+
+  @override
+  Future<CatalogPage> latest({required String sourceId, int page = 1}) =>
+      _fetch(sourceId: sourceId, type: ExploreCatalogMode.latest, page: page);
+
+  @override
+  Future<List<ExtensionRepository>> listRepositories() {
     return listStoresHandler?.call() ?? Future.value(const []);
   }
 
   @override
-  Future<List<ExtensionInfo>> listExtensions({String? query}) {
+  Future<List<ReadingExtension>> listExtensions() {
     listExtensionsCalls++;
     return listExtensionsHandler?.call() ?? Future.value(const []);
   }
 
   @override
-  Future<ExtensionInfo> installExtension(String pkgName) {
-    return installHandler?.call(pkgName) ??
-        Future.error(StateError('unexpected install: $pkgName'));
+  Future<ReadingExtension> install(ExtensionReference reference) {
+    return installHandler?.call(reference) ??
+        Future.error(StateError('unexpected extension install'));
   }
+
+  @override
+  Future<ExtensionCatalogSync> synchronizeCatalog() =>
+      synchronizeHandler?.call() ??
+      Future.value(const ExtensionCatalogSync(count: 0));
+
+  @override
+  Future<ExtensionRepository> ensureRecommendedRepository() =>
+      ensureRepositoryHandler?.call() ??
+      Future.value(
+        const ExtensionRepository(
+          name: 'Repositório recomendado',
+          state: ExtensionRepositoryState.active,
+          recommended: true,
+        ),
+      );
+
+  @override
+  Future<ReadingExtension> installRecommendedExtension() =>
+      installRecommendedHandler?.call() ??
+      Future.error(StateError('unexpected recommended extension install'));
+
+  @override
+  Future<MediaPayload> fetch(
+    MediaReference reference, {
+    required int maxBytes,
+  }) =>
+      mediaHandler?.call(reference, maxBytes) ??
+      Future.value(MediaPayload(bytes: const []));
 }
 
-const _source = SourceInfo(id: 'source-1', name: 'MangaDex', lang: 'en');
+const _source = CatalogSource(id: 'source-1', name: 'MangaDex', language: 'en');
+
+EngineException _sanitizedFailure(String message) => EngineException(
+  EngineFailure(
+    kind: EngineFailureKind.temporarilyUnavailable,
+    code: 'test_failure',
+    message: message,
+    retryable: true,
+  ),
+);
 
 Future<void> _pumpExplore(
   WidgetTester tester,
-  SuwayomiApi api, {
+  _FakeReadingEngine engine, {
   bool engineReady = true,
 }) {
   return tester.pumpWidget(
     MaterialApp(
       theme: buildYomuTheme(),
       home: Scaffold(
-        body: ExploreScreen(api: api, engineReady: engineReady),
+        body: ExploreScreen(
+          catalog: engine,
+          extensions: engine,
+          media: engine,
+          engineReady: engineReady,
+          onOpenManga: (_) async {},
+        ),
       ),
     ),
   );
@@ -98,7 +179,7 @@ Future<void> _pumpExplore(
 
 Future<void> _pumpExtensions(
   WidgetTester tester,
-  SuwayomiApi api, {
+  _FakeReadingEngine engine, {
   bool repositoriesOnly = false,
 }) {
   return tester.pumpWidget(
@@ -106,7 +187,7 @@ Future<void> _pumpExtensions(
       theme: buildYomuTheme(),
       home: Scaffold(
         body: ExtensionsScreen(
-          api: api,
+          gateway: engine,
           engineReady: true,
           repositoriesOnly: repositoriesOnly,
         ),
@@ -126,17 +207,17 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final sources = Completer<List<SourceInfo>>();
-    final popular = Completer<SourceMangaPage>();
-    final search = Completer<SourceMangaPage>();
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () => sources.future;
-    api.fetchMangaHandler = (call) => switch (call.type) {
-      SourceMangaFetchType.search => search.future,
+    final sources = Completer<List<CatalogSource>>();
+    final popular = Completer<CatalogPage>();
+    final search = Completer<CatalogPage>();
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () => sources.future;
+    engine.fetchMangaHandler = (call) => switch (call.type) {
+      ExploreCatalogMode.search => search.future,
       _ => popular.future,
     };
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pump();
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
@@ -146,14 +227,14 @@ void main() {
 
     await tester.tap(find.text('MangaDex'));
     await tester.pump();
-    expect(api.fetchCalls.single.type, SourceMangaFetchType.popular);
+    expect(engine.fetchCalls.single.type, ExploreCatalogMode.popular);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(find.bySemanticsLabel('Carregando catálogo'), findsOneWidget);
     expect(find.bySemanticsLabel('Carregando obras'), findsNothing);
 
     popular.complete(
-      const SourceMangaPage(
-        items: [MangaSummary(id: 1, title: 'One Piece')],
+      CatalogPage(
+        items: [CatalogManga(id: 1, title: 'One Piece')],
         hasNextPage: true,
         page: 1,
       ),
@@ -173,12 +254,12 @@ void main() {
 
     await tester.testTextInput.receiveAction(TextInputAction.search);
     await tester.pump();
-    expect(api.fetchCalls.last.type, SourceMangaFetchType.search);
-    expect(api.fetchCalls.last.query, 'Berserk');
+    expect(engine.fetchCalls.last.type, ExploreCatalogMode.search);
+    expect(engine.fetchCalls.last.query, 'Berserk');
 
     search.complete(
-      const SourceMangaPage(
-        items: [MangaSummary(id: 2, title: 'Berserk')],
+      CatalogPage(
+        items: [CatalogManga(id: 2, title: 'Berserk')],
         hasNextPage: false,
         page: 1,
       ),
@@ -195,13 +276,17 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final longName = List.filled(30, 'FonteMuitoLonga').join(' ');
-    final source = SourceInfo(id: 'source-long', name: longName, lang: 'pt');
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => [source];
-    api.fetchMangaHandler = (call) async =>
-        SourceMangaPage(items: const [], hasNextPage: false, page: call.page);
+    final source = CatalogSource(
+      id: 'source-long',
+      name: longName,
+      language: 'pt',
+    );
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => [source];
+    engine.fetchMangaHandler = (call) async =>
+        CatalogPage(items: const [], hasNextPage: false, page: call.page);
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text(longName));
     await tester.pumpAndSettle();
@@ -218,14 +303,14 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final pageTwo = Completer<SourceMangaPage>();
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.fetchMangaHandler = (call) {
+    final pageTwo = Completer<CatalogPage>();
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.fetchMangaHandler = (call) {
       if (call.page == 1) {
         return Future.value(
-          const SourceMangaPage(
-            items: [MangaSummary(id: 1, title: 'One Piece')],
+          CatalogPage(
+            items: [CatalogManga(id: 1, title: 'One Piece')],
             hasNextPage: true,
             page: 1,
           ),
@@ -234,7 +319,7 @@ void main() {
       return pageTwo.future;
     };
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('MangaDex'));
     await tester.pumpAndSettle();
@@ -243,7 +328,7 @@ void main() {
     await tester.pump();
     expect(find.text('Carregando…'), findsOneWidget);
 
-    pageTwo.completeError(StateError('falha controlada na página 2'));
+    pageTwo.completeError(_sanitizedFailure('falha controlada na página 2'));
     await tester.pumpAndSettle();
     expect(find.text('One Piece'), findsOneWidget);
     expect(find.textContaining('falha controlada na página 2'), findsOneWidget);
@@ -261,11 +346,11 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.fetchMangaHandler = (call) async => SourceMangaPage(
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.fetchMangaHandler = (call) async => CatalogPage(
       items: [
-        MangaSummary(
+        CatalogManga(
           id: call.page,
           title: call.page == 1 ? 'Primeira' : 'Segunda',
         ),
@@ -274,7 +359,7 @@ void main() {
       page: call.page,
     );
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('MangaDex'));
     await tester.pumpAndSettle();
@@ -295,10 +380,10 @@ void main() {
     await tester.tap(find.text('Carregar mais'));
     await tester.pumpAndSettle();
 
-    expect(api.fetchCalls, hasLength(2));
-    expect(api.fetchCalls.last.page, 2);
-    expect(api.fetchCalls.last.type, SourceMangaFetchType.popular);
-    expect(api.fetchCalls.last.query, isNull);
+    expect(engine.fetchCalls, hasLength(2));
+    expect(engine.fetchCalls.last.page, 2);
+    expect(engine.fetchCalls.last.type, ExploreCatalogMode.popular);
+    expect(engine.fetchCalls.last.query, isNull);
     expect(find.text('Segunda'), findsOneWidget);
     semantics.dispose();
   });
@@ -308,34 +393,34 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final catalog = Completer<SourceMangaPage>();
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.fetchMangaHandler = (_) => catalog.future;
+    final catalog = Completer<CatalogPage>();
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.fetchMangaHandler = (_) => catalog.future;
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('MangaDex'));
     await tester.pump();
 
-    await _pumpExplore(tester, api, engineReady: false);
+    await _pumpExplore(tester, engine, engineReady: false);
     await tester.pump();
     expect(find.text('Fontes indisponíveis'), findsOneWidget);
 
     catalog.complete(
-      const SourceMangaPage(
-        items: [MangaSummary(id: 99, title: 'Resposta obsoleta')],
+      CatalogPage(
+        items: [CatalogManga(id: 99, title: 'Resposta obsoleta')],
         hasNextPage: false,
         page: 1,
       ),
     );
     await tester.pump();
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     expect(find.text('MangaDex'), findsOneWidget);
     expect(find.text('Resposta obsoleta'), findsNothing);
-    expect(api.listSourcesCalls, 2);
+    expect(engine.listSourcesCalls, 2);
   });
 
   testWidgets('successful extension install refreshes Explore sources', (
@@ -343,35 +428,35 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeSuwayomiApi();
-    api.listStoresHandler = () async => const [];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.test',
+    final engine = _FakeReadingEngine();
+    engine.listStoresHandler = () async => const [];
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(1),
         name: 'Extensão Teste',
-        isInstalled: false,
-        lang: 'pt-BR',
+        installed: false,
+        language: 'pt-BR',
       ),
     ];
-    api.installHandler = (pkg) async => ExtensionInfo(
-      pkgName: pkg,
+    engine.installHandler = (reference) async => ReadingExtension(
+      reference: reference,
       name: 'Extensão Teste',
-      isInstalled: true,
-      lang: 'pt-BR',
+      installed: true,
+      language: 'pt-BR',
     );
 
-    api.listSourcesHandler = () async => api.listSourcesCalls <= 1
+    engine.listSourcesHandler = () async => engine.listSourcesCalls <= 1
         ? const [_source]
         : const [
             _source,
-            SourceInfo(
+            CatalogSource(
               id: 'source-2',
               name: 'Fonte recém-instalada',
-              lang: 'pt',
+              language: 'pt',
             ),
           ];
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Extensões'));
     await tester.pumpAndSettle();
@@ -379,7 +464,7 @@ void main() {
 
     await tester.tap(find.text('Instalar'));
     await tester.pumpAndSettle();
-    expect(api.listSourcesCalls, 2);
+    expect(engine.listSourcesCalls, 2);
 
     await tester.tap(find.text('Fontes'));
     await tester.pumpAndSettle();
@@ -391,29 +476,29 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final install = Completer<ExtensionInfo>();
-    final api = _FakeSuwayomiApi();
-    api.listStoresHandler = () async => const [];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.late',
+    final install = Completer<ReadingExtension>();
+    final engine = _FakeReadingEngine();
+    engine.listStoresHandler = () async => const [];
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(2),
         name: 'Extensão tardia',
-        isInstalled: false,
+        installed: false,
       ),
     ];
-    api.installHandler = (_) => install.future;
-    api.listSourcesHandler = () async => api.listSourcesCalls <= 1
+    engine.installHandler = (_) => install.future;
+    engine.listSourcesHandler = () async => engine.listSourcesCalls <= 1
         ? const [_source]
         : const [
             _source,
-            SourceInfo(
+            CatalogSource(
               id: 'source-late',
               name: 'Fonte após troca de aba',
-              lang: 'pt',
+              language: 'pt',
             ),
           ];
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Extensões'));
     await tester.pumpAndSettle();
@@ -423,41 +508,41 @@ void main() {
     await tester.pump();
 
     install.complete(
-      const ExtensionInfo(
-        pkgName: 'extension.late',
+      const ReadingExtension(
+        reference: _TestExtensionReference(2),
         name: 'Extensão tardia',
-        isInstalled: true,
+        installed: true,
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(api.listSourcesCalls, 2);
+    expect(engine.listSourcesCalls, 2);
     expect(find.text('Fonte após troca de aba'), findsOneWidget);
   });
 
   testWidgets('install reports a source refresh failure', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () {
-      if (api.listSourcesCalls == 1) return Future.value(const [_source]);
-      return Future.error(StateError('falha no refresh de fontes'));
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () {
+      if (engine.listSourcesCalls == 1) return Future.value(const [_source]);
+      return Future.error(_sanitizedFailure('falha no refresh de fontes'));
     };
-    api.listStoresHandler = () async => const [];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.refresh-failure',
+    engine.listStoresHandler = () async => const [];
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(3),
         name: 'Extensão com refresh falho',
-        isInstalled: false,
+        installed: false,
       ),
     ];
-    api.installHandler = (pkg) async => ExtensionInfo(
-      pkgName: pkg,
+    engine.installHandler = (reference) async => ReadingExtension(
+      reference: reference,
       name: 'Extensão com refresh falho',
-      isInstalled: true,
+      installed: true,
     );
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Extensões'));
     await tester.pumpAndSettle();
@@ -465,6 +550,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('fontes não foram atualizadas'), findsOneWidget);
+    await tester.tap(find.text('Fontes'));
+    await tester.pumpAndSettle();
     expect(find.textContaining('falha no refresh de fontes'), findsOneWidget);
   });
 
@@ -474,25 +561,25 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final install = Completer<ExtensionInfo>();
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.listStoresHandler = () async => const [
-      ExtensionStoreInfo(
+    final install = Completer<ReadingExtension>();
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.listStoresHandler = () async => const [
+      ExtensionRepository(
         name: 'Store ativa',
-        indexUrl: 'https://store.invalid/index.json',
+        state: ExtensionRepositoryState.active,
       ),
     ];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.cross-tab',
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(4),
         name: 'Extensão entre abas',
-        isInstalled: false,
+        installed: false,
       ),
     ];
-    api.installHandler = (_) => install.future;
+    engine.installHandler = (_) => install.future;
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Extensões'));
     await tester.pumpAndSettle();
@@ -507,10 +594,10 @@ void main() {
     expect(sync.hasFlag(SemanticsFlag.isEnabled), isFalse);
 
     install.complete(
-      const ExtensionInfo(
-        pkgName: 'extension.cross-tab',
+      const ReadingExtension(
+        reference: _TestExtensionReference(4),
         name: 'Extensão entre abas',
-        isInstalled: true,
+        installed: true,
       ),
     );
     await tester.pumpAndSettle();
@@ -522,28 +609,28 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.listStoresHandler = () async => const [
-      ExtensionStoreInfo(
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.listStoresHandler = () async => const [
+      ExtensionRepository(
         name: 'Store filtro',
-        indexUrl: 'https://filter.invalid/index.json',
+        state: ExtensionRepositoryState.active,
       ),
     ];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.primary',
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(5),
         name: 'Extensão primária',
-        isInstalled: false,
+        installed: false,
       ),
-      ExtensionInfo(
-        pkgName: 'extension.secondary',
+      ReadingExtension(
+        reference: _TestExtensionReference(6),
         name: 'Extensão secundária',
-        isInstalled: false,
+        installed: false,
       ),
     ];
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Extensões'));
     await tester.pumpAndSettle();
@@ -568,17 +655,17 @@ void main() {
     expect(find.text('Extensão primária'), findsNothing);
     expect(find.text('Extensão secundária'), findsOneWidget);
 
-    final replacementApi = _FakeSuwayomiApi();
-    replacementApi.listSourcesHandler = () async => const [_source];
-    replacementApi.listStoresHandler = () async => const [];
-    replacementApi.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.replacement',
+    final replacementEngine = _FakeReadingEngine();
+    replacementEngine.listSourcesHandler = () async => const [_source];
+    replacementEngine.listStoresHandler = () async => const [];
+    replacementEngine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(7),
         name: 'Extensão substituta',
-        isInstalled: false,
+        installed: false,
       ),
     ];
-    await _pumpExplore(tester, replacementApi);
+    await _pumpExplore(tester, replacementEngine);
     await tester.pumpAndSettle();
 
     expect(tester.widget<TextField>(search).controller?.text, isEmpty);
@@ -591,30 +678,30 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final install = Completer<ExtensionInfo>();
-    final reload = Completer<List<ExtensionInfo>>();
-    final api = _FakeSuwayomiApi();
-    api.listStoresHandler = () async => const [];
-    api.listExtensionsHandler = () {
-      if (api.listExtensionsCalls == 1) {
+    final install = Completer<ReadingExtension>();
+    final reload = Completer<List<ReadingExtension>>();
+    final engine = _FakeReadingEngine();
+    engine.listStoresHandler = () async => const [];
+    engine.listExtensionsHandler = () {
+      if (engine.listExtensionsCalls == 1) {
         return Future.value(const [
-          ExtensionInfo(
-            pkgName: 'extension.mutex',
+          ReadingExtension(
+            reference: _TestExtensionReference(8),
             name: 'Extensão mutex',
-            isInstalled: false,
+            installed: false,
           ),
-          ExtensionInfo(
-            pkgName: 'extension.other',
+          ReadingExtension(
+            reference: _TestExtensionReference(9),
             name: 'Extensão secundária',
-            isInstalled: false,
+            installed: false,
           ),
         ]);
       }
       return reload.future;
     };
-    api.installHandler = (_) => install.future;
+    engine.installHandler = (_) => install.future;
 
-    await _pumpExtensions(tester, api);
+    await _pumpExtensions(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Instalar').first);
     await tester.pump();
@@ -623,13 +710,13 @@ void main() {
       find.bySemanticsLabel('Recarregar'),
     );
     expect(reloadWhileInstalling.hasFlag(SemanticsFlag.isEnabled), isFalse);
-    expect(api.listExtensionsCalls, 1);
+    expect(engine.listExtensionsCalls, 1);
 
     install.complete(
-      const ExtensionInfo(
-        pkgName: 'extension.mutex',
+      const ReadingExtension(
+        reference: _TestExtensionReference(8),
         name: 'Extensão mutex',
-        isInstalled: true,
+        installed: true,
       ),
     );
     await tester.pumpAndSettle();
@@ -642,15 +729,15 @@ void main() {
     expect(installWhileReloading.hasFlag(SemanticsFlag.isEnabled), isFalse);
 
     reload.complete(const [
-      ExtensionInfo(
-        pkgName: 'extension.mutex',
+      ReadingExtension(
+        reference: _TestExtensionReference(8),
         name: 'Extensão mutex',
-        isInstalled: true,
+        installed: true,
       ),
-      ExtensionInfo(
-        pkgName: 'extension.other',
+      ReadingExtension(
+        reference: _TestExtensionReference(9),
         name: 'Extensão secundária',
-        isInstalled: false,
+        installed: false,
       ),
     ]);
     await tester.pumpAndSettle();
@@ -662,27 +749,27 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final stores = Completer<List<ExtensionStoreInfo>>();
-    final api = _FakeSuwayomiApi();
-    api.listStoresHandler = () => stores.future;
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'catalog.ready',
+    final stores = Completer<List<ExtensionRepository>>();
+    final engine = _FakeReadingEngine();
+    engine.listStoresHandler = () => stores.future;
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(10),
         name: 'Catálogo pronto',
-        isInstalled: false,
+        installed: false,
       ),
     ];
 
-    await _pumpExtensions(tester, api);
+    await _pumpExtensions(tester, engine);
     await tester.pump();
     await tester.pump();
     expect(find.text('Catálogo pronto'), findsOneWidget);
 
-    stores.completeError(StateError('falha isolada de stores'));
+    stores.completeError(_sanitizedFailure('falha isolada de stores'));
     await tester.pumpAndSettle();
     expect(find.textContaining('falha isolada de stores'), findsNothing);
 
-    await _pumpExtensions(tester, api, repositoriesOnly: true);
+    await _pumpExtensions(tester, engine, repositoriesOnly: true);
     await tester.pump();
     expect(find.textContaining('falha isolada de stores'), findsOneWidget);
   });
@@ -691,10 +778,10 @@ void main() {
     'repository skeleton is labeled and settles with reduced motion',
     (tester) async {
       final semantics = tester.ensureSemantics();
-      final stores = Completer<List<ExtensionStoreInfo>>();
-      final api = _FakeSuwayomiApi();
-      api.listStoresHandler = () => stores.future;
-      api.listExtensionsHandler = () async => const [];
+      final stores = Completer<List<ExtensionRepository>>();
+      final engine = _FakeReadingEngine();
+      engine.listStoresHandler = () => stores.future;
+      engine.listExtensionsHandler = () async => const [];
 
       await tester.pumpWidget(
         MaterialApp(
@@ -703,7 +790,7 @@ void main() {
             data: const MediaQueryData(disableAnimations: true),
             child: Scaffold(
               body: ExtensionsScreen(
-                api: api,
+                gateway: engine,
                 engineReady: true,
                 repositoriesOnly: true,
               ),
@@ -730,31 +817,31 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeSuwayomiApi();
-    api.listStoresHandler = () async => const [
-      ExtensionStoreInfo(
+    final engine = _FakeReadingEngine();
+    engine.listStoresHandler = () async => const [
+      ExtensionRepository(
         name: 'Store A',
-        indexUrl: 'https://a.invalid/index.json',
+        state: ExtensionRepositoryState.active,
       ),
-      ExtensionStoreInfo(
+      ExtensionRepository(
         name: 'Store B',
-        indexUrl: 'https://b.invalid/index.json',
+        state: ExtensionRepositoryState.active,
       ),
     ];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.a',
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(11),
         name: 'Extensão A',
-        isInstalled: false,
+        installed: false,
       ),
-      ExtensionInfo(
-        pkgName: 'extension.b',
+      ReadingExtension(
+        reference: _TestExtensionReference(12),
         name: 'Extensão B',
-        isInstalled: false,
+        installed: false,
       ),
     ];
 
-    await _pumpExtensions(tester, api, repositoriesOnly: true);
+    await _pumpExtensions(tester, engine, repositoriesOnly: true);
     await tester.pumpAndSettle();
 
     expect(find.text('Store A'), findsOneWidget);
@@ -774,17 +861,17 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final extensions = Completer<List<ExtensionInfo>>();
-    final api = _FakeSuwayomiApi();
-    api.listStoresHandler = () async => const [
-      ExtensionStoreInfo(
+    final extensions = Completer<List<ReadingExtension>>();
+    final engine = _FakeReadingEngine();
+    engine.listStoresHandler = () async => const [
+      ExtensionRepository(
         name: 'Store pronta',
-        indexUrl: 'https://ready.invalid/index.json',
+        state: ExtensionRepositoryState.active,
       ),
     ];
-    api.listExtensionsHandler = () => extensions.future;
+    engine.listExtensionsHandler = () => extensions.future;
 
-    await _pumpExtensions(tester, api, repositoriesOnly: true);
+    await _pumpExtensions(tester, engine, repositoriesOnly: true);
     await tester.pump();
     await tester.pump();
 
@@ -792,7 +879,7 @@ void main() {
     expect(find.text('Carregando catálogo agregado…'), findsOneWidget);
     expect(find.text('Catálogo agregado · 0 extensões'), findsNothing);
 
-    extensions.completeError(StateError('falha no catálogo agregado'));
+    extensions.completeError(_sanitizedFailure('falha no catálogo agregado'));
     await tester.pumpAndSettle();
 
     expect(find.text('Store pronta'), findsOneWidget);
@@ -805,53 +892,60 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('API replacement rejects stale stores and catalog generations', (
-    tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1200, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final oldStores = Completer<List<ExtensionStoreInfo>>();
-    final oldExtensions = Completer<List<ExtensionInfo>>();
-    final oldApi = _FakeSuwayomiApi();
-    oldApi.listStoresHandler = () => oldStores.future;
-    oldApi.listExtensionsHandler = () => oldExtensions.future;
-    final newApi = _FakeSuwayomiApi();
-    newApi.listStoresHandler = () async => const [
-      ExtensionStoreInfo(name: 'Store nova', indexUrl: 'https://new.invalid'),
-    ];
-    newApi.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'new.extension',
-        name: 'Extensão nova',
-        isInstalled: false,
-      ),
-    ];
+  testWidgets(
+    'gateway replacement rejects stale stores and catalog generations',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final oldStores = Completer<List<ExtensionRepository>>();
+      final oldExtensions = Completer<List<ReadingExtension>>();
+      final oldEngine = _FakeReadingEngine();
+      oldEngine.listStoresHandler = () => oldStores.future;
+      oldEngine.listExtensionsHandler = () => oldExtensions.future;
+      final newEngine = _FakeReadingEngine();
+      newEngine.listStoresHandler = () async => const [
+        ExtensionRepository(
+          name: 'Store nova',
+          state: ExtensionRepositoryState.active,
+        ),
+      ];
+      newEngine.listExtensionsHandler = () async => const [
+        ReadingExtension(
+          reference: _TestExtensionReference(13),
+          name: 'Extensão nova',
+          installed: false,
+        ),
+      ];
 
-    await _pumpExtensions(tester, oldApi);
-    await tester.pump();
-    await _pumpExtensions(tester, newApi);
-    await tester.pumpAndSettle();
-    expect(find.text('Extensão nova'), findsOneWidget);
+      await _pumpExtensions(tester, oldEngine);
+      await tester.pump();
+      await _pumpExtensions(tester, newEngine);
+      await tester.pumpAndSettle();
+      expect(find.text('Extensão nova'), findsOneWidget);
 
-    oldStores.complete(const [
-      ExtensionStoreInfo(name: 'Store velha', indexUrl: 'https://old.invalid'),
-    ]);
-    oldExtensions.complete(const [
-      ExtensionInfo(
-        pkgName: 'old.extension',
-        name: 'Extensão velha',
-        isInstalled: false,
-      ),
-    ]);
-    await tester.pump();
-    expect(find.text('Extensão nova'), findsOneWidget);
-    expect(find.text('Extensão velha'), findsNothing);
+      oldStores.complete(const [
+        ExtensionRepository(
+          name: 'Store velha',
+          state: ExtensionRepositoryState.active,
+        ),
+      ]);
+      oldExtensions.complete(const [
+        ReadingExtension(
+          reference: _TestExtensionReference(14),
+          name: 'Extensão velha',
+          installed: false,
+        ),
+      ]);
+      await tester.pump();
+      expect(find.text('Extensão nova'), findsOneWidget);
+      expect(find.text('Extensão velha'), findsNothing);
 
-    await _pumpExtensions(tester, newApi, repositoriesOnly: true);
-    await tester.pump();
-    expect(find.text('Store nova'), findsOneWidget);
-    expect(find.text('Store velha'), findsNothing);
-  });
+      await _pumpExtensions(tester, newEngine, repositoriesOnly: true);
+      await tester.pump();
+      expect(find.text('Store nova'), findsOneWidget);
+      expect(find.text('Store velha'), findsNothing);
+    },
+  );
 
   testWidgets('promoted Explore controls expose semantics and 44px targets', (
     tester,
@@ -859,14 +953,14 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1400, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.fetchMangaHandler = (call) async =>
-        SourceMangaPage(items: const [], hasNextPage: false, page: call.page);
-    api.listStoresHandler = () async => const [];
-    api.listExtensionsHandler = () async => const [];
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.fetchMangaHandler = (call) async =>
+        CatalogPage(items: const [], hasNextPage: false, page: call.page);
+    engine.listStoresHandler = () async => const [];
+    engine.listExtensionsHandler = () async => const [];
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
 
     final sourcesTab = find.widgetWithText(TextButton, 'Fontes');
@@ -919,20 +1013,20 @@ void main() {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final install = Completer<ExtensionInfo>();
-    final api = _FakeSuwayomiApi();
-    api.listSourcesHandler = () async => const [_source];
-    api.listStoresHandler = () async => const [];
-    api.listExtensionsHandler = () async => const [
-      ExtensionInfo(
-        pkgName: 'extension.busy',
+    final install = Completer<ReadingExtension>();
+    final engine = _FakeReadingEngine();
+    engine.listSourcesHandler = () async => const [_source];
+    engine.listStoresHandler = () async => const [];
+    engine.listExtensionsHandler = () async => const [
+      ReadingExtension(
+        reference: _TestExtensionReference(15),
         name: 'Extensão ocupada',
-        isInstalled: false,
+        installed: false,
       ),
     ];
-    api.installHandler = (_) => install.future;
+    engine.installHandler = (_) => install.future;
 
-    await _pumpExplore(tester, api);
+    await _pumpExplore(tester, engine);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Extensões'));
     await tester.pumpAndSettle();
@@ -945,10 +1039,10 @@ void main() {
     expect(busy.hasFlag(SemanticsFlag.isLiveRegion), isTrue);
 
     install.complete(
-      const ExtensionInfo(
-        pkgName: 'extension.busy',
+      const ReadingExtension(
+        reference: _TestExtensionReference(15),
         name: 'Extensão ocupada',
-        isInstalled: true,
+        installed: true,
       ),
     );
     await tester.pumpAndSettle();

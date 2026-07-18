@@ -1,3 +1,5 @@
+import 'package:collection/collection.dart';
+
 import 'media_gateway.dart';
 
 final class CatalogSource {
@@ -5,11 +7,13 @@ final class CatalogSource {
     required this.id,
     required this.name,
     required this.language,
+    this.icon,
   });
 
   final String id;
   final String name;
   final String language;
+  final MediaReference? icon;
 
   @override
   bool operator ==(Object other) =>
@@ -17,10 +21,11 @@ final class CatalogSource {
       other is CatalogSource &&
           id == other.id &&
           name == other.name &&
-          language == other.language;
+          language == other.language &&
+          icon == other.icon;
 
   @override
-  int get hashCode => Object.hash(id, name, language);
+  int get hashCode => Object.hash(id, name, language, icon);
 }
 
 final class CatalogManga {
@@ -49,12 +54,43 @@ final class CatalogManga {
   int get hashCode => Object.hash(id, title, thumbnail, inLibrary);
 }
 
+final class CatalogPage {
+  CatalogPage({
+    required List<CatalogManga> items,
+    required this.page,
+    required this.hasNextPage,
+  }) : items = List<CatalogManga>.unmodifiable(items);
+
+  final List<CatalogManga> items;
+  final int page;
+  final bool hasNextPage;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CatalogPage &&
+          const ListEquality<CatalogManga>().equals(items, other.items) &&
+          page == other.page &&
+          hasNextPage == other.hasNextPage;
+
+  @override
+  int get hashCode => Object.hash(
+    const ListEquality<CatalogManga>().hash(items),
+    page,
+    hasNextPage,
+  );
+}
+
 abstract interface class CatalogGateway {
   Future<List<CatalogSource>> listSources();
 
-  Future<List<CatalogManga>> search({
+  Future<CatalogPage> search({
     required String sourceId,
     required String query,
     int page = 1,
   });
+
+  Future<CatalogPage> popular({required String sourceId, int page = 1});
+
+  Future<CatalogPage> latest({required String sourceId, int page = 1});
 }

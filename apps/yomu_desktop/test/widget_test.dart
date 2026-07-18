@@ -190,12 +190,12 @@ void main() {
       MaterialApp(
         theme: buildYomuTheme(),
         home: const Scaffold(
-          body: ExtensionsScreen(api: null, engineReady: false),
+          body: ExtensionsScreen(gateway: null, engineReady: false),
         ),
       ),
     );
 
-    expect(find.textContaining('Inicie o Suwayomi'), findsOneWidget);
+    expect(find.textContaining('recursos de leitura'), findsOneWidget);
   });
 
   testWidgets('YomuAppShell preserves navigation callback at narrow width', (

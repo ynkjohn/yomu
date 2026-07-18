@@ -39,6 +39,7 @@
 | **Motor R2 — bundle offline + GPLv2 §3(a)** | ✅ commit `be77c1b` |
 | **Motor R3 — Biblioteca sobre contratos Yomu** | ✅ concluída nesta subfase |
 | **Motor R4 — Core/PWA sobre contratos Yomu** | ✅ concluída nesta subfase |
+| **Motor R5 — detalhes e descoberta desktop** | ✅ reviewer independente PASS |
 
 ## Phases
 
@@ -58,9 +59,31 @@
 | Motor Interno Transparente R2 | ✅ commit `be77c1b`; schema v5 intacto |
 | Motor Interno Transparente R3 | ✅ Biblioteca sem API/DTO/URL do fornecedor |
 | Motor Interno Transparente R4 | ✅ Core/PWA sem dependência direta do fornecedor |
+| Motor Interno Transparente R5 | ✅ detalhes e descoberta migrados; reviewer PASS |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |
+
+## R5 — consumidores desktop de detalhes e descoberta
+
+- Baseline committed: R4 `1047f79`; upstream e remoto permanecem em
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, sem push.
+- `HomeScreen`, `MangaDetailScreen`, `ExploreScreen` e `ExtensionsScreen`
+  recebem somente contratos/modelos Yomu e não importam `yomu_suwayomi`, DTOs,
+  URLs internas, `absoluteUrl`, package IDs ou políticas de repositório.
+- Catálogo normaliza search/popular/latest, paginação e `hasNextPage`; respostas
+  antigas, refresh concorrente e load-more duplicado são rejeitados.
+- Capas e ícones usam `MediaReference` opaca e bytes limitados a 8 MiB;
+  `Image.network` não é usado para mídia do motor nessas telas.
+- Policies Keiyoushi/MangaDex ficam privadas no adapter de extensões. O wire
+  `/api/v1` preserva os strings de status e o shape legado de busca.
+- Reader e downloads permanecem callbacks estreitos no `HomeShell` até R6;
+  schema SQLite continua v5 e nenhum ownership mudou.
+- Gates atuais: core 9/9, Suwayomi 81/81, local server 43/43, AI 62/62,
+  storage 39/39, desktop 207/207, PWA aprovada, analyzer limpo,
+  `tool\verify_workspace.ps1` com `ALL CHECKS PASSED` e build Windows Debug
+  aprovado em 19,2 s.
+- Reviewer independente: `PASS`, sem achado obrigatório ou bloqueante.
 
 ## P2C — provider personalizado OpenAI-compatible (commit local `eda852b`)
 

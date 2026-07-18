@@ -127,6 +127,7 @@ final class SuwayomiLibraryAdapter
               id: last.id,
               name: last.name,
               lastPageRead: last.lastPageRead,
+              pageCount: last.pageCount,
             ),
     );
   }

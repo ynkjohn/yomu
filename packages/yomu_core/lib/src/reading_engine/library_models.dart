@@ -6,11 +6,13 @@ final class LibraryResumePoint {
     required this.id,
     required this.name,
     this.lastPageRead,
+    this.pageCount,
   });
 
   final int id;
   final String name;
   final int? lastPageRead;
+  final int? pageCount;
 
   @override
   bool operator ==(Object other) =>
@@ -18,10 +20,11 @@ final class LibraryResumePoint {
       other is LibraryResumePoint &&
           id == other.id &&
           name == other.name &&
-          lastPageRead == other.lastPageRead;
+          lastPageRead == other.lastPageRead &&
+          pageCount == other.pageCount;
 
   @override
-  int get hashCode => Object.hash(id, name, lastPageRead);
+  int get hashCode => Object.hash(id, name, lastPageRead, pageCount);
 }
 
 /// Yomu-owned library summary. It contains no protocol DTO or transport URL.

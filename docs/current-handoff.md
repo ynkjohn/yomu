@@ -670,3 +670,92 @@ Allowlist nominal de R4:
 `mcps/tasks/tools/**`, `pubspec.lock`, builds e artefatos temporários permanecem
 fora. R5 só pode começar após o commit próprio de R4 e nova revalidação do
 baseline.
+
+## Checkpoint R5 — consumidores desktop de detalhes e descoberta
+
+R5 parte do commit R4 `1047f79` e migra as superfícies desktop read-only ainda
+acopladas ao fornecedor. Não altera schema, persistência, ownership, portas,
+bundle, JAR, JRE, SDK ou versões de dependências. O SQLite Yomu permanece no
+schema v5.
+
+Fronteira implementada:
+
+- `HomeScreen`, `MangaDetailScreen`, `ExploreScreen` e `ExtensionsScreen`
+  recebem somente gateways/modelos Yomu e não importam `yomu_suwayomi`;
+- `CatalogGateway` normaliza search, popular, latest, paginação e
+  `hasNextPage`; source id `0` continua filtrado dentro do adapter;
+- `MangaDetailsGateway` e `ReaderGateway` sustentam detalhes, membership,
+  listagem e refresh explícito de capítulos, incluindo ordem normalizada;
+- o novo `ExtensionsGateway` expõe repositórios, extensões e referências opacas
+  sem URL de índice ou package id no produto;
+- confiança de repositório, URLs oficiais Keiyoushi e o package id MangaDex
+  ficam privados em `SuwayomiExtensionsAdapter`;
+- capas e ícones cruzam a fronteira apenas como `MediaReference`; o widget
+  desktop busca no máximo 8 MiB pelo `EngineMediaGateway` e usa `Image.memory`;
+- `HomeShell` permanece o único composition root. Reader e downloads continuam
+  bridges estreitas ali até R6, sem migrar `ReaderScreen`, `DownloadsScreen`,
+  progresso ou Maya nesta subfase;
+- o wire autenticado `/api/v1` permanece estável: status normalizado volta aos
+  strings legados e busca continua serializando somente `items`.
+
+Validação de R5:
+
+- contratos `yomu_core`: 9/9;
+- testes direcionados `SuwayomiCoreAdapter`: 10/10;
+- testes direcionados `SuwayomiExtensionsAdapter`: 13/13;
+- `yomu_suwayomi`: 81/81;
+- `yomu_local_server`: 43/43, incluindo todas as rotas de leitura `/api/v1`;
+- `yomu_ai`: 62/62;
+- `yomu_storage`: 39/39;
+- desktop completo: 207/207;
+- PWA health, preload e reader races: aprovados;
+- analyzer do workspace: limpo;
+- `tool\verify_workspace.ps1`: `ALL CHECKS PASSED`;
+- build Windows Debug aprovado em 19,2 s;
+- formatter Dart 3.8.1 executado somente na allowlist: 28 arquivos, zero
+  mudanças adicionais;
+- boundary scan das quatro telas sem import do fornecedor, DTO cru,
+  `absoluteUrl`, URL 14567, package id ou `Image.network`;
+- reviewer independente: `PASS`, sem achado obrigatório ou bloqueante;
+- nenhum processo do produto ou listener 8787/14567 foi iniciado; runtime e
+  evidência visual externa não foram necessários porque o comportamento visual
+  foi preservado.
+
+Allowlist nominal de R5:
+
+- `apps/yomu_desktop/lib/screens/explore_screen.dart`;
+- `apps/yomu_desktop/lib/screens/extensions_screen.dart`;
+- `apps/yomu_desktop/lib/screens/home_screen.dart`;
+- `apps/yomu_desktop/lib/screens/manga_detail_screen.dart`;
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_desktop/lib/widgets/engine_media_image.dart`;
+- `apps/yomu_desktop/test/explore_race_test.dart`;
+- `apps/yomu_desktop/test/explore_screen_test.dart`;
+- `apps/yomu_desktop/test/home_detail_gateway_test.dart`;
+- `apps/yomu_desktop/test/promoted_regressions_test.dart`;
+- `apps/yomu_desktop/test/widget_test.dart`;
+- `packages/yomu_core/lib/src/reading_engine/catalog_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/extensions_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/library_models.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reader_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reading_models.dart`;
+- `packages/yomu_core/lib/yomu_core.dart`;
+- `packages/yomu_core/test/reading_engine_contracts_test.dart`;
+- `packages/yomu_local_server/lib/src/yomu_server.dart`;
+- `packages/yomu_local_server/test/yomu_server_reading_routes_test.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_core_adapter.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_extensions_adapter.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_library_adapter.dart`;
+- `packages/yomu_suwayomi/lib/src/client/suwayomi_api.dart`;
+- `packages/yomu_suwayomi/lib/yomu_suwayomi.dart`;
+- `packages/yomu_suwayomi/test/suwayomi_api_test.dart`;
+- `packages/yomu_suwayomi/test/suwayomi_core_adapter_test.dart`;
+- `packages/yomu_suwayomi/test/suwayomi_extensions_adapter_test.dart`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/status.md`.
+
+`AGENTS.md`, arquivos status-only/EOL, `design_prod/**`, `.playwright-cli/**`,
+`mcps/tasks/tools/**`, `pubspec.lock`, builds e artefatos temporários permanecem
+fora. R6 parte do commit próprio deste checkpoint e exige nova revalidação do
+baseline.

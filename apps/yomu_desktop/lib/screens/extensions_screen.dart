@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 class _ExtensionsSkeleton extends StatefulWidget {
@@ -10,6 +10,9 @@ class _ExtensionsSkeleton extends StatefulWidget {
   @override
   State<_ExtensionsSkeleton> createState() => _ExtensionsSkeletonState();
 }
+
+String _engineMessage(Object error, {required String fallback}) =>
+    error is EngineException ? error.failure.message : fallback;
 
 class _ExtensionsSkeletonState extends State<_ExtensionsSkeleton>
     with SingleTickerProviderStateMixin {
@@ -94,14 +97,14 @@ class _ExtensionSkeletonBlock extends StatelessWidget {
 class ExtensionsScreen extends StatefulWidget {
   const ExtensionsScreen({
     super.key,
-    required this.api,
+    required this.gateway,
     required this.engineReady,
     this.embedded = false,
     this.repositoriesOnly = false,
     this.onSourcesChanged,
   });
 
-  final SuwayomiApi? api;
+  final ExtensionsGateway? gateway;
   final bool engineReady;
   final bool embedded;
   final bool repositoriesOnly;
@@ -119,11 +122,11 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
   String? _storesError;
   String? _extensionsError;
   String _filter = '';
-  List<ExtensionStoreInfo> _stores = [];
+  List<ExtensionRepository> _stores = [];
 
   /// Full catalog loaded once; filtered in memory.
-  List<ExtensionInfo> _allExtensions = [];
-  String? _busyPkg;
+  List<ReadingExtension> _allExtensions = [];
+  ExtensionReference? _busyReference;
   int _storesGeneration = 0;
   int _extensionsGeneration = 0;
   int _actionGeneration = 0;
@@ -142,12 +145,12 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
   @override
   void didUpdateWidget(covariant ExtensionsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final apiChanged = !identical(widget.api, oldWidget.api);
-    if (!widget.engineReady || widget.api == null) {
+    final gatewayChanged = !identical(widget.gateway, oldWidget.gateway);
+    if (!widget.engineReady || widget.gateway == null) {
       _invalidateRequests(clearData: true);
       return;
     }
-    if (!oldWidget.engineReady || apiChanged) {
+    if (!oldWidget.engineReady || gatewayChanged) {
       _invalidateRequests(clearData: true);
       _loadCatalog();
     }
@@ -168,7 +171,7 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
     _loadingStores = false;
     _loadingExtensions = false;
     _actionBusy = false;
-    _busyPkg = null;
+    _busyReference = null;
     _storesError = null;
     _extensionsError = null;
     if (clearData) {
@@ -179,15 +182,14 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
     }
   }
 
-  List<ExtensionInfo> get _filtered {
+  List<ReadingExtension> get _filtered {
     final q = _filter.trim().toLowerCase();
     if (q.isEmpty) return _allExtensions;
     return _allExtensions
         .where(
           (e) =>
               e.name.toLowerCase().contains(q) ||
-              e.pkgName.toLowerCase().contains(q) ||
-              (e.lang?.toLowerCase().contains(q) ?? false),
+              (e.language?.toLowerCase().contains(q) ?? false),
         )
         .toList();
   }
@@ -197,19 +199,19 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
   }
 
   Future<void> _loadStores() async {
-    final api = widget.api;
-    if (api == null || !widget.engineReady) return;
+    final gateway = widget.gateway;
+    if (gateway == null || !widget.engineReady) return;
     final generation = ++_storesGeneration;
     setState(() {
       _loadingStores = true;
       _storesError = null;
     });
     try {
-      final stores = await api.listExtensionStores();
+      final stores = await gateway.listRepositories();
       if (!mounted ||
           generation != _storesGeneration ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.gateway, gateway)) {
         return;
       }
       setState(() {
@@ -220,19 +222,22 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
       if (!mounted ||
           generation != _storesGeneration ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.gateway, gateway)) {
         return;
       }
       setState(() {
-        _storesError = e.toString();
+        _storesError = _engineMessage(
+          e,
+          fallback: 'Não foi possível carregar os repositórios.',
+        );
         _loadingStores = false;
       });
     }
   }
 
   Future<void> _loadExtensions() async {
-    final api = widget.api;
-    if (api == null || !widget.engineReady) return;
+    final gateway = widget.gateway;
+    if (gateway == null || !widget.engineReady) return;
     final generation = ++_extensionsGeneration;
     setState(() {
       _loadingExtensions = true;
@@ -240,11 +245,11 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
     });
     try {
       // No server-side filter — full list once, filter locally.
-      final extensions = await api.listExtensions();
+      final extensions = await gateway.listExtensions();
       if (!mounted ||
           generation != _extensionsGeneration ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.gateway, gateway)) {
         return;
       }
       setState(() {
@@ -255,19 +260,25 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
       if (!mounted ||
           generation != _extensionsGeneration ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.gateway, gateway)) {
         return;
       }
       setState(() {
-        _extensionsError = e.toString();
+        _extensionsError = _engineMessage(
+          e,
+          fallback: 'Não foi possível carregar as extensões.',
+        );
         _loadingExtensions = false;
       });
     }
   }
 
   Future<void> _syncCatalog() async {
-    final api = widget.api;
-    if (api == null || _actionBusy || _busyPkg != null || _loadingExtensions) {
+    final gateway = widget.gateway;
+    if (gateway == null ||
+        _actionBusy ||
+        _busyReference != null ||
+        _loadingExtensions) {
       return;
     }
     final generation = ++_actionGeneration;
@@ -276,36 +287,46 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
       _extensionsError = null;
     });
     try {
-      final n = await api.fetchExtensions();
+      final result = await gateway.synchronizeCatalog();
       if (!mounted ||
           generation != _actionGeneration ||
-          !identical(widget.api, api) ||
+          !identical(widget.gateway, gateway) ||
           !widget.engineReady) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Catálogo sincronizado: $n extensões.')),
+        SnackBar(
+          content: Text('Catálogo sincronizado: ${result.count} extensões.'),
+        ),
       );
       await _loadExtensions();
     } catch (e) {
       if (!mounted ||
           generation != _actionGeneration ||
-          !identical(widget.api, api)) {
+          !identical(widget.gateway, gateway)) {
         return;
       }
-      setState(() => _extensionsError = e.toString());
+      setState(
+        () => _extensionsError = _engineMessage(
+          e,
+          fallback: 'Não foi possível sincronizar o catálogo.',
+        ),
+      );
     } finally {
       if (mounted &&
           generation == _actionGeneration &&
-          identical(widget.api, api)) {
+          identical(widget.gateway, gateway)) {
         setState(() => _actionBusy = false);
       }
     }
   }
 
-  Future<void> _ensureKeiyoushi() async {
-    final api = widget.api;
-    if (api == null || _actionBusy || _busyPkg != null || _loadingExtensions) {
+  Future<void> _ensureRecommendedRepository() async {
+    final gateway = widget.gateway;
+    if (gateway == null ||
+        _actionBusy ||
+        _busyReference != null ||
+        _loadingExtensions) {
       return;
     }
     final generation = ++_actionGeneration;
@@ -316,47 +337,61 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
     });
     try {
       try {
-        await api.ensureKeiyoushiStore();
+        await gateway.ensureRecommendedRepository();
       } catch (e) {
         if (mounted &&
             generation == _actionGeneration &&
-            identical(widget.api, api)) {
-          setState(() => _storesError = e.toString());
+            identical(widget.gateway, gateway)) {
+          setState(
+            () => _storesError = _engineMessage(
+              e,
+              fallback: 'Não foi possível preparar o repositório recomendado.',
+            ),
+          );
         }
         return;
       }
-      int n;
+      ExtensionCatalogSync result;
       try {
-        n = await api.fetchExtensions();
+        result = await gateway.synchronizeCatalog();
       } catch (e) {
         if (mounted &&
             generation == _actionGeneration &&
-            identical(widget.api, api)) {
-          setState(() => _extensionsError = e.toString());
+            identical(widget.gateway, gateway)) {
+          setState(
+            () => _extensionsError = _engineMessage(
+              e,
+              fallback: 'Não foi possível sincronizar o catálogo.',
+            ),
+          );
         }
         return;
       }
       if (!mounted ||
           generation != _actionGeneration ||
-          !identical(widget.api, api) ||
+          !identical(widget.gateway, gateway) ||
           !widget.engineReady) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Keiyoushi OK. Catálogo: $n extensões.')),
+        SnackBar(
+          content: Text(
+            'Repositório pronto. Catálogo: ${result.count} extensões.',
+          ),
+        ),
       );
       await _loadCatalog();
     } finally {
       if (mounted &&
           generation == _actionGeneration &&
-          identical(widget.api, api)) {
+          identical(widget.gateway, gateway)) {
         setState(() => _actionBusy = false);
       }
     }
   }
 
-  void _upsertExtension(ExtensionInfo ext) {
-    final idx = _allExtensions.indexWhere((e) => e.pkgName == ext.pkgName);
+  void _upsertExtension(ReadingExtension ext) {
+    final idx = _allExtensions.indexWhere((e) => e.reference == ext.reference);
     if (idx < 0) {
       _allExtensions = [..._allExtensions, ext];
       return;
@@ -365,35 +400,38 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
     _allExtensions = [
       for (var i = 0; i < _allExtensions.length; i++)
         if (i == idx)
-          ExtensionInfo(
-            pkgName: ext.pkgName,
+          ReadingExtension(
+            reference: ext.reference,
             name: ext.name,
-            isInstalled: ext.isInstalled,
-            versionName: ext.versionName,
-            lang: ext.lang ?? previous.lang,
-            apkName: ext.apkName ?? previous.apkName,
+            installed: ext.installed,
+            version: ext.version,
+            language: ext.language ?? previous.language,
+            recommended: ext.recommended,
           )
         else
           _allExtensions[i],
     ];
   }
 
-  Future<void> _install(String pkg) async {
-    final api = widget.api;
-    if (api == null || _busyPkg != null || _loadingExtensions || _actionBusy) {
+  Future<void> _install(ReadingExtension extension) async {
+    final gateway = widget.gateway;
+    if (gateway == null ||
+        _busyReference != null ||
+        _loadingExtensions ||
+        _actionBusy) {
       return;
     }
     final onSourcesChanged = widget.onSourcesChanged;
     final messenger = ScaffoldMessenger.of(context);
     final generation = ++_installGeneration;
-    setState(() => _busyPkg = pkg);
+    setState(() => _busyReference = extension.reference);
     bool ownsUiState() =>
         mounted &&
         generation == _installGeneration &&
         widget.engineReady &&
-        identical(widget.api, api);
+        identical(widget.gateway, gateway);
     try {
-      final ext = await api.installExtension(pkg);
+      final ext = await gateway.install(extension.reference);
       if (ownsUiState()) {
         setState(() => _upsertExtension(ext));
       }
@@ -409,19 +447,70 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
             content: Text(
               refreshError == null
                   ? 'Instalado: ${ext.name}'
-                  : 'Extensão instalada, mas as fontes não foram atualizadas: '
-                        '$refreshError',
+                  : 'Extensão instalada, mas as fontes não foram atualizadas.',
             ),
           ),
         );
       }
     } catch (e) {
       if (!ownsUiState()) return;
-      messenger.showSnackBar(SnackBar(content: Text('Erro install: $e')));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            _engineMessage(
+              e,
+              fallback: 'Não foi possível instalar a extensão.',
+            ),
+          ),
+        ),
+      );
     } finally {
       if (ownsUiState()) {
-        setState(() => _busyPkg = null);
+        setState(() => _busyReference = null);
       }
+    }
+  }
+
+  Future<void> _installRecommended() async {
+    final gateway = widget.gateway;
+    if (gateway == null ||
+        _busyReference != null ||
+        _loadingExtensions ||
+        _actionBusy) {
+      return;
+    }
+    final generation = ++_installGeneration;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _actionBusy = true);
+    bool ownsUiState() =>
+        mounted &&
+        generation == _installGeneration &&
+        widget.engineReady &&
+        identical(widget.gateway, gateway);
+    try {
+      final extension = await gateway.installRecommendedExtension();
+      if (!ownsUiState()) return;
+      setState(() => _upsertExtension(extension));
+      await widget.onSourcesChanged?.call();
+      if (ownsUiState()) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Instalado: ${extension.name}')),
+        );
+      }
+    } catch (error) {
+      if (!ownsUiState()) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            _engineMessage(
+              error,
+              fallback: 'Não foi possível instalar a extensão recomendada.',
+            ),
+          ),
+        ),
+      );
+    } finally {
+      if (ownsUiState()) setState(() => _actionBusy = false);
     }
   }
 
@@ -432,7 +521,7 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
-            'Inicie o Suwayomi na aba Servidor e Motor antes de gerenciar extensões e repositórios.',
+            'Os recursos de leitura precisam estar disponíveis para gerenciar extensões e repositórios.',
             textAlign: TextAlign.center,
             style: TextStyle(color: YomuTokens.textMuted),
           ),
@@ -560,32 +649,30 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Adicione o repositório confiável Keiyoushi para instalar '
-            'extensões reais.',
+            'Prepare o repositório recomendado para instalar extensões.',
             style: TextStyle(color: YomuTokens.textSubtle, fontSize: 11.5),
           ),
           const SizedBox(height: 12),
           _smallButton(
             label: _actionBusy
-                ? 'Configurando Keiyoushi…'
-                : 'Garantir Keiyoushi',
+                ? 'Configurando repositório…'
+                : 'Preparar recomendado',
             accent: true,
             busy: _actionBusy,
             onTap:
                 _loadingStores ||
                     _loadingExtensions ||
                     _actionBusy ||
-                    _busyPkg != null
+                    _busyReference != null
                 ? null
-                : _ensureKeiyoushi,
+                : _ensureRecommendedRepository,
           ),
         ],
       ),
     );
   }
 
-  Widget _repoCard(ExtensionStoreInfo s) {
-    final isKeiyoushi = SuwayomiApi.isTrustedKeiyoushiStore(s);
+  Widget _repoCard(ExtensionRepository s) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
       decoration: BoxDecoration(
@@ -618,7 +705,7 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
                             ),
                           ),
                         ),
-                        if (isKeiyoushi) ...[
+                        if (s.recommended) ...[
                           const SizedBox(width: 7),
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -643,7 +730,7 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      s.isLegacy
+                      s.state == ExtensionRepositoryState.legacy
                           ? 'repositório legacy'
                           : 'repositório ativo no catálogo agregado',
                       style: const TextStyle(
@@ -660,15 +747,6 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
                 child: _smallButton(label: 'Remover', danger: true),
               ),
             ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            s.indexUrl,
-            style: const TextStyle(
-              color: YomuTokens.textSubtle,
-              fontSize: 10.5,
-              fontFamily: 'Consolas',
-            ),
           ),
         ],
       ),
@@ -708,7 +786,7 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
                 : 'Sincronizar catálogo',
             icon: YomuIcons.refresh,
             busy: _actionBusy,
-            onTap: _loadingExtensions || _actionBusy || _busyPkg != null
+            onTap: _loadingExtensions || _actionBusy || _busyReference != null
                 ? null
                 : _syncCatalog,
           ),
@@ -759,12 +837,10 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
 
   Widget _extensionsBody() {
     final filtered = _filtered;
-    final mangadex = _allExtensions.where(
-      (e) => e.pkgName == SuwayomiApi.mangaDexPkg,
-    );
-    final installed = filtered.where((e) => e.isInstalled).toList();
+    final recommended = _allExtensions.where((e) => e.recommended);
+    final installed = filtered.where((e) => e.installed).toList();
     final available = filtered
-        .where((e) => !e.isInstalled)
+        .where((e) => !e.installed)
         .take(_catalogCap)
         .toList();
     final hiddenCount = filtered.length - installed.length - available.length;
@@ -785,22 +861,27 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
                   _smallButton(
                     label: _loadingExtensions ? 'Recarregando…' : 'Recarregar',
                     busy: _loadingExtensions,
-                    onTap: _loadingExtensions || _actionBusy || _busyPkg != null
+                    onTap:
+                        _loadingExtensions ||
+                            _actionBusy ||
+                            _busyReference != null
                         ? null
                         : _loadExtensions,
                   ),
-                  if (mangadex.isEmpty || !mangadex.first.isInstalled) ...[
+                  if (recommended.isEmpty || !recommended.first.installed) ...[
                     const SizedBox(width: 6),
                     _smallButton(
-                      label: _busyPkg == SuwayomiApi.mangaDexPkg
-                          ? 'Instalando MangaDex…'
-                          : 'Instalar MangaDex',
+                      label: _actionBusy
+                          ? 'Instalando recomendada…'
+                          : 'Instalar recomendada',
                       accent: true,
-                      busy: _busyPkg == SuwayomiApi.mangaDexPkg,
+                      busy: _actionBusy,
                       onTap:
-                          _busyPkg != null || _loadingExtensions || _actionBusy
+                          _busyReference != null ||
+                              _loadingExtensions ||
+                              _actionBusy
                           ? null
-                          : () => _install(SuwayomiApi.mangaDexPkg),
+                          : _installRecommended,
                     ),
                   ],
                 ],
@@ -905,12 +986,12 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
     );
   }
 
-  Widget _extRow(ExtensionInfo e) {
-    final busy = _busyPkg == e.pkgName;
+  Widget _extRow(ReadingExtension e) {
+    final busy = _busyReference == e.reference;
     final meta = [
-      if (e.lang != null && e.lang!.isNotEmpty) e.lang!.toUpperCase(),
-      if (e.versionName != null && e.versionName!.isNotEmpty) e.versionName!,
-      e.pkgName,
+      if (e.language != null && e.language!.isNotEmpty)
+        e.language!.toUpperCase(),
+      if (e.version != null && e.version!.isNotEmpty) e.version!,
     ].join(' · ');
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -967,15 +1048,15 @@ class _ExtensionsScreenState extends State<ExtensionsScreen> {
                 ),
               ),
             )
-          else if (e.isInstalled)
+          else if (e.installed)
             const StatusPill(label: 'instalada', color: YomuTokens.success)
           else
             _smallButton(
               label: 'Instalar',
               accent: true,
-              onTap: _busyPkg != null || _loadingExtensions || _actionBusy
+              onTap: _busyReference != null || _loadingExtensions || _actionBusy
                   ? null
-                  : () => _install(e.pkgName),
+                  : () => _install(e),
             ),
         ],
       ),

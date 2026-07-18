@@ -99,9 +99,12 @@ void main() {
         theme: buildYomuTheme(),
         home: Scaffold(
           body: HomeScreen(
-            api: null,
+            library: null,
+            media: const _EmptyMediaGateway(),
             engineReady: false,
             onNavigate: (value) => destination = value,
+            onOpenManga: (_) async {},
+            onContinueReading: (_) async {},
           ),
         ),
       ),
@@ -124,16 +127,19 @@ void main() {
   ) async {
     await setDesktopSurface(tester);
     String? destination;
-    final api = _FakeSuwayomiApi(library: const []);
+    final library = _FakeLibraryGateway();
 
     await tester.pumpWidget(
       MaterialApp(
         theme: buildYomuTheme(),
         home: Scaffold(
           body: HomeScreen(
-            api: api,
+            library: library,
+            media: const _EmptyMediaGateway(),
             engineReady: true,
             onNavigate: (value) => destination = value,
+            onOpenManga: (_) async {},
+            onContinueReading: (_) async {},
           ),
         ),
       ),
@@ -151,14 +157,16 @@ void main() {
     tester,
   ) async {
     await setDesktopSurface(tester);
-    final api = _FakeSuwayomiApi(
-      manga: const MangaDetails(id: 7, title: 'Frieren'),
+    final details = _FakeMangaDetailsGateway(
+      manga: const ReadingMangaDetails(id: 7, title: 'Frieren'),
+    );
+    final reader = _FakeReaderGateway(
       chapters: const [
-        ChapterInfo(
+        ReadingChapter(
           id: 70,
           name: 'Capítulo 1',
           chapterNumber: 1,
-          sourceOrder: 1,
+          readingOrder: 1,
           mangaId: 7,
         ),
       ],
@@ -167,7 +175,22 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildYomuTheme(),
-        home: MangaDetailScreen(api: api, mangaId: 7),
+        home: MangaDetailScreen(
+          details: details,
+          reader: reader,
+          catalog: const _EmptyCatalogGateway(),
+          media: const _EmptyMediaGateway(),
+          mangaId: 7,
+          onOpenChapter:
+              ({
+                required mangaId,
+                required mangaTitle,
+                required chapter,
+                required chapters,
+                required openSettings,
+              }) async {},
+          onDownloadChapters: (_) async {},
+        ),
       ),
     );
     await tester.pump();
@@ -184,13 +207,13 @@ void main() {
     tester,
   ) async {
     await setDesktopSurface(tester);
-    final api = _FakeSuwayomiApi(
+    final library = _FakeLibraryGateway(
       library: const [
-        MangaSummary(
+        LibraryManga(
           id: 1,
           title: 'Leitura em andamento',
           inLibrary: true,
-          lastReadChapter: ChapterInfo(
+          lastReadChapter: LibraryResumePoint(
             id: 10,
             name: 'Capítulo 1',
             pageCount: 10,
@@ -204,7 +227,14 @@ void main() {
       MaterialApp(
         theme: buildYomuTheme(),
         home: Scaffold(
-          body: HomeScreen(api: api, engineReady: true, onNavigate: (_) {}),
+          body: HomeScreen(
+            library: library,
+            media: const _EmptyMediaGateway(),
+            engineReady: true,
+            onNavigate: (_) {},
+            onOpenManga: (_) async {},
+            onContinueReading: (_) async {},
+          ),
         ),
       ),
     );
@@ -230,9 +260,9 @@ void main() {
     await setDesktopSurface(tester);
     final semantics = tester.ensureSemantics();
     String? destination;
-    final api = _FakeSuwayomiApi(
+    final library = _FakeLibraryGateway(
       library: const [
-        MangaSummary(id: 1, title: 'Na biblioteca', inLibrary: true),
+        LibraryManga(id: 1, title: 'Na biblioteca', inLibrary: true),
       ],
     );
 
@@ -241,9 +271,12 @@ void main() {
         theme: buildYomuTheme(),
         home: Scaffold(
           body: HomeScreen(
-            api: api,
+            library: library,
+            media: const _EmptyMediaGateway(),
             engineReady: true,
             onNavigate: (value) => destination = value,
+            onOpenManga: (_) async {},
+            onContinueReading: (_) async {},
           ),
         ),
       ),
@@ -936,30 +969,11 @@ void main() {
 
 class _FakeSuwayomiApi extends SuwayomiApi {
   _FakeSuwayomiApi({
-    this.library = const [],
     this.downloadStatus = const DownloadStatusInfo(state: 'STOPPED', queue: []),
-    this.manga,
-    this.chapters = const [],
   }) : super(SuwayomiClient(baseUrl: 'http://127.0.0.1:14567'));
 
-  final List<MangaSummary> library;
-  final MangaDetails? manga;
-  final List<ChapterInfo> chapters;
   DownloadStatusInfo downloadStatus;
   int clearDownloaderCalls = 0;
-
-  @override
-  Future<List<MangaSummary>> listLibrary() async => library;
-
-  @override
-  Future<MangaDetails> getManga(int id) async =>
-      manga ?? MangaDetails(id: id, title: 'Mangá $id');
-
-  @override
-  Future<List<ChapterInfo>> fetchMangaChapters(int mangaId) async => chapters;
-
-  @override
-  Future<List<ChapterInfo>> listMangaChapters(int mangaId) async => chapters;
 
   @override
   Future<DownloadStatusInfo> getDownloadStatus() async => downloadStatus;
@@ -978,6 +992,75 @@ class _FakeLibraryGateway implements LibraryGateway {
 
   @override
   Future<List<LibraryManga>> listLibrary() async => library;
+}
+
+class _FakeMangaDetailsGateway implements MangaDetailsGateway {
+  const _FakeMangaDetailsGateway({required this.manga});
+
+  final ReadingMangaDetails manga;
+
+  @override
+  Future<ReadingMangaDetails> getManga(int mangaId) async => manga;
+
+  @override
+  Future<ReadingMangaDetails> setInLibrary(int mangaId, bool inLibrary) async =>
+      ReadingMangaDetails(
+        id: manga.id,
+        title: manga.title,
+        description: manga.description,
+        author: manga.author,
+        artist: manga.artist,
+        status: manga.status,
+        thumbnail: manga.thumbnail,
+        sourceId: manga.sourceId,
+        inLibrary: inLibrary,
+      );
+}
+
+class _FakeReaderGateway implements ReaderGateway {
+  const _FakeReaderGateway({this.chapters = const []});
+
+  final List<ReadingChapter> chapters;
+
+  @override
+  Future<ReadingChapter?> getChapter(int chapterId) async {
+    for (final chapter in chapters) {
+      if (chapter.id == chapterId) return chapter;
+    }
+    return null;
+  }
+
+  @override
+  Future<ReadingChapterPages> getPages(int chapterId) async =>
+      ReadingChapterPages(chapterId: chapterId, pages: const []);
+
+  @override
+  Future<List<ReadingChapter>> listChapters(int mangaId) async => chapters;
+
+  @override
+  Future<List<ReadingChapter>> refreshChapters(int mangaId) async => chapters;
+}
+
+class _EmptyCatalogGateway implements CatalogGateway {
+  const _EmptyCatalogGateway();
+
+  @override
+  Future<CatalogPage> latest({required String sourceId, int page = 1}) async =>
+      CatalogPage(items: const [], page: page, hasNextPage: false);
+
+  @override
+  Future<List<CatalogSource>> listSources() async => const [];
+
+  @override
+  Future<CatalogPage> popular({required String sourceId, int page = 1}) async =>
+      CatalogPage(items: const [], page: page, hasNextPage: false);
+
+  @override
+  Future<CatalogPage> search({
+    required String sourceId,
+    required String query,
+    int page = 1,
+  }) async => CatalogPage(items: const [], page: page, hasNextPage: false);
 }
 
 class _EmptyMediaGateway implements EngineMediaGateway {

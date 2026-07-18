@@ -15,9 +15,8 @@ void main() {
             'extensionStores': {
               'nodes': [
                 {
-                  'name': 'Keiyoushi',
-                  'indexUrl':
-                      'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json',
+                  'name': 'Repository A',
+                  'indexUrl': 'https://extensions.example/index.json',
                   'isLegacy': false,
                 },
               ],
@@ -35,8 +34,8 @@ void main() {
     );
     final stores = await api.listExtensionStores();
     expect(stores, hasLength(1));
-    expect(stores.first.name, 'Keiyoushi');
-    expect(stores.first.indexUrl, contains('keiyoushi'));
+    expect(stores.first.name, 'Repository A');
+    expect(stores.first.indexUrl, 'https://extensions.example/index.json');
   });
 
   test('installExtension surfaces GraphQL errors', () async {
@@ -56,7 +55,7 @@ void main() {
       SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
     );
     await expectLater(
-      api.installExtension('eu.kanade.tachiyomi.extension.all.mangadex'),
+      api.installExtension('app.example.extension.en.reader'),
       throwsA(isA<StateError>()),
     );
   });
@@ -236,47 +235,39 @@ void main() {
     expect(ch.mangaId, 9);
   });
 
-  test('isTrustedKeiyoushiStore aceita URLs oficiais e rejeita substring', () {
-    expect(
-      SuwayomiApi.isTrustedKeiyoushiStore(
-        const ExtensionStoreInfo(
-          name: 'Keiyoushi',
-          indexUrl: SuwayomiApi.keiyoushiIndexUrl,
-          isLegacy: false,
-        ),
-      ),
-      isTrue,
-    );
-    expect(
-      SuwayomiApi.isTrustedKeiyoushiStore(
-        const ExtensionStoreInfo(
-          name: 'Keiyoushi Impersonator',
-          indexUrl: 'https://evil.example/keiyoushi/index.json',
-          isLegacy: false,
-        ),
-      ),
-      isFalse,
-    );
-  });
-
-  test('ensureKeiyoushiStore falha quando add retorna null', () async {
+  test('addExtensionStore maps GraphQL mutation result', () async {
     final mock = MockClient((request) async {
-      final body = request.body;
-      if (body.contains('extensionStores')) {
-        return http.Response(
-          jsonEncode({
-            'data': {
-              'extensionStores': {
-                'nodes': <Map<String, Object?>>[],
-                'totalCount': 0,
+      final payload = jsonDecode(request.body) as Map<String, dynamic>;
+      final variables = payload['variables'] as Map<String, dynamic>;
+      expect(variables['url'], 'https://extensions.example/index.json');
+      return http.Response(
+        jsonEncode({
+          'data': {
+            'addExtensionStore': {
+              'extensionStore': {
+                'name': 'Repository A',
+                'indexUrl': 'https://extensions.example/index.json',
+                'isLegacy': false,
               },
             },
-          }),
-          200,
-          headers: {'content-type': 'application/json'},
-        );
-      }
-      // addExtensionStore returns null store
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    final api = SuwayomiApi(
+      SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
+    );
+    final store = await api.addExtensionStore(
+      'https://extensions.example/index.json',
+    );
+    expect(store?.name, 'Repository A');
+    expect(store?.isLegacy, isFalse);
+  });
+
+  test('addExtensionStore preserves a null protocol result', () async {
+    final mock = MockClient((request) async {
       return http.Response(
         jsonEncode({
           'data': {
@@ -290,25 +281,22 @@ void main() {
     final api = SuwayomiApi(
       SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
     );
-    await expectLater(api.ensureKeiyoushiStore(), throwsA(isA<StateError>()));
+    expect(
+      await api.addExtensionStore('https://extensions.example/index.json'),
+      isNull,
+    );
   });
 
-  test('ensureKeiyoushiStore reutiliza store confiável existente', () async {
-    var calls = 0;
+  test('fetchExtensions returns the fetched extension count', () async {
     final mock = MockClient((request) async {
-      calls++;
       return http.Response(
         jsonEncode({
           'data': {
-            'extensionStores': {
-              'nodes': [
-                {
-                  'name': 'Keiyoushi',
-                  'indexUrl': SuwayomiApi.keiyoushiIndexUrl,
-                  'isLegacy': false,
-                },
+            'fetchExtensions': {
+              'extensions': [
+                {'pkgName': 'app.example.extension.en.reader'},
+                {'pkgName': 'app.example.extension.pt.reader'},
               ],
-              'totalCount': 1,
             },
           },
         }),
@@ -319,10 +307,99 @@ void main() {
     final api = SuwayomiApi(
       SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
     );
-    final store = await api.ensureKeiyoushiStore();
-    expect(store?.name, 'Keiyoushi');
-    expect(calls, 1); // list only, no add
+    expect(await api.fetchExtensions(), 2);
   });
+
+  test('listExtensions maps nodes and applies the optional query', () async {
+    final mock = MockClient((request) async {
+      return http.Response(
+        jsonEncode({
+          'data': {
+            'extensions': {
+              'nodes': [
+                {
+                  'pkgName': 'app.example.extension.en.reader',
+                  'name': 'Reader EN',
+                  'isInstalled': true,
+                  'versionName': '1.2.3',
+                  'lang': 'en',
+                  'apkName': 'reader-en.apk',
+                },
+                {
+                  'pkgName': 'app.example.extension.pt.reader',
+                  'name': 'Leitor PT',
+                  'isInstalled': false,
+                  'versionName': '2.0.0',
+                  'lang': 'pt-BR',
+                  'apkName': 'reader-pt.apk',
+                },
+              ],
+              'totalCount': 2,
+            },
+          },
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    final api = SuwayomiApi(
+      SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
+    );
+    final extensions = await api.listExtensions(query: 'leitor');
+    expect(extensions, hasLength(1));
+    expect(extensions.single.pkgName, 'app.example.extension.pt.reader');
+    expect(extensions.single.isInstalled, isFalse);
+  });
+
+  test(
+    'installExtension and uninstallExtension map protocol results',
+    () async {
+      var calls = 0;
+      final mock = MockClient((request) async {
+        calls++;
+        final payload = jsonDecode(request.body) as Map<String, dynamic>;
+        final query = payload['query'] as String;
+        final variables = payload['variables'] as Map<String, dynamic>;
+        expect(variables['id'], 'app.example.extension.en.reader');
+        final installing = !query.contains('uninstall: true');
+        expect(
+          query,
+          contains(installing ? 'install: true' : 'uninstall: true'),
+        );
+        return http.Response(
+          jsonEncode({
+            'data': {
+              'updateExtension': {
+                'extension': {
+                  'pkgName': 'app.example.extension.en.reader',
+                  'name': 'Reader EN',
+                  'isInstalled': installing,
+                  'versionName': '1.2.3',
+                  'lang': 'en',
+                },
+              },
+            },
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      final api = SuwayomiApi(
+        SuwayomiClient(baseUrl: 'http://127.0.0.1:14567', httpClient: mock),
+      );
+
+      final installed = await api.installExtension(
+        'app.example.extension.en.reader',
+      );
+      final uninstalled = await api.uninstallExtension(
+        'app.example.extension.en.reader',
+      );
+
+      expect(installed.isInstalled, isTrue);
+      expect(uninstalled.isInstalled, isFalse);
+      expect(calls, 2);
+    },
+  );
 
   test('getDownloadStatus parses queue', () async {
     final mock = MockClient((request) async {

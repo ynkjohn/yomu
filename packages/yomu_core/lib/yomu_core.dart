@@ -6,6 +6,7 @@ export 'src/entities/source_origin.dart';
 export 'src/entities/suwayomi_status.dart';
 export 'src/reading_engine/catalog_gateway.dart';
 export 'src/reading_engine/engine_readiness.dart';
+export 'src/reading_engine/extensions_gateway.dart';
 export 'src/reading_engine/library_gateway.dart';
 export 'src/reading_engine/library_models.dart';
 export 'src/reading_engine/manga_details_gateway.dart';

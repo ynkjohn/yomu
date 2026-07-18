@@ -2,6 +2,16 @@ import 'package:collection/collection.dart';
 
 import 'media_gateway.dart';
 
+enum ReadingPublicationStatus {
+  ongoing,
+  completed,
+  licensed,
+  publishingFinished,
+  cancelled,
+  onHiatus,
+  unknown,
+}
+
 /// Yomu-owned manga details used by product surfaces and the local API.
 final class ReadingMangaDetails {
   const ReadingMangaDetails({
@@ -21,7 +31,7 @@ final class ReadingMangaDetails {
   final String? description;
   final String? author;
   final String? artist;
-  final String? status;
+  final ReadingPublicationStatus? status;
   final MediaReference? thumbnail;
   final String? sourceId;
   final bool inLibrary;
@@ -61,6 +71,7 @@ final class ReadingChapter {
     required this.name,
     this.chapterNumber,
     this.pageCount,
+    this.readingOrder,
     this.scanlator,
     this.lastPageRead,
     this.isRead = false,
@@ -72,6 +83,7 @@ final class ReadingChapter {
   final String name;
   final double? chapterNumber;
   final int? pageCount;
+  final int? readingOrder;
   final String? scanlator;
   final int? lastPageRead;
   final bool isRead;
@@ -86,6 +98,7 @@ final class ReadingChapter {
           name == other.name &&
           chapterNumber == other.chapterNumber &&
           pageCount == other.pageCount &&
+          readingOrder == other.readingOrder &&
           scanlator == other.scanlator &&
           lastPageRead == other.lastPageRead &&
           isRead == other.isRead &&
@@ -98,6 +111,7 @@ final class ReadingChapter {
     name,
     chapterNumber,
     pageCount,
+    readingOrder,
     scanlator,
     lastPageRead,
     isRead,

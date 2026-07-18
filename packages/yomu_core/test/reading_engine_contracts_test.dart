@@ -53,6 +53,7 @@ void main() {
       id: 9,
       name: 'Capítulo 9',
       lastPageRead: 3,
+      pageCount: 12,
     );
     const first = LibraryManga(
       id: 7,
@@ -108,6 +109,7 @@ void main() {
     const manga = ReadingMangaDetails(
       id: 4,
       title: 'Detalhes',
+      status: ReadingPublicationStatus.ongoing,
       thumbnail: cover,
       sourceId: 'source',
       inLibrary: true,
@@ -116,6 +118,7 @@ void main() {
       id: 8,
       name: 'Capítulo 8',
       lastPageRead: 2,
+      readingOrder: 7,
       mangaId: 4,
     );
     final pages = ReadingChapterPages(
@@ -124,7 +127,12 @@ void main() {
       pageCount: 1,
       chapterName: chapter.name,
     );
-    const source = CatalogSource(id: 's', name: 'Fonte', language: 'pt-BR');
+    const source = CatalogSource(
+      id: 's',
+      name: 'Fonte',
+      language: 'pt-BR',
+      icon: cover,
+    );
     const result = CatalogManga(
       id: 4,
       title: 'Detalhes',
@@ -137,6 +145,10 @@ void main() {
     expect(() => pages.pages.add(page), throwsUnsupportedError);
     expect(source.language, 'pt-BR');
     expect(result.thumbnail, cover);
+    expect(
+      CatalogPage(items: const [result], page: 2, hasNextPage: true),
+      CatalogPage(items: const [result], page: 2, hasNextPage: true),
+    );
   });
 
   test('external fakes implement each narrow capability', () {
@@ -147,6 +159,7 @@ void main() {
     expect(_TestReaderGateway(), isA<ReaderGateway>());
     expect(_TestProgressGateway(), isA<ReadingProgressGateway>());
     expect(_TestCatalogGateway(), isA<CatalogGateway>());
+    expect(_TestExtensionsGateway(), isA<ExtensionsGateway>());
   });
 }
 
@@ -207,6 +220,9 @@ final class _TestReaderGateway implements ReaderGateway {
 
   @override
   Future<List<ReadingChapter>> listChapters(int mangaId) async => const [];
+
+  @override
+  Future<List<ReadingChapter>> refreshChapters(int mangaId) async => const [];
 }
 
 final class _TestProgressGateway implements ReadingProgressGateway {
@@ -227,9 +243,54 @@ final class _TestCatalogGateway implements CatalogGateway {
   Future<List<CatalogSource>> listSources() async => const [];
 
   @override
-  Future<List<CatalogManga>> search({
+  Future<CatalogPage> search({
     required String sourceId,
     required String query,
     int page = 1,
-  }) async => const [];
+  }) async => CatalogPage(items: const [], page: page, hasNextPage: false);
+
+  @override
+  Future<CatalogPage> popular({required String sourceId, int page = 1}) async =>
+      CatalogPage(items: const [], page: page, hasNextPage: false);
+
+  @override
+  Future<CatalogPage> latest({required String sourceId, int page = 1}) async =>
+      CatalogPage(items: const [], page: page, hasNextPage: false);
+}
+
+final class _TestExtensionsGateway implements ExtensionsGateway {
+  @override
+  Future<ExtensionRepository> ensureRecommendedRepository() async =>
+      const ExtensionRepository(
+        name: 'Recomendado',
+        state: ExtensionRepositoryState.active,
+        recommended: true,
+      );
+
+  @override
+  Future<ReadingExtension> install(ExtensionReference reference) async =>
+      ReadingExtension(reference: reference, name: 'Extensão', installed: true);
+
+  @override
+  Future<ReadingExtension> installRecommendedExtension() async =>
+      const ReadingExtension(
+        reference: _TestExtensionReference(),
+        name: 'Recomendada',
+        installed: true,
+        recommended: true,
+      );
+
+  @override
+  Future<List<ReadingExtension>> listExtensions() async => const [];
+
+  @override
+  Future<List<ExtensionRepository>> listRepositories() async => const [];
+
+  @override
+  Future<ExtensionCatalogSync> synchronizeCatalog() async =>
+      const ExtensionCatalogSync(count: 0);
+}
+
+final class _TestExtensionReference implements ExtensionReference {
+  const _TestExtensionReference();
 }

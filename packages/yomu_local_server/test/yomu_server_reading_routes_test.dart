@@ -373,7 +373,7 @@ final class _FakeReadingEngine
         description: 'Descrição',
         author: 'Autora',
         artist: 'Artista',
-        status: 'ONGOING',
+        status: ReadingPublicationStatus.ongoing,
         thumbnail: mangaId == 7 ? cover7 : cover8,
         sourceId: 'source-1',
         inLibrary: true,
@@ -403,6 +403,10 @@ final class _FakeReadingEngine
       ),
     ];
   }
+
+  @override
+  Future<List<ReadingChapter>> refreshChapters(int mangaId) =>
+      listChapters(mangaId);
 
   @override
   Future<ReadingChapter?> getChapter(int chapterId) async => ReadingChapter(
@@ -439,13 +443,25 @@ final class _FakeReadingEngine
   ];
 
   @override
-  Future<List<CatalogManga>> search({
+  Future<CatalogPage> search({
     required String sourceId,
     required String query,
     int page = 1,
-  }) async => const [
-    CatalogManga(id: 8, title: 'Resultado Yomu', thumbnail: cover8),
-  ];
+  }) async => CatalogPage(
+    items: const [
+      CatalogManga(id: 8, title: 'Resultado Yomu', thumbnail: cover8),
+    ],
+    page: page,
+    hasNextPage: false,
+  );
+
+  @override
+  Future<CatalogPage> popular({required String sourceId, int page = 1}) async =>
+      CatalogPage(items: const [], page: page, hasNextPage: false);
+
+  @override
+  Future<CatalogPage> latest({required String sourceId, int page = 1}) async =>
+      CatalogPage(items: const [], page: page, hasNextPage: false);
 
   @override
   Future<MediaPayload> fetch(

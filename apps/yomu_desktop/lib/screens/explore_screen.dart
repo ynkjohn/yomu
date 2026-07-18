@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
+import '../widgets/engine_media_image.dart';
 import 'extensions_screen.dart';
-import 'manga_detail_screen.dart';
 
 enum _ExploreTab { sources, extensions, repositories, migration, creator }
+
+enum ExploreCatalogMode { search, popular, latest }
 
 @immutable
 class ExploreCatalogQuery {
@@ -16,7 +18,7 @@ class ExploreCatalogQuery {
   });
 
   final String sourceId;
-  final SourceMangaFetchType fetchType;
+  final ExploreCatalogMode fetchType;
   final String normalizedQuery;
 
   @override
@@ -115,15 +117,24 @@ class ExploreCatalogRequestGate {
 String normalizeExploreQuery(String value) =>
     value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
 
+String _engineMessage(Object error, {required String fallback}) =>
+    error is EngineException ? error.failure.message : fallback;
+
 class ExploreScreen extends StatefulWidget {
   const ExploreScreen({
     super.key,
-    required this.api,
+    required this.catalog,
+    required this.extensions,
+    required this.media,
     required this.engineReady,
+    required this.onOpenManga,
   });
 
-  final SuwayomiApi? api;
+  final CatalogGateway? catalog;
+  final ExtensionsGateway? extensions;
+  final EngineMediaGateway? media;
   final bool engineReady;
+  final Future<void> Function(int mangaId) onOpenManga;
 
   @override
   State<ExploreScreen> createState() => _ExploreScreenState();
@@ -132,9 +143,9 @@ class ExploreScreen extends StatefulWidget {
 class _ExploreScreenState extends State<ExploreScreen> {
   final _queryCtrl = TextEditingController();
   final _catalogGate = ExploreCatalogRequestGate();
-  List<SourceInfo> _sources = [];
-  SourceInfo? _selected;
-  List<MangaSummary> _results = [];
+  List<CatalogSource> _sources = [];
+  CatalogSource? _selected;
+  List<CatalogManga> _results = [];
   bool _loadingSources = false;
   bool _loadingCatalog = false;
   bool _loadingMore = false;
@@ -147,7 +158,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
   String? _paginationError;
   String _submittedQuery = '';
   _ExploreTab _tab = _ExploreTab.sources;
-  SourceMangaFetchType _fetchType = SourceMangaFetchType.popular;
+  ExploreCatalogMode _fetchType = ExploreCatalogMode.popular;
 
   @override
   void initState() {
@@ -158,12 +169,12 @@ class _ExploreScreenState extends State<ExploreScreen> {
   @override
   void didUpdateWidget(covariant ExploreScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final apiChanged = !identical(widget.api, oldWidget.api);
-    if (!widget.engineReady || widget.api == null) {
+    final gatewayChanged = !identical(widget.catalog, oldWidget.catalog);
+    if (!widget.engineReady || widget.catalog == null) {
       _invalidateEngineState(clearSources: true);
       return;
     }
-    if (!oldWidget.engineReady || apiChanged) {
+    if (!oldWidget.engineReady || gatewayChanged) {
       _invalidateEngineState(clearSources: true);
       _loadSources();
     }
@@ -197,21 +208,20 @@ class _ExploreScreenState extends State<ExploreScreen> {
   }
 
   Future<void> _loadSources({bool propagateError = false}) async {
-    final api = widget.api;
-    if (!mounted || api == null || !widget.engineReady) return;
+    final catalog = widget.catalog;
+    if (!mounted || catalog == null || !widget.engineReady) return;
     final generation = ++_sourcesGeneration;
     setState(() {
       _loadingSources = true;
       _sourcesError = null;
     });
     try {
-      final sources = await api.listSources();
-      final usable = sources.where((source) => source.id != '0').toList()
+      final usable = (await catalog.listSources()).toList()
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       if (!mounted ||
           generation != _sourcesGeneration ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.catalog, catalog)) {
         return;
       }
       setState(() {
@@ -222,11 +232,14 @@ class _ExploreScreenState extends State<ExploreScreen> {
       if (!mounted ||
           generation != _sourcesGeneration ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.catalog, catalog)) {
         return;
       }
       setState(() {
-        _sourcesError = '$error';
+        _sourcesError = _engineMessage(
+          error,
+          fallback: 'Não foi possível carregar as fontes.',
+        );
         _loadingSources = false;
       });
       if (propagateError) {
@@ -238,11 +251,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
   /// Call after extension install/uninstall so Explore sources stay fresh.
   Future<void> refreshSources() => _loadSources(propagateError: true);
 
-  Future<void> _openSource(SourceInfo source) async {
+  Future<void> _openSource(CatalogSource source) async {
     setState(() {
       _selected = source;
       _catalogOpen = true;
-      _fetchType = SourceMangaFetchType.popular;
+      _fetchType = ExploreCatalogMode.popular;
       _queryCtrl.clear();
       _submittedQuery = '';
       _catalogError = null;
@@ -252,17 +265,17 @@ class _ExploreScreenState extends State<ExploreScreen> {
   }
 
   Future<void> _loadCatalog({required bool reset}) async {
-    final api = widget.api;
+    final catalog = widget.catalog;
     final source = _selected;
-    if (api == null || source == null || !widget.engineReady) return;
+    if (catalog == null || source == null || !widget.engineReady) return;
     if (!reset && (_loadingMore || !_hasNextPage)) return;
     late final String query;
-    late final SourceMangaFetchType type;
+    late final ExploreCatalogMode type;
     late final ExploreCatalogQuery catalogQuery;
     if (reset) {
       query = _queryCtrl.text.trim();
       final normalizedQuery = normalizeExploreQuery(query);
-      type = normalizedQuery.isEmpty ? _fetchType : SourceMangaFetchType.search;
+      type = normalizedQuery.isEmpty ? _fetchType : ExploreCatalogMode.search;
       catalogQuery = ExploreCatalogQuery(
         sourceId: source.id,
         fetchType: type,
@@ -298,22 +311,32 @@ class _ExploreScreenState extends State<ExploreScreen> {
       });
     }
     try {
-      final result = await api.fetchSourceManga(
-        sourceId: source.id,
-        type: type,
-        query: type == SourceMangaFetchType.search ? query : null,
-        page: requestedPage,
-      );
+      final result = switch (type) {
+        ExploreCatalogMode.search => catalog.search(
+          sourceId: source.id,
+          query: query,
+          page: requestedPage,
+        ),
+        ExploreCatalogMode.popular => catalog.popular(
+          sourceId: source.id,
+          page: requestedPage,
+        ),
+        ExploreCatalogMode.latest => catalog.latest(
+          sourceId: source.id,
+          page: requestedPage,
+        ),
+      };
+      final page = await result;
       if (!mounted ||
           !_catalogGate.accepts(request) ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.catalog, catalog)) {
         return;
       }
       setState(() {
-        _results = reset ? result.items : [..._results, ...result.items];
-        _page = requestedPage;
-        _hasNextPage = result.hasNextPage;
+        _results = reset ? page.items : [..._results, ...page.items];
+        _page = page.page;
+        _hasNextPage = page.hasNextPage;
         _loadingCatalog = false;
         _loadingMore = false;
         if (reset) {
@@ -326,14 +349,20 @@ class _ExploreScreenState extends State<ExploreScreen> {
       if (!mounted ||
           !_catalogGate.accepts(request) ||
           !widget.engineReady ||
-          !identical(widget.api, api)) {
+          !identical(widget.catalog, catalog)) {
         return;
       }
       setState(() {
         if (reset) {
-          _catalogError = '$error';
+          _catalogError = _engineMessage(
+            error,
+            fallback: 'Não foi possível carregar este catálogo.',
+          );
         } else {
-          _paginationError = '$error';
+          _paginationError = _engineMessage(
+            error,
+            fallback: 'Não foi possível carregar mais títulos.',
+          );
         }
         _loadingCatalog = false;
         _loadingMore = false;
@@ -343,17 +372,25 @@ class _ExploreScreenState extends State<ExploreScreen> {
     }
   }
 
-  void _openManga(MangaSummary manga) {
-    final api = widget.api;
-    if (api == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => MangaDetailScreen(api: api, mangaId: manga.id),
-      ),
-    );
+  Future<void> _openManga(CatalogManga manga) async {
+    try {
+      await widget.onOpenManga(manga.id);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _engineMessage(
+              error,
+              fallback: 'Não foi possível abrir este título.',
+            ),
+          ),
+        ),
+      );
+    }
   }
 
-  bool _catalogTypeSelected(SourceMangaFetchType type) {
+  bool _catalogTypeSelected(ExploreCatalogMode type) {
     final active = _catalogGate.activeQuery;
     return active != null &&
         active.sourceId == _selected?.id &&
@@ -380,13 +417,13 @@ class _ExploreScreenState extends State<ExploreScreen> {
   Widget _tabBody() => switch (_tab) {
     _ExploreTab.sources => _sourcesBody(),
     _ExploreTab.extensions => ExtensionsScreen(
-      api: widget.api,
+      gateway: widget.extensions,
       engineReady: widget.engineReady,
       embedded: true,
       onSourcesChanged: refreshSources,
     ),
     _ExploreTab.repositories => ExtensionsScreen(
-      api: widget.api,
+      gateway: widget.extensions,
       engineReady: widget.engineReady,
       embedded: true,
       repositoriesOnly: true,
@@ -407,11 +444,11 @@ class _ExploreScreenState extends State<ExploreScreen> {
       return const _ExplorePlaceholder(
         title: 'Fontes indisponíveis',
         phase:
-            'Inicie o Suwayomi em Servidor e Motor para carregar fontes reais.',
+            'Os recursos de leitura precisam estar disponíveis para carregar fontes.',
       );
     }
     if (_catalogOpen && _selected != null) return _catalogBody();
-    final languages = _sources.map((source) => source.lang).toSet();
+    final languages = _sources.map((source) => source.language).toSet();
     return RefreshIndicator(
       onRefresh: _loadSources,
       child: ListView(
@@ -487,7 +524,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   final source = _sources[index];
                   return _SourceCard(
                     source: source,
-                    iconUrl: widget.api?.absoluteUrl(source.iconUrl),
+                    media: widget.media,
                     onTap: () => _openSource(source),
                   );
                 },
@@ -539,20 +576,20 @@ class _ExploreScreenState extends State<ExploreScreen> {
               const SizedBox(width: 14),
               _CatalogChip(
                 label: 'Popular',
-                selected: _catalogTypeSelected(SourceMangaFetchType.popular),
+                selected: _catalogTypeSelected(ExploreCatalogMode.popular),
                 onTap: () {
                   _queryCtrl.clear();
-                  setState(() => _fetchType = SourceMangaFetchType.popular);
+                  setState(() => _fetchType = ExploreCatalogMode.popular);
                   _loadCatalog(reset: true);
                 },
               ),
               const SizedBox(width: 5),
               _CatalogChip(
                 label: 'Recentes',
-                selected: _catalogTypeSelected(SourceMangaFetchType.latest),
+                selected: _catalogTypeSelected(ExploreCatalogMode.latest),
                 onTap: () {
                   _queryCtrl.clear();
-                  setState(() => _fetchType = SourceMangaFetchType.latest);
+                  setState(() => _fetchType = ExploreCatalogMode.latest);
                   _loadCatalog(reset: true);
                 },
               ),
@@ -680,9 +717,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                               final manga = _results[index];
                               return _CatalogCard(
                                 manga: manga,
-                                imageUrl: widget.api?.absoluteUrl(
-                                  manga.thumbnailUrl,
-                                ),
+                                media: widget.media,
                                 onTap: () => _openManga(manga),
                               );
                             },
@@ -801,11 +836,11 @@ class _MetricCard extends StatelessWidget {
 class _SourceCard extends StatelessWidget {
   const _SourceCard({
     required this.source,
-    required this.iconUrl,
+    required this.media,
     required this.onTap,
   });
-  final SourceInfo source;
-  final String? iconUrl;
+  final CatalogSource source;
+  final EngineMediaGateway? media;
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => YomuSectionCard(
@@ -817,7 +852,7 @@ class _SourceCard extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
-            _SourceLogo(source: source, iconUrl: iconUrl),
+            _SourceLogo(source: source, media: media),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -836,7 +871,7 @@ class _SourceCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    '${source.lang.toUpperCase()} · Extensão · Suwayomi',
+                    '${source.language.toUpperCase()} · Extensão · motor interno',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -860,9 +895,9 @@ class _SourceCard extends StatelessWidget {
 }
 
 class _SourceLogo extends StatelessWidget {
-  const _SourceLogo({required this.source, required this.iconUrl});
-  final SourceInfo source;
-  final String? iconUrl;
+  const _SourceLogo({required this.source, required this.media});
+  final CatalogSource source;
+  final EngineMediaGateway? media;
   @override
   Widget build(BuildContext context) {
     final fallback = Container(
@@ -882,15 +917,16 @@ class _SourceLogo extends StatelessWidget {
         ),
       ),
     );
-    if (iconUrl == null || iconUrl!.isEmpty) return fallback;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Image.network(
-        iconUrl!,
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: EngineMediaImage(
+        reference: source.icon,
+        media: media,
         width: 44,
         height: 44,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => fallback,
+        borderRadius: BorderRadius.circular(12),
+        fallback: fallback,
       ),
     );
   }
@@ -935,11 +971,11 @@ class _CatalogChip extends StatelessWidget {
 class _CatalogCard extends StatelessWidget {
   const _CatalogCard({
     required this.manga,
-    required this.imageUrl,
+    required this.media,
     required this.onTap,
   });
-  final MangaSummary manga;
-  final String? imageUrl;
+  final CatalogManga manga;
+  final EngineMediaGateway? media;
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => InkWell(
@@ -954,28 +990,20 @@ class _CatalogCard extends StatelessWidget {
             child: Container(
               width: double.infinity,
               color: YomuTokens.surface2,
-              child: imageUrl == null || imageUrl!.isEmpty
-                  ? Center(
-                      child: Text(
-                        manga.title.isEmpty ? '?' : manga.title.substring(0, 1),
-                        style: const TextStyle(
-                          color: YomuTokens.textMuted,
-                          fontSize: 28,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    )
-                  : Image.network(
-                      imageUrl!,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const Center(
-                        child: YomuIcon(
-                          YomuIcons.bookOpen,
-                          size: 24,
-                          color: YomuTokens.textSubtle,
-                        ),
-                      ),
+              child: EngineMediaImage(
+                reference: manga.thumbnail,
+                media: media,
+                fallback: Center(
+                  child: Text(
+                    manga.title.isEmpty ? '?' : manga.title.substring(0, 1),
+                    style: const TextStyle(
+                      color: YomuTokens.textMuted,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
                     ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),

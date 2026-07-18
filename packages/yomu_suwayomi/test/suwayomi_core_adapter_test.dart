@@ -52,7 +52,7 @@ void main() {
         description: 'Descrição',
         author: 'Autora',
         artist: 'Artista',
-        status: 'ONGOING',
+        status: ReadingPublicationStatus.ongoing,
         thumbnail: details.thumbnail,
         sourceId: 'source-7',
         inLibrary: true,
@@ -78,6 +78,7 @@ void main() {
             'name': 'Capítulo 11',
             'chapterNumber': 11.5,
             'pageCount': 20,
+            'sourceOrder': 4,
             'scanlator': 'Yomu Scan',
             'lastPageRead': 3,
             'isDownloaded': true,
@@ -96,6 +97,7 @@ void main() {
                 'name': 'Capítulo 11',
                 'chapterNumber': 11.5,
                 'pageCount': 20,
+                'sourceOrder': 4,
                 'scanlator': 'Yomu Scan',
                 'lastPageRead': 3,
                 'isRead': false,
@@ -124,6 +126,7 @@ void main() {
         name: 'Capítulo 11',
         chapterNumber: 11.5,
         pageCount: 20,
+        readingOrder: 4,
         scanlator: 'Yomu Scan',
         lastPageRead: 3,
         isDownloaded: true,
@@ -132,6 +135,53 @@ void main() {
     ]);
     expect(chapter, chapters.single);
   });
+
+  test(
+    'refreshes chapters explicitly before falling back to stored data',
+    () async {
+      final operations = <String>[];
+      final adapter = _adapter((request) async {
+        final query = _graphqlBody(request)['query'] as String;
+        if (query.contains('fetchMangaAndChapters')) {
+          operations.add('refresh');
+          return _graphqlResponse({
+            'fetchMangaAndChapters': {
+              'manga': {'id': 9, 'title': 'Yomu'},
+              'chapters': <Object?>[],
+            },
+          });
+        }
+        operations.add('list');
+        return _graphqlResponse({
+          'manga': {
+            'chapters': {
+              'nodes': [
+                {
+                  'id': 12,
+                  'name': 'Capítulo 12',
+                  'chapterNumber': 12.0,
+                  'pageCount': 18,
+                  'sourceOrder': 5,
+                  'scanlator': 'Yomu Scan',
+                  'lastPageRead': 0,
+                  'isRead': false,
+                  'isDownloaded': false,
+                  'mangaId': 9,
+                },
+              ],
+              'totalCount': 1,
+            },
+          },
+        });
+      });
+
+      final chapters = await adapter.refreshChapters(9);
+
+      expect(operations, ['refresh', 'list']);
+      expect(chapters.single.readingOrder, 5);
+      expect(chapters.single.id, 12);
+    },
+  );
 
   test('maps chapter pages to opaque relative media references', () async {
     var mediaRequested = false;
@@ -198,24 +248,30 @@ void main() {
     expect(variables, {'id': 11, 'page': 8, 'isRead': true});
   });
 
-  test('filters source id zero and maps paged catalog search', () async {
-    Map<String, dynamic>? searchVariables;
+  test('maps sources and paged search, popular, and latest catalogs', () async {
+    final catalogVariables = <Map<String, dynamic>>[];
     final adapter = _adapter((request) async {
       final body = _graphqlBody(request);
       final query = body['query'] as String;
       if (query.contains('fetchSourceManga')) {
-        searchVariables = body['variables'] as Map<String, dynamic>;
+        final variables = body['variables'] as Map<String, dynamic>;
+        catalogVariables.add(variables);
+        final type = variables['type'] as String;
         return _graphqlResponse({
           'fetchSourceManga': {
             'mangas': [
               {
-                'id': 41,
-                'title': 'Resultado Yomu',
+                'id': switch (type) {
+                  'SEARCH' => 41,
+                  'POPULAR' => 42,
+                  _ => 43,
+                },
+                'title': type,
                 'thumbnailUrl': 'https://cdn.example/cover.jpg',
                 'inLibrary': true,
               },
             ],
-            'hasNextPage': false,
+            'hasNextPage': type != 'POPULAR',
           },
         });
       }
@@ -223,7 +279,12 @@ void main() {
         'sources': {
           'nodes': [
             {'id': '0', 'name': 'Local source', 'lang': 'all'},
-            {'id': 'source-1', 'name': 'Fonte Yomu', 'lang': 'pt-BR'},
+            {
+              'id': 'source-1',
+              'name': 'Fonte Yomu',
+              'lang': 'pt-BR',
+              'iconUrl': '/api/v1/source/source-1/icon',
+            },
           ],
           'totalCount': 2,
         },
@@ -231,25 +292,35 @@ void main() {
     });
 
     final sources = await adapter.listSources();
-    final results = await adapter.search(
+    final search = await adapter.search(
       sourceId: 'source-1',
       query: 'yomu',
       page: 3,
     );
+    final popular = await adapter.popular(sourceId: 'source-1', page: 4);
+    final latest = await adapter.latest(sourceId: 'source-1', page: 5);
 
-    expect(sources, const [
-      CatalogSource(id: 'source-1', name: 'Fonte Yomu', language: 'pt-BR'),
+    expect(sources, hasLength(1));
+    expect(sources.single.id, 'source-1');
+    expect(sources.single.icon, isA<MediaReference>());
+    expect(sources.single.icon.toString(), isNot(contains('/api/v1/')));
+    expect(search.page, 3);
+    expect(search.hasNextPage, isTrue);
+    expect(search.items.single.id, 41);
+    expect(search.items.single.title, 'SEARCH');
+    expect(search.items.single.inLibrary, isTrue);
+    expect(search.items.single.thumbnail, isA<MediaReference>());
+    expect(popular.page, 4);
+    expect(popular.hasNextPage, isFalse);
+    expect(popular.items.single.id, 42);
+    expect(latest.page, 5);
+    expect(latest.hasNextPage, isTrue);
+    expect(latest.items.single.id, 43);
+    expect(catalogVariables, [
+      {'source': 'source-1', 'type': 'SEARCH', 'q': 'yomu', 'page': 3},
+      {'source': 'source-1', 'type': 'POPULAR', 'q': null, 'page': 4},
+      {'source': 'source-1', 'type': 'LATEST', 'q': null, 'page': 5},
     ]);
-    expect(results.single.id, 41);
-    expect(results.single.title, 'Resultado Yomu');
-    expect(results.single.inLibrary, isTrue);
-    expect(results.single.thumbnail, isA<MediaReference>());
-    expect(searchVariables, {
-      'source': 'source-1',
-      'type': 'SEARCH',
-      'q': 'yomu',
-      'page': 3,
-    });
   });
 
   test('external media uses the SSRF-safe seam with a 25 MiB cap', () async {

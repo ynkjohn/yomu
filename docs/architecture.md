@@ -60,10 +60,18 @@ external redirects are revalidated by the pinned-IP SSRF-safe fetcher. Provider
 exceptions cross the HTTP boundary only as sanitized `upstream_error` 502
 responses. Source id `0` is filtered inside the adapter.
 
-Opening details and continuing a chapter in the desktop UI still use the
-legacy API only inside the desktop composition root. Home, details, reader,
-catalog UI, downloads, extensions and Maya remain later migration slices; R4
-does not move data ownership or change SQLite schema v5.
+R5 moves the remaining read-only desktop consumers to the same boundary.
+`HomeScreen`, `MangaDetailScreen`, `ExploreScreen` and `ExtensionsScreen`
+receive only Yomu gateways and models. Search, popular and latest catalogs
+share a normalized `CatalogPage` with explicit pagination and `hasNextPage`;
+source icons, covers and extension identities remain opaque. Desktop media is
+rendered from bounded adapter bytes, never from an engine URL.
+
+Repository trust, the recommended extension and supplier package identifiers
+are private policy of `SuwayomiExtensionsAdapter`. Chapter refresh and the
+temporary reader/download callbacks are composed only by `HomeShell`. The
+reader, progress, downloads and Maya mutation surfaces remain the R6 slice;
+R5 does not move data ownership or change SQLite schema v5.
 
 ## Dual catalog (Source Builder)
 

@@ -1,29 +1,34 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
-import 'manga_detail_screen.dart';
-import 'reader_screen.dart';
+import '../widgets/engine_media_image.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
-    required this.api,
+    required this.library,
+    required this.media,
     required this.engineReady,
     required this.onNavigate,
+    required this.onOpenManga,
+    required this.onContinueReading,
   });
 
-  final SuwayomiApi? api;
+  final LibraryGateway? library;
+  final EngineMediaGateway? media;
   final bool engineReady;
   final ValueChanged<String> onNavigate;
+  final Future<void> Function(LibraryManga manga) onOpenManga;
+  final Future<void> Function(LibraryManga manga) onContinueReading;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  List<MangaSummary> _library = const [];
+  List<LibraryManga> _library = const [];
   bool _loading = false;
   String? _error;
   int _loadGeneration = 0;
@@ -43,26 +48,27 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void didUpdateWidget(covariant HomeScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.engineReady && !oldWidget.engineReady) {
-      _load();
-    } else if (!widget.engineReady && oldWidget.engineReady) {
+    final gatewayChanged = !identical(widget.library, oldWidget.library);
+    if (!widget.engineReady || widget.library == null) {
       _loadGeneration++;
       _loading = false;
       _error = null;
       _library = const [];
+    } else if (!oldWidget.engineReady || gatewayChanged) {
+      _load();
     }
   }
 
   Future<void> _load() async {
-    final api = widget.api;
-    if (api == null || !widget.engineReady) return;
+    final libraryGateway = widget.library;
+    if (libraryGateway == null || !widget.engineReady) return;
     final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final library = await api.listLibrary();
+      final library = await libraryGateway.listLibrary();
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _library = library;
@@ -71,53 +77,54 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (error) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _error = '$error';
+        _error = _engineMessage(
+          error,
+          fallback: 'Não foi possível carregar a biblioteca.',
+        );
         _loading = false;
       });
     }
   }
 
-  void _openDetail(MangaSummary manga) {
-    final api = widget.api;
-    if (api == null) return;
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute<void>(
-            builder: (_) => MangaDetailScreen(api: api, mangaId: manga.id),
-          ),
-        )
-        .then((_) => _load());
-  }
-
-  Future<void> _resume(MangaSummary manga) async {
-    final api = widget.api;
-    final last = manga.lastReadChapter;
-    if (api == null || last == null) {
-      _openDetail(manga);
-      return;
-    }
+  Future<void> _openDetail(LibraryManga manga) async {
     try {
-      var chapters = await api.listMangaChapters(manga.id);
-      if (chapters.isEmpty) chapters = await api.fetchMangaChapters(manga.id);
-      final matching = chapters.where((chapter) => chapter.id == last.id);
-      final chapter = matching.isEmpty ? last : matching.first;
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ReaderScreen(
-            api: api,
-            mangaId: manga.id,
-            mangaTitle: manga.title,
-            chapter: chapter,
-            chapters: chapters.isEmpty ? [chapter] : chapters,
-          ),
-        ),
-      );
-      await _load();
+      await widget.onOpenManga(manga);
+      if (mounted) await _load();
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível retomar a leitura: $error')),
+        SnackBar(
+          content: Text(
+            _engineMessage(
+              error,
+              fallback: 'Não foi possível abrir este título.',
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _resume(LibraryManga manga) async {
+    final last = manga.lastReadChapter;
+    if (last == null) {
+      await _openDetail(manga);
+      return;
+    }
+    try {
+      await widget.onContinueReading(manga);
+      if (mounted) await _load();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _engineMessage(
+              error,
+              fallback: 'Não foi possível retomar a leitura.',
+            ),
+          ),
+        ),
       );
     }
   }
@@ -251,7 +258,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       )
                                     : _ResumeCard(
                                         manga: resume,
-                                        api: widget.api,
+                                        media: widget.media,
                                         onPressed: () => _resume(resume),
                                       ),
                               ),
@@ -311,7 +318,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         width: cardWidth,
                                         child: _MediaCard(
                                           manga: ongoing[index],
-                                          api: widget.api,
+                                          media: widget.media,
                                           onPressed: () =>
                                               _openDetail(ongoing[index]),
                                         ),
@@ -328,7 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           _UpdatesPanel(
                             updates: updates,
                             unreadChapterCount: unreadChapterCount,
-                            api: widget.api,
+                            media: widget.media,
                             onOpen: _openDetail,
                             onSeeAll: () => widget.onNavigate('updates'),
                           ),
@@ -566,12 +573,12 @@ class _EmptyHome extends StatelessWidget {
 class _ResumeCard extends StatelessWidget {
   const _ResumeCard({
     required this.manga,
-    required this.api,
+    required this.media,
     required this.onPressed,
   });
 
-  final MangaSummary manga;
-  final SuwayomiApi? api;
+  final LibraryManga manga;
+  final EngineMediaGateway? media;
   final VoidCallback onPressed;
 
   @override
@@ -595,7 +602,8 @@ class _ResumeCard extends StatelessWidget {
           child: Row(
             children: [
               _Cover(
-                url: api?.absoluteUrl(manga.thumbnailUrl),
+                reference: manga.thumbnail,
+                media: media,
                 width: 66,
                 height: 90,
                 title: manga.title,
@@ -779,12 +787,12 @@ class _HealthRow extends StatelessWidget {
 class _MediaCard extends StatelessWidget {
   const _MediaCard({
     required this.manga,
-    required this.api,
+    required this.media,
     required this.onPressed,
   });
 
-  final MangaSummary manga;
-  final SuwayomiApi? api;
+  final LibraryManga manga;
+  final EngineMediaGateway? media;
   final VoidCallback onPressed;
 
   @override
@@ -800,7 +808,8 @@ class _MediaCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Cover(
-            url: api?.absoluteUrl(manga.thumbnailUrl),
+            reference: manga.thumbnail,
+            media: media,
             title: manga.title,
             radius: 12,
           ),
@@ -839,7 +848,7 @@ class _MediaCard extends StatelessWidget {
   }
 }
 
-int _displayedPageNumber(ChapterInfo chapter) {
+int _displayedPageNumber(LibraryResumePoint chapter) {
   final page = (chapter.lastPageRead ?? 0) + 1;
   final safePage = page < 1 ? 1 : page;
   final total = chapter.pageCount ?? 0;
@@ -850,15 +859,15 @@ class _UpdatesPanel extends StatelessWidget {
   const _UpdatesPanel({
     required this.updates,
     required this.unreadChapterCount,
-    required this.api,
+    required this.media,
     required this.onOpen,
     required this.onSeeAll,
   });
 
-  final List<MangaSummary> updates;
+  final List<LibraryManga> updates;
   final int unreadChapterCount;
-  final SuwayomiApi? api;
-  final ValueChanged<MangaSummary> onOpen;
+  final EngineMediaGateway? media;
+  final ValueChanged<LibraryManga> onOpen;
   final VoidCallback onSeeAll;
 
   @override
@@ -908,7 +917,7 @@ class _UpdatesPanel extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 7),
             child: _UpdateRow(
               manga: manga,
-              api: api,
+              media: media,
               onPressed: () => onOpen(manga),
             ),
           ),
@@ -920,12 +929,12 @@ class _UpdatesPanel extends StatelessWidget {
 class _UpdateRow extends StatelessWidget {
   const _UpdateRow({
     required this.manga,
-    required this.api,
+    required this.media,
     required this.onPressed,
   });
 
-  final MangaSummary manga;
-  final SuwayomiApi? api;
+  final LibraryManga manga;
+  final EngineMediaGateway? media;
   final VoidCallback onPressed;
 
   @override
@@ -944,7 +953,8 @@ class _UpdateRow extends StatelessWidget {
         child: Row(
           children: [
             _Cover(
-              url: api?.absoluteUrl(manga.thumbnailUrl),
+              reference: manga.thumbnail,
+              media: media,
               width: 32,
               height: 43,
               title: manga.title,
@@ -1025,14 +1035,16 @@ class _UnavailableCard extends StatelessWidget {
 
 class _Cover extends StatelessWidget {
   const _Cover({
-    required this.url,
+    required this.reference,
+    required this.media,
     required this.title,
     this.width,
     this.height,
     this.radius = 9,
   });
 
-  final String? url;
+  final MediaReference? reference;
+  final EngineMediaGateway? media;
   final String title;
   final double? width;
   final double? height;
@@ -1040,18 +1052,14 @@ class _Cover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final image = url == null || url!.isEmpty
-        ? _fallback()
-        : ClipRRect(
-            borderRadius: BorderRadius.circular(radius),
-            child: Image.network(
-              url!,
-              width: width,
-              height: height,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => _fallback(),
-            ),
-          );
+    final image = EngineMediaImage(
+      reference: reference,
+      media: media,
+      width: width,
+      height: height,
+      borderRadius: BorderRadius.circular(radius),
+      fallback: _fallback(),
+    );
     if (height != null) {
       return SizedBox(width: width, height: height, child: image);
     }
@@ -1080,3 +1088,6 @@ class _Cover extends StatelessWidget {
     ),
   );
 }
+
+String _engineMessage(Object error, {required String fallback}) =>
+    error is EngineException ? error.failure.message : fallback;

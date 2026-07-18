@@ -57,6 +57,19 @@ final class SuwayomiCoreAdapter
   );
 
   @override
+  Future<List<ReadingChapter>> refreshChapters(int mangaId) => _guard(
+    code: 'engine_chapters_refresh_failed',
+    message: 'Não foi possível atualizar os capítulos.',
+    operation: () async {
+      var chapters = await _api.fetchMangaChapters(mangaId);
+      if (chapters.isEmpty) {
+        chapters = await _api.listMangaChapters(mangaId);
+      }
+      return List<ReadingChapter>.unmodifiable(chapters.map(_mapChapter));
+    },
+  );
+
+  @override
   Future<ReadingChapter?> getChapter(int chapterId) => _guard(
     code: 'engine_chapter_unavailable',
     message: 'Não foi possível carregar o capítulo.',
@@ -115,34 +128,45 @@ final class SuwayomiCoreAdapter
               id: source.id,
               name: source.name,
               language: source.lang,
+              icon: _reference(source.iconUrl),
             ),
           ),
     ),
   );
 
   @override
-  Future<List<CatalogManga>> search({
+  Future<CatalogPage> search({
     required String sourceId,
     required String query,
     int page = 1,
-  }) => _guard(
+  }) => _fetchCatalogPage(
     code: 'engine_catalog_search_failed',
     message: 'Não foi possível pesquisar nesta fonte.',
-    operation: () async => List<CatalogManga>.unmodifiable(
-      (await _api.searchManga(
-        sourceId: sourceId,
-        query: query,
-        page: page,
-      )).map(
-        (manga) => CatalogManga(
-          id: manga.id,
-          title: manga.title,
-          thumbnail: _thumbnail(manga.id, manga.thumbnailUrl),
-          inLibrary: manga.inLibrary,
-        ),
-      ),
-    ),
+    sourceId: sourceId,
+    type: SourceMangaFetchType.search,
+    query: query,
+    page: page,
   );
+
+  @override
+  Future<CatalogPage> popular({required String sourceId, int page = 1}) =>
+      _fetchCatalogPage(
+        code: 'engine_catalog_popular_failed',
+        message: 'Não foi possível carregar os títulos populares.',
+        sourceId: sourceId,
+        type: SourceMangaFetchType.popular,
+        page: page,
+      );
+
+  @override
+  Future<CatalogPage> latest({required String sourceId, int page = 1}) =>
+      _fetchCatalogPage(
+        code: 'engine_catalog_latest_failed',
+        message: 'Não foi possível carregar os lançamentos recentes.',
+        sourceId: sourceId,
+        type: SourceMangaFetchType.latest,
+        page: page,
+      );
 
   @override
   Future<MediaPayload> fetch(
@@ -250,7 +274,7 @@ final class SuwayomiCoreAdapter
       description: manga.description,
       author: manga.author,
       artist: manga.artist,
-      status: manga.status,
+      status: _publicationStatus(manga.status),
       thumbnail: _thumbnail(manga.id, manga.thumbnailUrl),
       sourceId: manga.sourceId,
       inLibrary: manga.inLibrary,
@@ -263,6 +287,7 @@ final class SuwayomiCoreAdapter
       name: chapter.name,
       chapterNumber: chapter.chapterNumber,
       pageCount: chapter.pageCount,
+      readingOrder: chapter.sourceOrder,
       scanlator: chapter.scanlator,
       lastPageRead: chapter.lastPageRead,
       isRead: chapter.isRead,
@@ -274,6 +299,61 @@ final class SuwayomiCoreAdapter
   MediaReference? _thumbnail(int mangaId, String? upstream) {
     if (upstream == null || upstream.trim().isEmpty) return null;
     return _SuwayomiCoreMediaReference('/api/v1/manga/$mangaId/thumbnail');
+  }
+
+  MediaReference? _reference(String? upstream) {
+    final value = upstream?.trim();
+    return value == null || value.isEmpty
+        ? null
+        : _SuwayomiCoreMediaReference(value);
+  }
+
+  Future<CatalogPage> _fetchCatalogPage({
+    required String code,
+    required String message,
+    required String sourceId,
+    required SourceMangaFetchType type,
+    String? query,
+    required int page,
+  }) => _guard(
+    code: code,
+    message: message,
+    operation: () async {
+      final upstream = await _api.fetchSourceManga(
+        sourceId: sourceId,
+        type: type,
+        query: query,
+        page: page,
+      );
+      return CatalogPage(
+        items: upstream.items
+            .map(
+              (manga) => CatalogManga(
+                id: manga.id,
+                title: manga.title,
+                thumbnail: _thumbnail(manga.id, manga.thumbnailUrl),
+                inLibrary: manga.inLibrary,
+              ),
+            )
+            .toList(),
+        page: upstream.page,
+        hasNextPage: upstream.hasNextPage,
+      );
+    },
+  );
+
+  static ReadingPublicationStatus? _publicationStatus(String? upstream) {
+    final value = upstream?.trim().toUpperCase();
+    if (value == null || value.isEmpty) return null;
+    return switch (value) {
+      'ONGOING' => ReadingPublicationStatus.ongoing,
+      'COMPLETED' => ReadingPublicationStatus.completed,
+      'LICENSED' => ReadingPublicationStatus.licensed,
+      'PUBLISHING_FINISHED' => ReadingPublicationStatus.publishingFinished,
+      'CANCELLED' => ReadingPublicationStatus.cancelled,
+      'ON_HIATUS' => ReadingPublicationStatus.onHiatus,
+      _ => ReadingPublicationStatus.unknown,
+    };
   }
 
   Future<T> _guard<T>({

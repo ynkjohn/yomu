@@ -7,27 +7,6 @@ class SuwayomiApi {
 
   final SuwayomiClient client;
 
-  static const keiyoushiIndexUrl =
-      'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json';
-
-  /// jsDelivr rewrite used by some Suwayomi builds after add/sync.
-  static const keiyoushiJsDelivrIndexUrl =
-      'https://cdn.jsdelivr.net/gh/keiyoushi/extensions@repo/index.min.json';
-
-  static const mangaDexPkg = 'eu.kanade.tachiyomi.extension.all.mangadex';
-
-  /// Trusted Keiyoushi store URLs only (exact, not substring name match).
-  static bool isTrustedKeiyoushiStore(ExtensionStoreInfo store) {
-    final url = store.indexUrl.trim();
-    return url == keiyoushiIndexUrl ||
-        url == keiyoushiJsDelivrIndexUrl ||
-        // Server may rewrite to protobuf index while keeping the same host path.
-        url ==
-            'https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.pb' ||
-        url ==
-            'https://cdn.jsdelivr.net/gh/keiyoushi/extensions@repo/index.pb';
-  }
-
   String absoluteUrl(String? pathOrUrl) {
     if (pathOrUrl == null || pathOrUrl.isEmpty) return '';
     if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
@@ -77,30 +56,6 @@ class SuwayomiApi {
             as Map?;
     if (store == null) return null;
     return ExtensionStoreInfo.fromJson(Map<String, dynamic>.from(store));
-  }
-
-  Future<ExtensionStoreInfo?> ensureKeiyoushiStore() async {
-    final stores = await listExtensionStores();
-    final existing = stores.where(isTrustedKeiyoushiStore).toList();
-    if (existing.isNotEmpty) return existing.first;
-    final added = await addExtensionStore(keiyoushiIndexUrl);
-    if (added == null) {
-      throw StateError(
-        'Falha ao adicionar o repositório Keiyoushi (resposta vazia).',
-      );
-    }
-    if (!isTrustedKeiyoushiStore(added)) {
-      // Server may rewrite URL; re-list and accept only trusted hosts.
-      final refreshed = await listExtensionStores();
-      final trusted = refreshed.where(isTrustedKeiyoushiStore).toList();
-      if (trusted.isEmpty) {
-        throw StateError(
-          'Repositório adicionado, mas URL Keiyoushi confiável não encontrada.',
-        );
-      }
-      return trusted.first;
-    }
-    return added;
   }
 
   Future<int> fetchExtensions() async {

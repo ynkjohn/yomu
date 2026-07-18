@@ -108,6 +108,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   SuwayomiApi? _api;
   SuwayomiLibraryAdapter? _libraryAdapter;
   SuwayomiCoreAdapter? _coreAdapter;
+  SuwayomiExtensionsAdapter? _extensionsAdapter;
   SuwayomiEngineReadinessAdapter? _engineReadiness;
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
@@ -289,6 +290,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 );
               },
             );
+            final extensionsAdapter = SuwayomiExtensionsAdapter(readingApi);
             final engineReadiness = SuwayomiEngineReadinessAdapter.fromManager(
               listenedManager,
             );
@@ -355,6 +357,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               _api = SuwayomiApi(liveManager.createClient());
               _libraryAdapter = libraryAdapter;
               _coreAdapter = coreAdapter;
+              _extensionsAdapter = extensionsAdapter;
               _engineReadiness = engineReadiness;
               _maya = liveMaya;
               _mayaProvider = liveMayaProvider;
@@ -395,6 +398,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _api = null;
         _libraryAdapter = null;
         _coreAdapter = null;
+        _extensionsAdapter = null;
         _engineReadiness = null;
         if (!mounted) return;
         final msg = e is YomuAlreadyRunningException
@@ -465,6 +469,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     _manager = null;
     _libraryAdapter = null;
     _coreAdapter = null;
+    _extensionsAdapter = null;
     _engineReadiness = null;
     _db = null;
     await _teardownResources(
@@ -852,15 +857,67 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   }
 
   Future<void> _openLibraryManga(LibraryManga manga) async {
-    final api = _api;
-    if (api == null || !_engineReady) throw _readingUnavailableException;
+    await _openMangaDetails(manga.id);
+  }
+
+  Future<void> _continueLibraryManga(LibraryManga manga) async {
+    final core = _coreAdapter;
+    if (core == null || !_engineReady) throw _readingUnavailableException;
+    final last = manga.lastReadChapter;
+    if (last == null) {
+      await _openLibraryManga(manga);
+      return;
+    }
+    try {
+      final chapters = await core.listChapters(manga.id);
+      final matches = chapters.where((chapter) => chapter.id == last.id);
+      final chapter = matches.isEmpty
+          ? ReadingChapter(
+              id: last.id,
+              name: last.name,
+              lastPageRead: last.lastPageRead,
+              pageCount: last.pageCount,
+              mangaId: manga.id,
+            )
+          : matches.first;
+      await _openReadingChapter(
+        mangaId: manga.id,
+        mangaTitle: manga.title,
+        chapter: chapter,
+        chapters: chapters.isEmpty ? [chapter] : chapters,
+        openSettings: false,
+      );
+    } catch (_) {
+      throw const EngineException(
+        EngineFailure(
+          kind: EngineFailureKind.temporarilyUnavailable,
+          code: 'engine_reader_unavailable',
+          message: 'Não foi possível continuar a leitura.',
+          retryable: true,
+        ),
+      );
+    }
+  }
+
+  Future<void> _openMangaDetails(int mangaId) async {
+    final core = _coreAdapter;
+    if (core == null || !_engineReady) throw _readingUnavailableException;
     try {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => MangaDetailScreen(api: api, mangaId: manga.id),
+          builder: (_) => MangaDetailScreen(
+            details: core,
+            reader: core,
+            catalog: core,
+            media: core,
+            mangaId: mangaId,
+            onOpenChapter: _openReadingChapter,
+            onDownloadChapters: _downloadReadingChapters,
+          ),
         ),
       );
-    } catch (_) {
+    } catch (error) {
+      if (error is EngineException) rethrow;
       throw const EngineException(
         EngineFailure(
           kind: EngineFailureKind.temporarilyUnavailable,
@@ -872,46 +929,53 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _continueLibraryManga(LibraryManga manga) async {
+  Future<void> _openReadingChapter({
+    required int mangaId,
+    required String mangaTitle,
+    required ReadingChapter chapter,
+    required List<ReadingChapter> chapters,
+    required bool openSettings,
+  }) async {
     final api = _api;
     if (api == null || !_engineReady) throw _readingUnavailableException;
-    final last = manga.lastReadChapter;
-    if (last == null) {
-      await _openLibraryManga(manga);
-      return;
-    }
-    try {
-      var chapters = await api.listMangaChapters(manga.id);
-      if (chapters.isEmpty) {
-        chapters = await api.fetchMangaChapters(manga.id);
-      }
-      final matches = chapters.where((chapter) => chapter.id == last.id);
-      final chapter = matches.isEmpty
-          ? ChapterInfo(
-              id: last.id,
-              name: last.name,
-              lastPageRead: last.lastPageRead,
-              mangaId: manga.id,
-            )
-          : matches.first;
-      if (!mounted) return;
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ReaderScreen(
-            api: api,
-            mangaId: manga.id,
-            mangaTitle: manga.title,
-            chapter: chapter,
-            chapters: chapters.isEmpty ? [chapter] : chapters,
-          ),
+    ChapterInfo legacy(ReadingChapter value) => ChapterInfo(
+      id: value.id,
+      name: value.name,
+      chapterNumber: value.chapterNumber,
+      pageCount: value.pageCount,
+      sourceOrder: value.readingOrder,
+      scanlator: value.scanlator,
+      lastPageRead: value.lastPageRead,
+      isRead: value.isRead,
+      isDownloaded: value.isDownloaded,
+      mangaId: value.mangaId,
+    );
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReaderScreen(
+          api: api,
+          mangaId: mangaId,
+          mangaTitle: mangaTitle,
+          chapter: legacy(chapter),
+          chapters: chapters.map(legacy).toList(growable: false),
+          openSettingsOnStart: openSettings,
         ),
-      );
+      ),
+    );
+  }
+
+  Future<void> _downloadReadingChapters(List<int> chapterIds) async {
+    final api = _api;
+    if (api == null || !_engineReady) throw _readingUnavailableException;
+    try {
+      await api.enqueueChapterDownloads(chapterIds);
+      await api.startDownloader();
     } catch (_) {
       throw const EngineException(
         EngineFailure(
           kind: EngineFailureKind.temporarilyUnavailable,
-          code: 'engine_reader_unavailable',
-          message: 'Não foi possível continuar a leitura.',
+          code: 'engine_download_enqueue_failed',
+          message: 'Não foi possível enfileirar o download.',
           retryable: true,
         ),
       );
@@ -954,9 +1018,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
     return switch (_selected) {
       'home' => HomeScreen(
-        api: _api,
+        library: _libraryAdapter,
+        media: _libraryAdapter,
         engineReady: _engineReady,
         onNavigate: (id) => setState(() => _selected = id),
+        onOpenManga: _openLibraryManga,
+        onContinueReading: _continueLibraryManga,
       ),
       'server' => ServerScreen(
         status: _suwayomiStatus,
@@ -1014,7 +1081,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           }
         },
       ),
-      'explore' => ExploreScreen(api: _api, engineReady: _engineReady),
+      'explore' => ExploreScreen(
+        catalog: _coreAdapter,
+        extensions: _extensionsAdapter,
+        media: _coreAdapter,
+        engineReady: _engineReady,
+        onOpenManga: _openMangaDetails,
+      ),
       'library' => LibraryScreen(
         library: _libraryAdapter,
         media: _libraryAdapter,
@@ -1029,13 +1102,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         providerController: _mayaProvider,
         unavailableReason: _mayaUnavailableReason,
         onOpenManga: (id, title) {
-          final api = _api;
-          if (api == null) return;
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => MangaDetailScreen(api: api, mangaId: id),
-            ),
-          );
+          unawaited(_openMangaDetails(id));
         },
       ),
       _ => PlaceholderScreen(

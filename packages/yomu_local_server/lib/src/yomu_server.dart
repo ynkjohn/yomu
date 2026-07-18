@@ -178,7 +178,7 @@ class YomuServer {
           'description': m.description,
           'author': m.author,
           'artist': m.artist,
-          'status': m.status,
+          'status': _legacyPublicationStatus(m.status),
           'thumbnailUrl': m.thumbnail == null
               ? null
               : '/api/v1/manga/${m.id}/thumbnail',
@@ -343,12 +343,12 @@ class YomuServer {
         if (q.isEmpty) {
           return _json({'error': 'missing_q'}, status: 400);
         }
-        final items = await _requireCatalog().search(
+        final page = await _requireCatalog().search(
           sourceId: sourceId,
           query: q,
         );
         return _json({
-          'items': items
+          'items': page.items
               .map(
                 (m) => {
                   'id': m.id,
@@ -508,6 +508,19 @@ class YomuServer {
       EngineReadinessState.temporarilyUnavailable => 'unhealthy',
       EngineReadinessState.actionRequired => 'stopped',
       EngineReadinessState.shuttingDown => 'stopping',
+    };
+  }
+
+  String? _legacyPublicationStatus(ReadingPublicationStatus? status) {
+    return switch (status) {
+      null => null,
+      ReadingPublicationStatus.ongoing => 'ONGOING',
+      ReadingPublicationStatus.completed => 'COMPLETED',
+      ReadingPublicationStatus.licensed => 'LICENSED',
+      ReadingPublicationStatus.publishingFinished => 'PUBLISHING_FINISHED',
+      ReadingPublicationStatus.cancelled => 'CANCELLED',
+      ReadingPublicationStatus.onHiatus => 'ON_HIATUS',
+      ReadingPublicationStatus.unknown => 'UNKNOWN',
     };
   }
 

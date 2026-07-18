@@ -1,22 +1,46 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
-import 'reader_screen.dart';
+import '../widgets/engine_media_image.dart';
+
+typedef OpenReadingChapter =
+    Future<void> Function({
+      required int mangaId,
+      required String mangaTitle,
+      required ReadingChapter chapter,
+      required List<ReadingChapter> chapters,
+      required bool openSettings,
+    });
+
+typedef DownloadReadingChapters = Future<void> Function(List<int> chapterIds);
 
 enum _ChapterFilter { all, unread, downloaded }
+
+String _engineMessage(Object error, {required String fallback}) =>
+    error is EngineException ? error.failure.message : fallback;
 
 class MangaDetailScreen extends StatefulWidget {
   const MangaDetailScreen({
     super.key,
-    required this.api,
+    required this.details,
+    required this.reader,
+    required this.catalog,
+    required this.media,
     required this.mangaId,
+    required this.onOpenChapter,
+    required this.onDownloadChapters,
   });
 
-  final SuwayomiApi api;
+  final MangaDetailsGateway details;
+  final ReaderGateway reader;
+  final CatalogGateway catalog;
+  final EngineMediaGateway media;
   final int mangaId;
+  final OpenReadingChapter onOpenChapter;
+  final DownloadReadingChapters onDownloadChapters;
 
   @override
   State<MangaDetailScreen> createState() => _MangaDetailScreenState();
@@ -31,9 +55,12 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
   String? _error;
   String? _chapterError;
   String? _sourceName;
-  MangaDetails? _manga;
-  List<ChapterInfo> _chapters = [];
+  ReadingMangaDetails? _manga;
+  List<ReadingChapter> _chapters = [];
   _ChapterFilter _filter = _ChapterFilter.all;
+  int _loadGeneration = 0;
+  int _chapterGeneration = 0;
+  int _membershipGeneration = 0;
 
   @override
   void initState() {
@@ -44,43 +71,72 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
 
   @override
   void dispose() {
+    _loadGeneration++;
+    _chapterGeneration++;
+    _membershipGeneration++;
     _chapterQuery.removeListener(_refreshFilter);
     _chapterQuery.dispose();
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant MangaDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.mangaId != oldWidget.mangaId ||
+        !identical(widget.details, oldWidget.details) ||
+        !identical(widget.reader, oldWidget.reader) ||
+        !identical(widget.catalog, oldWidget.catalog)) {
+      _loadGeneration++;
+      _chapterGeneration++;
+      _membershipGeneration++;
+      _manga = null;
+      _chapters = [];
+      _sourceName = null;
+      _busy = false;
+      _load();
+    }
+  }
+
   void _refreshFilter() => setState(() {});
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
+    _membershipGeneration++;
     setState(() {
       _loading = true;
       _error = null;
+      _busy = false;
     });
     try {
-      final details = await widget.api.getManga(widget.mangaId);
-      if (!mounted) return;
+      final details = await widget.details.getManga(widget.mangaId);
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _manga = details;
         _loading = false;
       });
-      unawaited(_resolveSourceName(details.sourceId));
+      unawaited(_resolveSourceName(details.sourceId, generation));
       unawaited(_loadChapters());
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _error = '$error';
+        _error = _engineMessage(
+          error,
+          fallback: 'Não foi possível carregar este título.',
+        );
         _loading = false;
       });
     }
   }
 
-  Future<void> _resolveSourceName(String? sourceId) async {
+  Future<void> _resolveSourceName(String? sourceId, int generation) async {
     if (sourceId == null) return;
     try {
-      final sources = await widget.api.listSources();
+      final sources = await widget.catalog.listSources();
       for (final source in sources) {
         if (source.id == sourceId) {
-          if (mounted) setState(() => _sourceName = source.name);
+          if (mounted && generation == _loadGeneration) {
+            setState(() => _sourceName = source.name);
+          }
           return;
         }
       }
@@ -90,24 +146,25 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
   }
 
   Future<void> _loadChapters() async {
+    final generation = ++_chapterGeneration;
     setState(() {
       _loadingChapters = true;
       _chapterError = null;
     });
     try {
-      var chapters = await widget.api.fetchMangaChapters(widget.mangaId);
-      if (chapters.isEmpty) {
-        chapters = await widget.api.listMangaChapters(widget.mangaId);
-      }
-      if (!mounted) return;
+      final chapters = await widget.reader.refreshChapters(widget.mangaId);
+      if (!mounted || generation != _chapterGeneration) return;
       setState(() {
         _chapters = chapters;
         _loadingChapters = false;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _chapterGeneration) return;
       setState(() {
-        _chapterError = '$error';
+        _chapterError = _engineMessage(
+          error,
+          fallback: 'Não foi possível atualizar os capítulos.',
+        );
         _loadingChapters = false;
       });
     }
@@ -116,10 +173,14 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
   Future<void> _toggleLibrary() async {
     final manga = _manga;
     if (manga == null) return;
+    final generation = ++_membershipGeneration;
     setState(() => _busy = true);
     try {
-      final updated = await widget.api.setInLibrary(manga.id, !manga.inLibrary);
-      if (!mounted) return;
+      final updated = await widget.details.setInLibrary(
+        manga.id,
+        !manga.inLibrary,
+      );
+      if (!mounted || generation != _membershipGeneration) return;
       setState(() => _manga = updated);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -131,21 +192,29 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
         ),
       );
     } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Biblioteca: $error')));
+      if (mounted && generation == _membershipGeneration) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _engineMessage(
+                error,
+                fallback: 'Não foi possível atualizar a biblioteca.',
+              ),
+            ),
+          ),
+        );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && generation == _membershipGeneration) {
+        setState(() => _busy = false);
+      }
     }
   }
 
-  Future<void> _downloadChapter(ChapterInfo chapter) async {
+  Future<void> _downloadChapter(ReadingChapter chapter) async {
     setState(() => _busy = true);
     try {
-      await widget.api.enqueueChapterDownloads([chapter.id]);
-      await widget.api.startDownloader();
+      await widget.onDownloadChapters([chapter.id]);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Download enfileirado: ${chapter.name}')),
@@ -153,9 +222,16 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Download: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _engineMessage(
+                error,
+                fallback: 'Não foi possível enfileirar o download.',
+              ),
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -166,10 +242,9 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     if (_chapters.isEmpty) return;
     setState(() => _busy = true);
     try {
-      await widget.api.enqueueChapterDownloads(
+      await widget.onDownloadChapters(
         _chapters.map((chapter) => chapter.id).toList(),
       );
-      await widget.api.startDownloader();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${_chapters.length} capítulos enfileirados')),
@@ -177,42 +252,57 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Download: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              _engineMessage(
+                error,
+                fallback: 'Não foi possível enfileirar os downloads.',
+              ),
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  void _openChapter(ChapterInfo chapter, {bool openSettings = false}) {
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute<void>(
-            builder: (_) => ReaderScreen(
-              api: widget.api,
-              mangaId: widget.mangaId,
-              mangaTitle: _manga?.title ?? 'Mangá',
-              chapter: chapter,
-              chapters: _chronologicalChapters,
-              openSettingsOnStart: openSettings,
-            ),
+  Future<void> _openChapter(
+    ReadingChapter chapter, {
+    bool openSettings = false,
+  }) async {
+    try {
+      await widget.onOpenChapter(
+        mangaId: widget.mangaId,
+        mangaTitle: _manga?.title ?? 'Mangá',
+        chapter: chapter,
+        chapters: _chronologicalChapters,
+        openSettings: openSettings,
+      );
+      if (mounted) await _load();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _engineMessage(error, fallback: 'Não foi possível abrir o leitor.'),
           ),
-        )
-        .then((_) => _load());
+        ),
+      );
+    }
   }
 
-  /// Canonical reading order: ascending `sourceOrder` (fallback id).
+  /// Canonical reading order: ascending engine order (fallback id).
   /// Reader adjacency must use this list, not the raw API order or UI filter.
-  List<ChapterInfo> get _chronologicalChapters {
-    final list = List<ChapterInfo>.from(_chapters);
-    int order(ChapterInfo chapter) => chapter.sourceOrder ?? chapter.id;
+  List<ReadingChapter> get _chronologicalChapters {
+    final list = List<ReadingChapter>.from(_chapters);
+    int order(ReadingChapter chapter) => chapter.readingOrder ?? chapter.id;
     list.sort((a, b) => order(a).compareTo(order(b)));
     return list;
   }
 
-  ChapterInfo? get _continueChapter {
+  ReadingChapter? get _continueChapter {
     final ordered = _chronologicalChapters;
     for (final chapter in ordered) {
       if (!chapter.isRead && (chapter.lastPageRead ?? 0) > 0) return chapter;
@@ -223,7 +313,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     return ordered.isEmpty ? null : ordered.first;
   }
 
-  List<ChapterInfo> get _filteredChapters {
+  List<ReadingChapter> get _filteredChapters {
     final query = _chapterQuery.text.trim().toLowerCase();
     final filtered = _chapters.where((chapter) {
       if (_filter == _ChapterFilter.unread && chapter.isRead) {
@@ -239,7 +329,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
       return chapter.name.toLowerCase().contains(query) ||
           number.contains(query);
     }).toList();
-    int order(ChapterInfo chapter) => chapter.sourceOrder ?? chapter.id;
+    int order(ReadingChapter chapter) => chapter.readingOrder ?? chapter.id;
     filtered.sort(
       (a, b) => _sortDescending
           ? order(b).compareTo(order(a))
@@ -249,14 +339,15 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
   }
 
   String get _statusLabel {
-    final raw = _manga?.status?.trim();
-    if (raw == null || raw.isEmpty || raw.toUpperCase() == 'UNKNOWN') {
-      return 'Status não informado';
-    }
-    return raw.toLowerCase().replaceFirstMapped(
-      RegExp(r'^.'),
-      (match) => match.group(0)!.toUpperCase(),
-    );
+    return switch (_manga?.status) {
+      ReadingPublicationStatus.ongoing => 'Em publicação',
+      ReadingPublicationStatus.completed => 'Concluído',
+      ReadingPublicationStatus.licensed => 'Licenciado',
+      ReadingPublicationStatus.publishingFinished => 'Publicação encerrada',
+      ReadingPublicationStatus.cancelled => 'Cancelado',
+      ReadingPublicationStatus.onHiatus => 'Em hiato',
+      ReadingPublicationStatus.unknown || null => 'Status não informado',
+    };
   }
 
   @override
@@ -307,7 +398,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     );
   }
 
-  Widget _topbar(MangaDetails manga) => Container(
+  Widget _topbar(ReadingMangaDetails manga) => Container(
     constraints: const BoxConstraints(minHeight: 60),
     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
     decoration: const BoxDecoration(
@@ -362,8 +453,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     ),
   );
 
-  Widget _hero(MangaDetails manga) {
-    final cover = widget.api.absoluteUrl(manga.thumbnailUrl);
+  Widget _hero(ReadingMangaDetails manga) {
     final chapter = _continueChapter;
     final pageCount = chapter?.pageCount ?? 0;
     final page = chapter?.lastPageRead ?? 0;
@@ -395,7 +485,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _cover(cover, manga.title, progressPct),
+            _cover(manga.thumbnail, manga.title, progressPct),
             const SizedBox(width: 24),
             Expanded(
               child: Column(
@@ -436,7 +526,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                   ],
                   const SizedBox(height: 10),
                   Text(
-                    '${_sourceName ?? 'Fonte Suwayomi'}  ·  ${_chapters.length} capítulos  ·  $unread não lidos',
+                    '${_sourceName ?? 'Fonte indisponível'}  ·  ${_chapters.length} capítulos  ·  $unread não lidos',
                     style: const TextStyle(
                       color: YomuTokens.textMuted,
                       fontSize: 11.5,
@@ -501,79 +591,74 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     );
   }
 
-  Widget _cover(String? cover, String title, int progressPct) => SizedBox(
-    width: 164,
-    height: 218,
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          Container(
-            color: YomuTokens.surface3,
-            child: cover == null || cover.isEmpty
-                ? Center(
-                    child: Text(
-                      title.isEmpty ? '?' : title.substring(0, 1),
-                      style: const TextStyle(
-                        color: YomuTokens.textMuted,
-                        fontSize: 42,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  )
-                : Image.network(
-                    cover,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Center(
-                      child: YomuIcon(
-                        YomuIcons.bookOpen,
-                        size: 24,
-                        color: YomuTokens.textSubtle,
-                      ),
+  Widget _cover(MediaReference? cover, String title, int progressPct) =>
+      SizedBox(
+        width: 164,
+        height: 218,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              EngineMediaImage(
+                reference: cover,
+                media: widget.media,
+                fallback: Container(
+                  color: YomuTokens.surface3,
+                  alignment: Alignment.center,
+                  child: Text(
+                    title.isEmpty ? '?' : title.substring(0, 1),
+                    style: const TextStyle(
+                      color: YomuTokens.textMuted,
+                      fontSize: 42,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-          ),
-          if (progressPct > 0)
-            Positioned(
-              left: 10,
-              right: 10,
-              bottom: 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xB806080E),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: LinearProgressIndicator(
-                        value: progressPct / 100,
-                        minHeight: 3,
-                        backgroundColor: const Color(0x2EFFFFFF),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '$progressPct%',
-                      style: const TextStyle(
-                        color: Color(0xFFE8EBF7),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
                 ),
               ),
-            ),
-        ],
-      ),
-    ),
-  );
+              if (progressPct > 0)
+                Positioned(
+                  left: 10,
+                  right: 10,
+                  bottom: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xB806080E),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: LinearProgressIndicator(
+                            value: progressPct / 100,
+                            minHeight: 3,
+                            backgroundColor: const Color(0x2EFFFFFF),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '$progressPct%',
+                          style: const TextStyle(
+                            color: Color(0xFFE8EBF7),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
 
   Widget _checkpoint(
-    ChapterInfo? chapter,
+    ReadingChapter? chapter,
     int progressPct,
     int pageCount,
   ) => Container(
@@ -683,7 +768,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'Progresso real do Suwayomi',
+                          'Progresso sincronizado com o motor interno',
                           style: TextStyle(
                             color: YomuTokens.textSubtle,
                             fontSize: 9.5,
@@ -863,7 +948,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     );
   }
 
-  Widget _chapterRow(ChapterInfo chapter) {
+  Widget _chapterRow(ReadingChapter chapter) {
     final pageCount = chapter.pageCount ?? 0;
     final lastPage = chapter.lastPageRead ?? 0;
     final progress = pageCount > 0 && lastPage > 0
@@ -989,7 +1074,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
             children: [
               _stat('Não lidos', '$unread'),
               _stat('Offline', '$downloaded de ${_chapters.length}'),
-              _stat('Fonte ativa', _sourceName ?? 'Suwayomi'),
+              _stat('Fonte ativa', _sourceName ?? 'Indisponível'),
             ],
           ),
         ),
