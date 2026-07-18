@@ -38,6 +38,7 @@
 | **Motor R1 — contratos mínimos Yomu** | ✅ commit `98ddc91` |
 | **Motor R2 — bundle offline + GPLv2 §3(a)** | ✅ commit `be77c1b` |
 | **Motor R3 — Biblioteca sobre contratos Yomu** | ✅ concluída nesta subfase |
+| **Motor R4 — Core/PWA sobre contratos Yomu** | ✅ concluída nesta subfase |
 
 ## Phases
 
@@ -56,6 +57,7 @@
 | Motor Interno Transparente R1 | ✅ commit `98ddc91` |
 | Motor Interno Transparente R2 | ✅ commit `be77c1b`; schema v5 intacto |
 | Motor Interno Transparente R3 | ✅ Biblioteca sem API/DTO/URL do fornecedor |
+| Motor Interno Transparente R4 | ✅ Core/PWA sem dependência direta do fornecedor |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |

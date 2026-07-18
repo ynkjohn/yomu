@@ -107,6 +107,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   SuwayomiProcessManager? _manager;
   SuwayomiApi? _api;
   SuwayomiLibraryAdapter? _libraryAdapter;
+  SuwayomiCoreAdapter? _coreAdapter;
   SuwayomiEngineReadinessAdapter? _engineReadiness;
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
@@ -270,25 +271,43 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               port: kYomuSuwayomiPort,
             );
 
+            final listenedManager = manager!;
+            final readingApi = SuwayomiApi(listenedManager.createClient());
+            final libraryAdapter = SuwayomiLibraryAdapter(readingApi);
+            final safeExternalMedia = SafeHttpFetch();
+            final coreAdapter = SuwayomiCoreAdapter(
+              readingApi,
+              safeExternalMediaFetch: (uri, {required maxBytes}) async {
+                final result = await safeExternalMedia.get(uri);
+                if (result.body.length > maxBytes) {
+                  throw StateError('body_too_large');
+                }
+                return MediaPayload(
+                  bytes: result.body,
+                  contentType: result.contentType,
+                  statusCode: result.statusCode,
+                );
+              },
+            );
+            final engineReadiness = SuwayomiEngineReadinessAdapter.fromManager(
+              listenedManager,
+            );
+
             final pwaDir = await _resolvePwaDir();
             server = _buildYomuServer(
-              manager: manager!,
               auth: auth!,
               pwaDir: pwaDir,
               lanEnabled: false,
               lanAddresses: const [],
+              libraryAdapter: libraryAdapter,
+              coreAdapter: coreAdapter,
+              engineReadiness: engineReadiness,
             );
             await server!.start();
 
             // Capture a non-null manager for the stream listener. The bootstrap
             // locals are nulled after transfer; the listener must not close over
             // those locals or a later running status will null-check-crash.
-            final listenedManager = manager!;
-            final readingApi = SuwayomiApi(listenedManager.createClient());
-            final libraryAdapter = SuwayomiLibraryAdapter(readingApi);
-            final engineReadiness = SuwayomiEngineReadinessAdapter.fromManager(
-              listenedManager,
-            );
             statusSub = listenedManager.statusStream.listen((s) {
               if (!mounted) return;
               setState(() {
@@ -335,6 +354,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             setState(() {
               _api = SuwayomiApi(liveManager.createClient());
               _libraryAdapter = libraryAdapter;
+              _coreAdapter = coreAdapter;
               _engineReadiness = engineReadiness;
               _maya = liveMaya;
               _mayaProvider = liveMayaProvider;
@@ -374,6 +394,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _mayaUnavailableReason = null;
         _api = null;
         _libraryAdapter = null;
+        _coreAdapter = null;
         _engineReadiness = null;
         if (!mounted) return;
         final msg = e is YomuAlreadyRunningException
@@ -443,6 +464,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     _auth = null;
     _manager = null;
     _libraryAdapter = null;
+    _coreAdapter = null;
     _engineReadiness = null;
     _db = null;
     await _teardownResources(
@@ -461,11 +483,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   }
 
   YomuServer _buildYomuServer({
-    required SuwayomiProcessManager manager,
     required DeviceAuthStore auth,
     required Directory? pwaDir,
     required bool lanEnabled,
     required List<String> lanAddresses,
+    required SuwayomiLibraryAdapter libraryAdapter,
+    required SuwayomiCoreAdapter coreAdapter,
+    required SuwayomiEngineReadinessAdapter engineReadiness,
   }) {
     final port = 8787;
     final origins = lanEnabled
@@ -478,14 +502,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       allowLanCors: lanEnabled,
       allowedOrigins: origins,
       auth: auth,
-      suwayomiStatus: () => manager.status,
-      apiProvider: () {
-        if (_api != null) return _api;
-        if (manager.status.isReady) {
-          return SuwayomiApi(manager.createClient());
-        }
-        return null;
-      },
+      engineReadiness: engineReadiness,
+      library: libraryAdapter,
+      mangaDetails: coreAdapter,
+      reader: coreAdapter,
+      progress: coreAdapter,
+      catalog: coreAdapter,
+      media: coreAdapter,
     );
   }
 
@@ -495,7 +518,16 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       if (_lifecycle.shuttingDown) return;
       final manager = _manager;
       final auth = _auth;
-      if (manager == null || auth == null) return;
+      final libraryAdapter = _libraryAdapter;
+      final coreAdapter = _coreAdapter;
+      final engineReadiness = _engineReadiness;
+      if (manager == null ||
+          auth == null ||
+          libraryAdapter == null ||
+          coreAdapter == null ||
+          engineReadiness == null) {
+        return;
+      }
 
       if (mounted) setState(() => _busyHttp = true);
       try {
@@ -514,11 +546,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           },
           startNew: () async {
             final server = _buildYomuServer(
-              manager: manager,
               auth: auth,
               pwaDir: _pwaDir,
               lanEnabled: lanEnabled,
               lanAddresses: addrs,
+              libraryAdapter: libraryAdapter,
+              coreAdapter: coreAdapter,
+              engineReadiness: engineReadiness,
             );
             try {
               await server.start();

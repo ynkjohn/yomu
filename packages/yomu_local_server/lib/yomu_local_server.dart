@@ -1,4 +1,4 @@
-/// Yomu local/LAN HTTP server (never exposes Suwayomi on LAN).
+/// Yomu local/LAN HTTP server for the product-owned reading boundary.
 library;
 
 export 'src/device_auth.dart';

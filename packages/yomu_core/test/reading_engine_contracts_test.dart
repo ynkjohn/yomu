@@ -83,21 +83,70 @@ void main() {
 
   test('media payload owns a defensive byte copy', () {
     final source = <int>[1, 2, 3];
-    final payload = MediaPayload(bytes: source, contentType: 'image/png');
+    final payload = MediaPayload(
+      bytes: source,
+      contentType: 'image/png',
+      statusCode: 206,
+    );
     source[0] = 9;
 
     expect(payload.bytes, <int>[1, 2, 3]);
     expect(() => payload.bytes[0] = 9, throwsUnsupportedError);
     expect(
       payload,
-      MediaPayload(bytes: const [1, 2, 3], contentType: 'image/png'),
+      MediaPayload(
+        bytes: const [1, 2, 3],
+        contentType: 'image/png',
+        statusCode: 206,
+      ),
     );
+  });
+
+  test('reading and catalog models keep transport identities opaque', () {
+    const cover = _TestMediaReference('cover');
+    const page = _TestMediaReference('page');
+    const manga = ReadingMangaDetails(
+      id: 4,
+      title: 'Detalhes',
+      thumbnail: cover,
+      sourceId: 'source',
+      inLibrary: true,
+    );
+    const chapter = ReadingChapter(
+      id: 8,
+      name: 'Capítulo 8',
+      lastPageRead: 2,
+      mangaId: 4,
+    );
+    final pages = ReadingChapterPages(
+      chapterId: 8,
+      pages: const [page],
+      pageCount: 1,
+      chapterName: chapter.name,
+    );
+    const source = CatalogSource(id: 's', name: 'Fonte', language: 'pt-BR');
+    const result = CatalogManga(
+      id: 4,
+      title: 'Detalhes',
+      thumbnail: cover,
+      inLibrary: true,
+    );
+
+    expect(manga.thumbnail, isA<MediaReference>());
+    expect(pages.pages, const [page]);
+    expect(() => pages.pages.add(page), throwsUnsupportedError);
+    expect(source.language, 'pt-BR');
+    expect(result.thumbnail, cover);
   });
 
   test('external fakes implement each narrow capability', () {
     expect(_TestReadiness(), isA<EngineReadiness>());
     expect(_TestLibraryGateway(), isA<LibraryGateway>());
     expect(_TestMediaGateway(), isA<EngineMediaGateway>());
+    expect(_TestDetailsGateway(), isA<MangaDetailsGateway>());
+    expect(_TestReaderGateway(), isA<ReaderGateway>());
+    expect(_TestProgressGateway(), isA<ReadingProgressGateway>());
+    expect(_TestCatalogGateway(), isA<CatalogGateway>());
   });
 }
 
@@ -136,4 +185,51 @@ final class _TestMediaGateway implements EngineMediaGateway {
   }) async {
     return MediaPayload(bytes: const []);
   }
+}
+
+final class _TestDetailsGateway implements MangaDetailsGateway {
+  @override
+  Future<ReadingMangaDetails> getManga(int mangaId) async =>
+      ReadingMangaDetails(id: mangaId, title: 'Manga');
+
+  @override
+  Future<ReadingMangaDetails> setInLibrary(int mangaId, bool inLibrary) async =>
+      ReadingMangaDetails(id: mangaId, title: 'Manga', inLibrary: inLibrary);
+}
+
+final class _TestReaderGateway implements ReaderGateway {
+  @override
+  Future<ReadingChapter?> getChapter(int chapterId) async => null;
+
+  @override
+  Future<ReadingChapterPages> getPages(int chapterId) async =>
+      ReadingChapterPages(chapterId: chapterId, pages: const []);
+
+  @override
+  Future<List<ReadingChapter>> listChapters(int mangaId) async => const [];
+}
+
+final class _TestProgressGateway implements ReadingProgressGateway {
+  @override
+  Future<ReadingProgressSnapshot> updateProgress({
+    required int chapterId,
+    required int lastPageRead,
+    required bool isRead,
+  }) async => ReadingProgressSnapshot(
+    chapterId: chapterId,
+    lastPageRead: lastPageRead,
+    isRead: isRead,
+  );
+}
+
+final class _TestCatalogGateway implements CatalogGateway {
+  @override
+  Future<List<CatalogSource>> listSources() async => const [];
+
+  @override
+  Future<List<CatalogManga>> search({
+    required String sourceId,
+    required String query,
+    int page = 1,
+  }) async => const [];
 }

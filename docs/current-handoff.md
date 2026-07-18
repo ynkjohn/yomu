@@ -580,3 +580,93 @@ Allowlist nominal de R3:
 `AGENTS.md`, arquivos status-only/EOL, `design_prod/**`, `.playwright-cli/**`,
 `mcps/tasks/tools/**`, builds e artefatos temporários permanecem fora. R4 deve
 começar somente após o commit próprio de R3 e nova revalidação do baseline.
+
+## Checkpoint R4 — Core/PWA sobre contratos Yomu
+
+R4 parte do commit R3 `d7d4938` e migra somente as rotas de leitura do Yomu
+Core/PWA para contratos Yomu. Não altera schema, persistência, ownership,
+portas, bundle, JAR, JRE, SDK ou versões de dependências. O SQLite Yomu
+permanece no schema v5.
+
+Fronteira implementada:
+
+- `yomu_core` passa a possuir modelos e gateways estreitos para detalhes,
+  capítulos/páginas, progresso e catálogo;
+- `SuwayomiCoreAdapter` contém os DTOs e operações GraphQL/REST do fornecedor,
+  incluindo fallback listagem→refresh de capítulos e filtro do source id `0`;
+- referências de capa/página e tickets de mídia permanecem opacos; o Core não
+  recebe URL ou path do engine;
+- `yomu_local_server` remove a dependência direta em `yomu_suwayomi` e recebe
+  somente gateways Yomu;
+- paths, métodos, autenticação e formatos JSON existentes de `/api/v1` são
+  preservados; `engineReady` é a chave de produto e `suwayomiReady`/`suwayomi`
+  permanecem aliases temporários;
+- `EngineException` vira `502` com `error=upstream_error` e mensagem já
+  sanitizada; exceções inesperadas recebem mensagem genérica sem detalhes;
+- mídia relativa do engine recusa redirects e respeita o limite Core de
+  40 MiB; mídia externa usa o fetch SSRF-safe com teto independente de 25 MiB,
+  DNS/IP pinado e revalidação de redirects;
+- `HomeShell` permanece o único composition root e compõe adapters, readiness e
+  fetch externo; nenhuma outra tela desktop foi migrada em R4;
+- a PWA prefere `engineReady` e consulta aliases somente quando a chave Yomu
+  não está presente.
+
+Validação de R4:
+
+- contratos `yomu_core`: 9/9;
+- `SuwayomiCoreAdapter` direcionado: 9/9;
+- `yomu_suwayomi`: 65/65;
+- `yomu_local_server`: 43/43;
+- `yomu_ai`: 62/62;
+- `yomu_storage`: 39/39;
+- desktop completo: 200/200;
+- PWA health, preload e reader races: aprovados;
+- analyzers dos packages afetados, storage/AI, desktop e raiz: limpos;
+- `tool\verify_workspace.ps1`: `ALL CHECKS PASSED`;
+- build Windows Debug aprovado em 21,1 s e contém o módulo PWA novo;
+- `git diff --check` limpo; boundary scans sem fornecedor no Core novo ou no
+  `yomu_local_server`;
+- hash protegido preservado em
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`;
+- reviewer independente: `PASS`, sem achado obrigatório;
+- uma execução Suwayomi concorrente encontrou teardown temporário de diretório
+  já ausente; o teste isolado, a suíte completa 65/65 e o verificador integral
+  passaram em reexecuções subsequentes;
+- nenhum processo do produto ou listener 8787/14567 foi iniciado; prova runtime
+  e evidência visual externa não foram necessárias porque o wire e a estrutura
+  visual foram preservados.
+
+Allowlist nominal de R4:
+
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_mobile_pwa/health_logic.mjs`;
+- `apps/yomu_mobile_pwa/index.html`;
+- `apps/yomu_mobile_pwa/test_health_logic.mjs`;
+- `packages/yomu_core/lib/src/reading_engine/catalog_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/manga_details_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/media_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reader_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reading_models.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reading_progress_gateway.dart`;
+- `packages/yomu_core/lib/yomu_core.dart`;
+- `packages/yomu_core/test/reading_engine_contracts_test.dart`;
+- `packages/yomu_local_server/lib/src/media_ticket_store.dart`;
+- `packages/yomu_local_server/lib/src/yomu_server.dart`;
+- `packages/yomu_local_server/lib/yomu_local_server.dart`;
+- `packages/yomu_local_server/pubspec.yaml`;
+- `packages/yomu_local_server/test/media_ticket_store_test.dart`;
+- `packages/yomu_local_server/test/safe_http_fetch_test.dart`;
+- `packages/yomu_local_server/test/yomu_server_health_test.dart`;
+- `packages/yomu_local_server/test/yomu_server_reading_routes_test.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_core_adapter.dart`;
+- `packages/yomu_suwayomi/lib/yomu_suwayomi.dart`;
+- `packages/yomu_suwayomi/test/suwayomi_core_adapter_test.dart`;
+- `tool/verify_workspace.ps1`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/status.md`.
+
+`AGENTS.md`, arquivos status-only/EOL, `design_prod/**`, `.playwright-cli/**`,
+`mcps/tasks/tools/**`, `pubspec.lock`, builds e artefatos temporários permanecem
+fora. R5 só pode começar após o commit próprio de R4 e nova revalidação do
+baseline.

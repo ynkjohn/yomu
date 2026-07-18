@@ -2,45 +2,45 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:shelf_static/shelf_static.dart';
 import 'package:yomu_core/yomu_core.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
 import 'device_auth.dart';
 import 'json_body_errors.dart';
 import 'media_ticket_store.dart';
-import 'safe_http_fetch.dart';
 
-typedef SuwayomiStatusProvider = SuwayomiStatus Function();
-typedef SuwayomiApiProvider = SuwayomiApi? Function();
-
-/// Yomu local HTTP server: PWA static + authenticated API proxy to Suwayomi.
+/// Yomu local HTTP server: PWA static + authenticated product API.
 ///
 /// Phase 2D: media tickets (no open URL proxy), sanitized LAN health, CORS allowlist.
 class YomuServer {
   YomuServer({
-    required this.suwayomiStatus,
+    required this.engineReadiness,
     required this.auth,
-    this.apiProvider,
+    this.library,
+    this.mangaDetails,
+    this.reader,
+    this.progress,
+    this.catalog,
+    this.media,
     this.pwaDir,
     this.host = '127.0.0.1',
     this.port = 8787,
     this.allowLanCors = false,
     this.allowedOrigins = const [],
     MediaTicketStore? mediaTickets,
-    SafeHttpFetch? safeFetch,
-    http.Client? httpClient,
-  })  : mediaTickets = mediaTickets ?? MediaTicketStore(),
-        safeFetch = safeFetch ?? SafeHttpFetch(),
-        _http = httpClient ?? http.Client();
+  }) : mediaTickets = mediaTickets ?? MediaTicketStore();
 
-  final SuwayomiStatusProvider suwayomiStatus;
+  final EngineReadiness engineReadiness;
   final DeviceAuthStore auth;
-  final SuwayomiApiProvider? apiProvider;
+  final LibraryGateway? library;
+  final MangaDetailsGateway? mangaDetails;
+  final ReaderGateway? reader;
+  final ReadingProgressGateway? progress;
+  final CatalogGateway? catalog;
+  final EngineMediaGateway? media;
   final Directory? pwaDir;
   final String host;
   final int port;
@@ -52,8 +52,6 @@ class YomuServer {
   final List<String> allowedOrigins;
 
   final MediaTicketStore mediaTickets;
-  final SafeHttpFetch safeFetch;
-  final http.Client _http;
 
   HttpServer? _server;
 
@@ -64,8 +62,6 @@ class YomuServer {
     final h = host.toLowerCase();
     return h == '127.0.0.1' || h == 'localhost' || h == '::1';
   }
-
-  SuwayomiApi? get _api => apiProvider?.call();
 
   Handler buildHandler() {
     final router = Router();
@@ -123,106 +119,118 @@ class YomuServer {
     });
 
     // --- Authenticated API ---
-    router.get('/api/v1/me', _auth((req, session) async {
-      return _json({
-        'deviceName': session.deviceName,
-        'createdAt': session.createdAt.toIso8601String(),
-        'expiresAt': session.expiresAt.toIso8601String(),
-      });
-    }));
+    router.get(
+      '/api/v1/me',
+      _auth((req, session) async {
+        return _json({
+          'deviceName': session.deviceName,
+          'createdAt': session.createdAt.toIso8601String(),
+          'expiresAt': session.expiresAt.toIso8601String(),
+        });
+      }),
+    );
 
-    router.post('/api/v1/session/revoke', _auth((req, session) async {
-      await auth.revoke(session.sessionId);
-      return _json({'revoked': true});
-    }));
+    router.post(
+      '/api/v1/session/revoke',
+      _auth((req, session) async {
+        await auth.revoke(session.sessionId);
+        return _json({'revoked': true});
+      }),
+    );
 
-    router.get('/api/v1/library', _auth((req, session) async {
-      final api = _requireApi();
-      final list = await api.listLibrary();
-      return _json({
-        'items': list
-            .map(
-              (m) => {
-                'id': m.id,
-                'title': m.title,
-                'thumbnailUrl': _ticketMediaUrl(
-                  session.sessionId,
-                  m.thumbnailUrl,
-                ),
-                'inLibrary': m.inLibrary,
-                'unreadCount': m.unreadCount,
-                'lastReadChapter': m.lastReadChapter == null
-                    ? null
-                    : {
-                        'id': m.lastReadChapter!.id,
-                        'name': m.lastReadChapter!.name,
-                        'lastPageRead': m.lastReadChapter!.lastPageRead,
-                      },
-              },
-            )
-            .toList(),
-      });
-    }));
+    router.get(
+      '/api/v1/library',
+      _auth((req, session) async {
+        final list = await _requireLibrary().listLibrary();
+        return _json({
+          'items': list
+              .map(
+                (m) => {
+                  'id': m.id,
+                  'title': m.title,
+                  'thumbnailUrl': m.thumbnail == null
+                      ? null
+                      : '/api/v1/manga/${m.id}/thumbnail',
+                  'inLibrary': m.inLibrary,
+                  'unreadCount': m.unreadCount,
+                  'lastReadChapter': m.lastReadChapter == null
+                      ? null
+                      : {
+                          'id': m.lastReadChapter!.id,
+                          'name': m.lastReadChapter!.name,
+                          'lastPageRead': m.lastReadChapter!.lastPageRead,
+                        },
+                },
+              )
+              .toList(),
+        });
+      }),
+    );
 
-    router.get('/api/v1/manga/<id|[0-9]+>', _auth((req, session) async {
-      final id = int.parse(req.params['id']!);
-      final api = _requireApi();
-      final m = await api.getManga(id);
-      return _json({
-        'id': m.id,
-        'title': m.title,
-        'description': m.description,
-        'author': m.author,
-        'artist': m.artist,
-        'status': m.status,
-        'thumbnailUrl': _ticketMediaUrl(session.sessionId, m.thumbnailUrl),
-        'sourceId': m.sourceId,
-        'inLibrary': m.inLibrary,
-      });
-    }));
+    router.get(
+      '/api/v1/manga/<id|[0-9]+>',
+      _auth((req, session) async {
+        final id = int.parse(req.params['id']!);
+        final m = await _requireMangaDetails().getManga(id);
+        return _json({
+          'id': m.id,
+          'title': m.title,
+          'description': m.description,
+          'author': m.author,
+          'artist': m.artist,
+          'status': m.status,
+          'thumbnailUrl': m.thumbnail == null
+              ? null
+              : '/api/v1/manga/${m.id}/thumbnail',
+          'sourceId': m.sourceId,
+          'inLibrary': m.inLibrary,
+        });
+      }),
+    );
 
-    router.post('/api/v1/manga/<id|[0-9]+>/library', _auth((req, session) async {
-      final id = int.parse(req.params['id']!);
-      return _readJsonResponse(req, (body) async {
-        final inLibrary = body['inLibrary'] == true;
-        final api = _requireApi();
-        final m = await api.setInLibrary(id, inLibrary);
-        return _json({'id': m.id, 'inLibrary': m.inLibrary});
-      });
-    }));
+    router.post(
+      '/api/v1/manga/<id|[0-9]+>/library',
+      _auth((req, session) async {
+        final id = int.parse(req.params['id']!);
+        return _readJsonResponse(req, (body) async {
+          final inLibrary = body['inLibrary'] == true;
+          final m = await _requireMangaDetails().setInLibrary(id, inLibrary);
+          return _json({'id': m.id, 'inLibrary': m.inLibrary});
+        });
+      }),
+    );
 
-    router.get('/api/v1/manga/<id|[0-9]+>/chapters', _auth((req, session) async {
-      final id = int.parse(req.params['id']!);
-      final api = _requireApi();
-      var chapters = await api.listMangaChapters(id);
-      if (chapters.isEmpty) {
-        chapters = await api.fetchMangaChapters(id);
-      }
-      return _json({
-        'items': chapters
-            .map(
-              (c) => {
-                'id': c.id,
-                'name': c.name,
-                'chapterNumber': c.chapterNumber,
-                'pageCount': c.pageCount,
-                'lastPageRead': c.lastPageRead,
-                'isRead': c.isRead,
-                'isDownloaded': c.isDownloaded,
-                'scanlator': c.scanlator,
-              },
-            )
-            .toList(),
-      });
-    }));
+    router.get(
+      '/api/v1/manga/<id|[0-9]+>/chapters',
+      _auth((req, session) async {
+        final id = int.parse(req.params['id']!);
+        final chapters = await _requireReader().listChapters(id);
+        return _json({
+          'items': chapters
+              .map(
+                (c) => {
+                  'id': c.id,
+                  'name': c.name,
+                  'chapterNumber': c.chapterNumber,
+                  'pageCount': c.pageCount,
+                  'lastPageRead': c.lastPageRead,
+                  'isRead': c.isRead,
+                  'isDownloaded': c.isDownloaded,
+                  'scanlator': c.scanlator,
+                },
+              )
+              .toList(),
+        });
+      }),
+    );
 
     router.get(
       '/api/v1/chapters/<id|[0-9]+>/pages',
       _auth((req, session) async {
         final id = int.parse(req.params['id']!);
-        final api = _requireApi();
-        final ch = await api.getChapter(id);
-        final pages = await api.fetchChapterPages(id);
+        final chapterReader = _requireReader();
+        final ch = await chapterReader.getChapter(id);
+        final pages = await chapterReader.getPages(id);
         final mangaId = ch?.mangaId;
         return _json({
           'chapterId': pages.chapterId,
@@ -245,106 +253,116 @@ class YomuServer {
     );
 
     // Ticket-only media proxy — never accept raw `u=` absolute URLs from client.
-    router.get('/api/v1/media', _auth((req, session) async {
-      // Reject legacy open-proxy param first (SSRF surface).
-      if (req.url.queryParameters.containsKey('u')) {
-        return _json({'error': 'raw_url_forbidden'}, status: 400);
-      }
-      final ticketId = req.url.queryParameters['t'];
-      if (ticketId == null || ticketId.isEmpty) {
-        return _json({'error': 'missing_ticket'}, status: 400);
-      }
-      final ticket = mediaTickets.resolve(
-        ticketId: ticketId,
-        sessionId: session.sessionId,
-      );
-      if (ticket == null) {
-        return _json({'error': 'invalid_or_expired_ticket'}, status: 404);
-      }
-      return _proxyMediaTarget(ticket.target);
-    }));
+    router.get(
+      '/api/v1/media',
+      _auth((req, session) async {
+        // Reject legacy open-proxy param first (SSRF surface).
+        if (req.url.queryParameters.containsKey('u')) {
+          return _json({'error': 'raw_url_forbidden'}, status: 400);
+        }
+        final ticketId = req.url.queryParameters['t'];
+        if (ticketId == null || ticketId.isEmpty) {
+          return _json({'error': 'missing_ticket'}, status: 400);
+        }
+        final ticket = mediaTickets.resolve(
+          ticketId: ticketId,
+          sessionId: session.sessionId,
+        );
+        if (ticket == null) {
+          return _json({'error': 'invalid_or_expired_ticket'}, status: 404);
+        }
+        return _mediaResponse(ticket.reference);
+      }),
+    );
 
     router.get(
       '/api/v1/chapters/<id|[0-9]+>/pages/<index|[0-9]+>/image',
       _auth((req, session) async {
         final id = int.parse(req.params['id']!);
         final index = int.parse(req.params['index']!);
-        final api = _requireApi();
-        final pages = await api.fetchChapterPages(id);
+        final pages = await _requireReader().getPages(id);
         if (index < 0 || index >= pages.pages.length) {
           return _json({'error': 'page_out_of_range'}, status: 404);
         }
-        return _proxyMediaTarget(pages.pages[index]);
+        return _mediaResponse(pages.pages[index]);
       }),
     );
 
-    router.get('/api/v1/manga/<id|[0-9]+>/thumbnail', _auth((req, session) async {
-      final id = int.parse(req.params['id']!);
-      final api = _requireApi();
-      return _proxyBytes(api.client.baseUrl, '/api/v1/manga/$id/thumbnail');
-    }));
+    router.get(
+      '/api/v1/manga/<id|[0-9]+>/thumbnail',
+      _auth((req, session) async {
+        final id = int.parse(req.params['id']!);
+        final manga = await _requireMangaDetails().getManga(id);
+        final thumbnail = manga.thumbnail;
+        if (thumbnail == null) {
+          return _json({'error': 'media_not_found'}, status: 404);
+        }
+        return _mediaResponse(thumbnail);
+      }),
+    );
 
-    router.put('/api/v1/chapters/<id|[0-9]+>/progress', _auth((req, session) async {
-      final id = int.parse(req.params['id']!);
-      return _readJsonResponse(req, (body) async {
-        final page = body['lastPageRead'];
-        final lastPageRead = page is int ? page : int.tryParse('$page') ?? 0;
-        final isRead = body['isRead'] == true;
-        final api = _requireApi();
-        final ch = await api.updateChapterProgress(
-          chapterId: id,
-          lastPageRead: lastPageRead,
-          isRead: isRead,
+    router.put(
+      '/api/v1/chapters/<id|[0-9]+>/progress',
+      _auth((req, session) async {
+        final id = int.parse(req.params['id']!);
+        return _readJsonResponse(req, (body) async {
+          final page = body['lastPageRead'];
+          final lastPageRead = page is int ? page : int.tryParse('$page') ?? 0;
+          final isRead = body['isRead'] == true;
+          final ch = await _requireProgress().updateProgress(
+            chapterId: id,
+            lastPageRead: lastPageRead,
+            isRead: isRead,
+          );
+          return _json({
+            'id': ch.chapterId,
+            'lastPageRead': ch.lastPageRead,
+            'isRead': ch.isRead,
+          });
+        });
+      }),
+    );
+
+    router.get(
+      '/api/v1/sources',
+      _auth((req, session) async {
+        final sources = await _requireCatalog().listSources();
+        return _json({
+          'items': sources
+              .map((s) => {'id': s.id, 'name': s.name, 'lang': s.language})
+              .toList(),
+        });
+      }),
+    );
+
+    router.get(
+      '/api/v1/sources/<id>/search',
+      _auth((req, session) async {
+        final sourceId = req.params['id']!;
+        final q = req.url.queryParameters['q'] ?? '';
+        if (q.isEmpty) {
+          return _json({'error': 'missing_q'}, status: 400);
+        }
+        final items = await _requireCatalog().search(
+          sourceId: sourceId,
+          query: q,
         );
         return _json({
-          'id': ch.id,
-          'lastPageRead': ch.lastPageRead,
-          'isRead': ch.isRead,
+          'items': items
+              .map(
+                (m) => {
+                  'id': m.id,
+                  'title': m.title,
+                  'thumbnailUrl': m.thumbnail == null
+                      ? null
+                      : '/api/v1/manga/${m.id}/thumbnail',
+                  'inLibrary': m.inLibrary,
+                },
+              )
+              .toList(),
         });
-      });
-    }));
-
-    router.get('/api/v1/sources', _auth((req, session) async {
-      final api = _requireApi();
-      final sources = await api.listSources();
-      return _json({
-        'items': sources
-            .where((s) => s.id != '0')
-            .map(
-              (s) => {
-                'id': s.id,
-                'name': s.name,
-                'lang': s.lang,
-              },
-            )
-            .toList(),
-      });
-    }));
-
-    router.get('/api/v1/sources/<id>/search', _auth((req, session) async {
-      final sourceId = req.params['id']!;
-      final q = req.url.queryParameters['q'] ?? '';
-      if (q.isEmpty) {
-        return _json({'error': 'missing_q'}, status: 400);
-      }
-      final api = _requireApi();
-      final items = await api.searchManga(sourceId: sourceId, query: q);
-      return _json({
-        'items': items
-            .map(
-              (m) => {
-                'id': m.id,
-                'title': m.title,
-                'thumbnailUrl': _ticketMediaUrl(
-                  session.sessionId,
-                  m.thumbnailUrl,
-                ),
-                'inLibrary': m.inLibrary,
-              },
-            )
-            .toList(),
-      });
-    }));
+      }),
+    );
 
     Handler handler = router.call;
 
@@ -364,26 +382,29 @@ class YomuServer {
   }
 
   Map<String, Object?> _healthPayload() {
+    final readiness = engineReadiness.current;
     if (!isLoopbackOnly) {
       // LAN: minimal disclosure.
-      final s = suwayomiStatus();
       return {
         'yomu': 'ok',
-        'suwayomiReady': s.isReady,
+        'engineReady': readiness.isReady,
+        // Compatibility alias for already-installed PWAs.
+        'suwayomiReady': readiness.isReady,
         'timestamp': DateTime.now().toIso8601String(),
       };
     }
     // Loopback: fuller diagnostics for desktop tooling.
     return {
       'yomu': 'ok',
-      'bind': {
-        'host': host,
-        'port': boundPort ?? port,
-        'loopbackOnly': true,
+      'bind': {'host': host, 'port': boundPort ?? port, 'loopbackOnly': true},
+      'readingEngine': {
+        'state': readiness.state.name,
+        'isReady': readiness.isReady,
       },
+      // Compatibility alias for desktop tooling on the existing v1 wire.
       'suwayomi': {
-        'state': suwayomiStatus().state.name,
-        'isReady': suwayomiStatus().isReady,
+        'state': _legacyEngineState(readiness.state),
+        'isReady': readiness.isReady,
       },
       'auth': {
         'sessions': auth.sessions.length,
@@ -419,119 +440,75 @@ class YomuServer {
         return await inner(request, session);
       } on DeviceAuthException {
         return _json({'error': 'auth_unavailable'}, status: 503);
-      } catch (e) {
-        return _json(
-          {'error': 'upstream_error', 'message': e.toString()},
-          status: 502,
-        );
+      } on EngineException catch (error) {
+        return _json({
+          'error': 'upstream_error',
+          'message': error.failure.message,
+        }, status: 502);
+      } catch (_) {
+        return _json({
+          'error': 'upstream_error',
+          'message': 'Recursos de leitura temporariamente indisponíveis.',
+        }, status: 502);
       }
     };
   }
 
-  SuwayomiApi _requireApi() {
-    final api = _api;
-    if (api == null) {
-      throw StateError('Suwayomi API unavailable (motor stopped?)');
-    }
-    return api;
-  }
+  LibraryGateway _requireLibrary() => _requireCapability(library);
 
-  String? _ticketMediaUrl(String sessionId, String? path) {
-    if (path == null || path.isEmpty) return null;
-    final m = RegExp(r'/api/v1/manga/(\d+)/thumbnail').firstMatch(path);
-    if (m != null) {
-      return '/api/v1/manga/${m.group(1)}/thumbnail';
-    }
-    return _issueTicketUrl(sessionId, path);
-  }
+  MangaDetailsGateway _requireMangaDetails() =>
+      _requireCapability(mangaDetails);
 
-  String _issueTicketUrl(String sessionId, String target) {
-    final id = mediaTickets.issue(
-      sessionId: sessionId,
-      target: target,
+  ReaderGateway _requireReader() => _requireCapability(reader);
+
+  ReadingProgressGateway _requireProgress() => _requireCapability(progress);
+
+  CatalogGateway _requireCatalog() => _requireCapability(catalog);
+
+  EngineMediaGateway _requireMedia() => _requireCapability(media);
+
+  T _requireCapability<T>(T? capability) {
+    if (capability != null) return capability;
+    throw const EngineException(
+      EngineFailure(
+        kind: EngineFailureKind.temporarilyUnavailable,
+        code: 'engine_temporarily_unavailable',
+        message: 'Recursos de leitura temporariamente indisponíveis.',
+        retryable: true,
+      ),
     );
+  }
+
+  String _issueTicketUrl(String sessionId, MediaReference reference) {
+    final id = mediaTickets.issue(sessionId: sessionId, reference: reference);
     return '/api/v1/media?t=$id';
   }
 
-  Future<Response> _proxyMediaTarget(String pathOrUrl) async {
-    final api = _api;
-    if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
-      try {
-        final r = await safeFetch.get(Uri.parse(pathOrUrl));
-        return Response(
-          r.statusCode,
-          body: r.body,
-          headers: {
-            'content-type': r.contentType,
-            'cache-control': 'private, max-age=3600',
-          },
-        );
-      } catch (e) {
-        return _json(
-          {'error': 'external_fetch_blocked', 'message': e.toString()},
-          status: 502,
-        );
-      }
-    }
-    final cleaned = pathOrUrl.startsWith('/') ? pathOrUrl : '/$pathOrUrl';
-    if (!cleaned.startsWith('/api/v1/') || cleaned.contains('..')) {
-      return _json({'error': 'invalid_media_path'}, status: 400);
-    }
-    if (api == null) {
-      return _json({'error': 'upstream_unavailable'}, status: 502);
-    }
-    return _proxyBytes(api.client.baseUrl, cleaned);
+  Future<Response> _mediaResponse(MediaReference reference) async {
+    final payload = await _requireMedia().fetch(
+      reference,
+      maxBytes: 40 * 1024 * 1024,
+    );
+    return Response(
+      payload.statusCode,
+      body: payload.bytes,
+      headers: {
+        'content-type': payload.contentType ?? 'application/octet-stream',
+        'cache-control': 'private, max-age=3600',
+      },
+    );
   }
 
-  Future<Response> _proxyBytes(String baseUrl, String path) async {
-    final base = baseUrl.endsWith('/')
-        ? baseUrl.substring(0, baseUrl.length - 1)
-        : baseUrl;
-    final p = path.startsWith('/') ? path : '/$path';
-    // Loopback Suwayomi only — not an open proxy.
-    final uri = Uri.parse('$base$p');
-    if (!_isLoopbackUri(uri)) {
-      return _json({'error': 'upstream_not_loopback'}, status: 500);
-    }
-    // No automatic redirects (package:http follows them by default).
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-    try {
-      final req = await client.getUrl(uri).timeout(const Duration(seconds: 30));
-      req.followRedirects = false;
-      final res = await req.close().timeout(const Duration(seconds: 60));
-      if (res.isRedirect ||
-          res.statusCode == 301 ||
-          res.statusCode == 302 ||
-          res.statusCode == 303 ||
-          res.statusCode == 307 ||
-          res.statusCode == 308) {
-        await res.drain<void>();
-        return _json({'error': 'upstream_redirect_refused'}, status: 502);
-      }
-      final builder = BytesBuilder(copy: false);
-      await for (final chunk in res) {
-        builder.add(chunk);
-        if (builder.length > 40 * 1024 * 1024) {
-          return _json({'error': 'upstream_body_too_large'}, status: 502);
-        }
-      }
-      final ct = res.headers.contentType?.mimeType ?? 'application/octet-stream';
-      return Response(
-        res.statusCode,
-        body: builder.takeBytes(),
-        headers: {
-          'content-type': ct,
-          'cache-control': 'private, max-age=3600',
-        },
-      );
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  bool _isLoopbackUri(Uri uri) {
-    final h = uri.host.toLowerCase();
-    return h == '127.0.0.1' || h == 'localhost' || h == '::1';
+  String _legacyEngineState(EngineReadinessState state) {
+    return switch (state) {
+      EngineReadinessState.initializing ||
+      EngineReadinessState.starting ||
+      EngineReadinessState.recovering => 'starting',
+      EngineReadinessState.ready => 'running',
+      EngineReadinessState.temporarilyUnavailable => 'unhealthy',
+      EngineReadinessState.actionRequired => 'stopped',
+      EngineReadinessState.shuttingDown => 'stopping',
+    };
   }
 
   static const int maxJsonBodyBytes = 32 * 1024;
@@ -628,11 +605,14 @@ class YomuServer {
         }
         final origin = request.headers['origin'];
         final allowedOrigin =
-            (origin != null && origin.isNotEmpty && allowedOrigins.contains(origin))
-                ? origin
-                : null;
+            (origin != null &&
+                origin.isNotEmpty &&
+                allowedOrigins.contains(origin))
+            ? origin
+            : null;
         final headers = <String, String>{
-          if (allowedOrigin != null) 'Access-Control-Allow-Origin': allowedOrigin,
+          if (allowedOrigin != null)
+            'Access-Control-Allow-Origin': allowedOrigin,
           if (allowedOrigin != null)
             'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
           if (allowedOrigin != null)
@@ -660,6 +640,6 @@ class YomuServer {
   }
 
   void close() {
-    _http.close();
+    // Reserved for future server-owned resources.
   }
 }

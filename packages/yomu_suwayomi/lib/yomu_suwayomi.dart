@@ -1,6 +1,7 @@
 /// Suwayomi-Server process management and HTTP client.
 library;
 
+export 'src/adapter/suwayomi_core_adapter.dart';
 export 'src/adapter/suwayomi_engine_readiness.dart';
 export 'src/adapter/suwayomi_library_adapter.dart';
 export 'src/client/suwayomi_api.dart';

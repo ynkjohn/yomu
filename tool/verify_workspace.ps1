@@ -51,7 +51,9 @@ dart test
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
-Write-Host '== PWA preload + reader race logic =='
+Write-Host '== PWA health + preload + reader race logic =='
+node apps/yomu_mobile_pwa/test_health_logic.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node apps/yomu_mobile_pwa/test_preload_logic.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node apps/yomu_mobile_pwa/test_reader_races.mjs

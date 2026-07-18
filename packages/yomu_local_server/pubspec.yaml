@@ -1,5 +1,5 @@
 name: yomu_local_server
-description: Local/LAN API server, auth, and Suwayomi proxy.
+description: Local/LAN Yomu API server, auth, and media tickets.
 version: 0.1.0
 publish_to: none
 
@@ -14,8 +14,6 @@ dependencies:
     path: ../yomu_core
   yomu_storage:
     path: ../yomu_storage
-  yomu_suwayomi:
-    path: ../yomu_suwayomi
   shelf: ^1.4.2
   shelf_router: ^1.1.4
   shelf_static: ^1.1.3

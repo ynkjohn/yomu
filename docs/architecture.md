@@ -46,10 +46,24 @@ process status to sanitized product readiness and represents covers with an
 opaque `MediaReference`. Cover bytes are fetched only through the adapter with
 an explicit 8 MiB consumer limit and redirects disabled.
 
-Opening details and continuing a chapter still use the legacy API only inside
-the desktop composition root. Details, reader, Home, catalog, downloads, Maya
-and Yomu Core/PWA remain later migration slices; R3 does not expand their
-contracts or move any data ownership.
+R4 migrates Yomu Core/PWA reading routes to Yomu-owned details, reader,
+progress, catalog and media gateways. `yomu_local_server` no longer imports or
+depends directly on `yomu_suwayomi`; `HomeShell` composes the concrete adapter,
+the existing library/readiness adapters and the SSRF-safe external fetcher.
+The authenticated `/api/v1` paths, methods and JSON remain compatible.
+`engineReady` is the product readiness key while `suwayomiReady` and
+`suwayomi` remain temporary wire aliases.
+
+Chapter-page and ticket identities stay opaque. Core media responses are
+bounded at 40 MiB, external media at 25 MiB, relative redirects are refused and
+external redirects are revalidated by the pinned-IP SSRF-safe fetcher. Provider
+exceptions cross the HTTP boundary only as sanitized `upstream_error` 502
+responses. Source id `0` is filtered inside the adapter.
+
+Opening details and continuing a chapter in the desktop UI still use the
+legacy API only inside the desktop composition root. Home, details, reader,
+catalog UI, downloads, extensions and Maya remain later migration slices; R4
+does not move data ownership or change SQLite schema v5.
 
 ## Dual catalog (Source Builder)
 

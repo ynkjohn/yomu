@@ -24,29 +24,33 @@ void main() {
   });
 
   test(
-      'blocks special IPv6 ranges (ULA, docs, multicast, unspecified, 6to4, 100::/64)',
-      () {
-    expect(SafeHttpFetch.isBlockedIp(InternetAddress('fd12:3456::1')), isTrue);
-    expect(
-      SafeHttpFetch.isBlockedIp(InternetAddress('2001:db8::1')),
-      isTrue,
-    );
-    expect(SafeHttpFetch.isBlockedIp(InternetAddress('ff02::1')), isTrue);
-    expect(SafeHttpFetch.isBlockedIp(InternetAddress('::')), isTrue);
-    // 6to4 2002::/16
-    expect(
-      SafeHttpFetch.isBlockedIp(InternetAddress('2002:cb00:7100::1')),
-      isTrue,
-    );
-    // discard-only 100::/64 (RFC 6666)
-    expect(SafeHttpFetch.isBlockedIp(InternetAddress('100::1')), isTrue);
-    expect(SafeHttpFetch.isBlockedIp(InternetAddress('100:0:0:0::abcd')), isTrue);
-    // public Google DNS-ish
-    expect(
-      SafeHttpFetch.isBlockedIp(InternetAddress('2001:4860:4860::8888')),
-      isFalse,
-    );
-  });
+    'blocks special IPv6 ranges (ULA, docs, multicast, unspecified, 6to4, 100::/64)',
+    () {
+      expect(
+        SafeHttpFetch.isBlockedIp(InternetAddress('fd12:3456::1')),
+        isTrue,
+      );
+      expect(SafeHttpFetch.isBlockedIp(InternetAddress('2001:db8::1')), isTrue);
+      expect(SafeHttpFetch.isBlockedIp(InternetAddress('ff02::1')), isTrue);
+      expect(SafeHttpFetch.isBlockedIp(InternetAddress('::')), isTrue);
+      // 6to4 2002::/16
+      expect(
+        SafeHttpFetch.isBlockedIp(InternetAddress('2002:cb00:7100::1')),
+        isTrue,
+      );
+      // discard-only 100::/64 (RFC 6666)
+      expect(SafeHttpFetch.isBlockedIp(InternetAddress('100::1')), isTrue);
+      expect(
+        SafeHttpFetch.isBlockedIp(InternetAddress('100:0:0:0::abcd')),
+        isTrue,
+      );
+      // public Google DNS-ish
+      expect(
+        SafeHttpFetch.isBlockedIp(InternetAddress('2001:4860:4860::8888')),
+        isFalse,
+      );
+    },
+  );
 
   test('blocks localhost host literal', () {
     expect(SafeHttpFetch.isBlockedHostLiteral('localhost'), isTrue);
@@ -54,38 +58,42 @@ void main() {
     expect(SafeHttpFetch.isBlockedHostLiteral('::ffff:127.0.0.1'), isTrue);
   });
 
-  test('production constructor blocks private DNS; test seam is not barrel API',
-      () async {
-    final prod = SafeHttpFetch(
-      lookup: (h) async => [InternetAddress('127.0.0.1')],
-    );
-    await expectLater(
-      prod.assertHostAllowed('pin-test.yomu.invalid'),
-      throwsA(isA<StateError>()),
-    );
-    // Test seam: import src file (not package barrel).
-    final seam = safeHttpFetchForTest(
-      lookup: (h) async => [InternetAddress.loopbackIPv4],
-      blockIp: (_) => false,
-      blockHost: (h) => h.isEmpty,
-    );
-    final addrs = await seam.resolveSafeAddresses('pin-test.yomu.invalid');
-    expect(addrs.single.isLoopback, isTrue);
-  });
+  test(
+    'production constructor blocks private DNS; test seam is not barrel API',
+    () async {
+      final prod = SafeHttpFetch(
+        lookup: (h) async => [InternetAddress('127.0.0.1')],
+      );
+      await expectLater(
+        prod.assertHostAllowed('pin-test.yomu.invalid'),
+        throwsA(isA<StateError>()),
+      );
+      // Test seam: import src file (not package barrel).
+      final seam = safeHttpFetchForTest(
+        lookup: (h) async => [InternetAddress.loopbackIPv4],
+        blockIp: (_) => false,
+        blockHost: (h) => h.isEmpty,
+      );
+      final addrs = await seam.resolveSafeAddresses('pin-test.yomu.invalid');
+      expect(addrs.single.isLoopback, isTrue);
+    },
+  );
 
-  test('assertHostAllowed rejects DNS answer with private IP (rebinding)',
-      () async {
-    final fetch = SafeHttpFetch(
-      lookup: (host) async => [
-        InternetAddress('8.8.8.8'),
-        InternetAddress('10.0.0.1'),
-      ],
-    );
-    await expectLater(
-      fetch.assertHostAllowed('evil.example'),
-      throwsA(isA<StateError>()),
-    );
-  });
+  test(
+    'assertHostAllowed rejects DNS answer with private IP (rebinding)',
+    () async {
+      final fetch = SafeHttpFetch(
+        lookup: (host) async => [
+          InternetAddress('8.8.8.8'),
+          InternetAddress('10.0.0.1'),
+        ],
+      );
+      await expectLater(
+        fetch.assertHostAllowed('evil.example'),
+        throwsA(isA<StateError>()),
+      );
+    },
+  );
 
   test('assertHostAllowed rejects pure loopback DNS', () async {
     final fetch = SafeHttpFetch(
@@ -135,9 +143,7 @@ void main() {
         blockHost: (h) => h.isEmpty,
       );
 
-      final result = await fetch.get(
-        Uri.parse('http://$host:$port/go'),
-      );
+      final result = await fetch.get(Uri.parse('http://$host:$port/go'));
       expect(result.statusCode, 200);
       expect(utf8.decode(result.body), 'pinned-ok');
       expect(hits, greaterThanOrEqualTo(2));
@@ -170,8 +176,32 @@ void main() {
     await expectLater(
       fetch.get(Uri.parse('http://$host:$port/loop')),
       throwsA(
-        predicate((e) => e is StateError && '$e'.contains('too_many_redirects')),
+        predicate(
+          (e) => e is StateError && '$e'.contains('too_many_redirects'),
+        ),
       ),
+    );
+  });
+
+  test('external fetch enforces its independent byte limit', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(server.close);
+    server.listen((req) async {
+      req.response.add(const [1, 2, 3, 4]);
+      await req.response.close();
+    });
+
+    const host = 'bytes-test.yomu.invalid';
+    final fetch = safeHttpFetchForTest(
+      maxBytes: 3,
+      lookup: (_) async => [InternetAddress.loopbackIPv4],
+      blockIp: (_) => false,
+      blockHost: (value) => value.isEmpty,
+    );
+
+    await expectLater(
+      fetch.get(Uri.parse('http://$host:${server.port}/large')),
+      throwsA(predicate((error) => '$error'.contains('body_too_large'))),
     );
   });
 }

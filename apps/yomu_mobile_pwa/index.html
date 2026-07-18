@@ -238,6 +238,7 @@ import {
   applyBlobIfCurrent,
   shouldApply,
 } from './reader_race_logic.mjs';
+import { engineReadyFromHealth } from './health_logic.mjs';
 
   const TOKEN_KEY = 'yomu_token';
   const DEVICE_KEY = 'yomu_device_name';
@@ -756,10 +757,8 @@ import {
     if (!h) {
       return '<span class="pill bad">Yomu: offline</span>';
     }
-    // LAN health is sanitized: suwayomiReady only
-    const ready =
-      h.suwayomiReady === true ||
-      (h.suwayomi && (h.suwayomi.isReady || h.suwayomi.state === 'running'));
+    // LAN health is sanitized. Prefer the Yomu-owned key; keep the v1 alias.
+    const ready = engineReadyFromHealth(h);
     return (
       '<span class="pill ok">Yomu: ok</span>' +
       '<span class="pill ' +

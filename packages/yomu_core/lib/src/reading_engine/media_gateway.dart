@@ -8,22 +8,30 @@ abstract interface class MediaReference {}
 
 /// Bounded media result returned by the engine adapter.
 final class MediaPayload {
-  MediaPayload({required List<int> bytes, this.contentType})
-    : bytes = Uint8List.fromList(bytes).asUnmodifiableView();
+  MediaPayload({
+    required List<int> bytes,
+    this.contentType,
+    this.statusCode = 200,
+  }) : bytes = Uint8List.fromList(bytes).asUnmodifiableView();
 
   final Uint8List bytes;
   final String? contentType;
+  final int statusCode;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is MediaPayload &&
           const ListEquality<int>().equals(bytes, other.bytes) &&
-          contentType == other.contentType;
+          contentType == other.contentType &&
+          statusCode == other.statusCode;
 
   @override
-  int get hashCode =>
-      Object.hash(const ListEquality<int>().hash(bytes), contentType);
+  int get hashCode => Object.hash(
+    const ListEquality<int>().hash(bytes),
+    contentType,
+    statusCode,
+  );
 }
 
 abstract interface class EngineMediaGateway {

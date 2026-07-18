@@ -1,20 +1,22 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:yomu_core/yomu_core.dart';
+
 /// Opaque media ticket issued only by Yomu Core (never client-supplied URLs).
 class MediaTicket {
   MediaTicket({
     required this.id,
     required this.sessionId,
-    required this.target,
+    required this.reference,
     required this.expiresAt,
   });
 
   final String id;
   final String sessionId;
 
-  /// Suwayomi-relative path (`/api/v1/...`) or absolute http(s) from Suwayomi.
-  final String target;
+  /// Opaque reading-engine media identity. Transport details never enter Core.
+  final MediaReference reference;
   final DateTime expiresAt;
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
@@ -22,35 +24,27 @@ class MediaTicket {
 
 /// In-memory session-bound media tickets (short-lived).
 class MediaTicketStore {
-  MediaTicketStore({
-    this.ttl = const Duration(hours: 2),
-    Random? random,
-  }) : _rng = random ?? Random.secure();
+  MediaTicketStore({this.ttl = const Duration(hours: 2), Random? random})
+    : _rng = random ?? Random.secure();
 
   final Duration ttl;
   final Random _rng;
   final _tickets = <String, MediaTicket>{};
 
-  /// Create a ticket for [sessionId] pointing at [target].
-  String issue({
-    required String sessionId,
-    required String target,
-  }) {
+  /// Create a ticket for [sessionId] pointing at [reference].
+  String issue({required String sessionId, required MediaReference reference}) {
     _purge();
     final id = _randomId();
     _tickets[id] = MediaTicket(
       id: id,
       sessionId: sessionId,
-      target: target,
+      reference: reference,
       expiresAt: DateTime.now().add(ttl),
     );
     return id;
   }
 
-  MediaTicket? resolve({
-    required String ticketId,
-    required String sessionId,
-  }) {
+  MediaTicket? resolve({required String ticketId, required String sessionId}) {
     _purge();
     final t = _tickets[ticketId];
     if (t == null || t.isExpired) return null;
