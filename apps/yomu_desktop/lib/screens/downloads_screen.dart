@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 class _DownloadsSkeleton extends StatefulWidget {
@@ -84,11 +84,11 @@ class _DownloadSkeletonBlock extends StatelessWidget {
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({
     super.key,
-    required this.api,
+    required this.downloads,
     required this.engineReady,
   });
 
-  final SuwayomiApi? api;
+  final DownloadsGateway? downloads;
   final bool engineReady;
 
   @override
@@ -98,7 +98,7 @@ class DownloadsScreen extends StatefulWidget {
 class _DownloadsScreenState extends State<DownloadsScreen> {
   bool _loading = false;
   String? _error;
-  DownloadStatusInfo? _status;
+  DownloadsSnapshot? _status;
   Timer? _poll;
   bool _actionBusy = false;
 
@@ -146,8 +146,8 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   bool _loadBusy = false;
 
   Future<void> _load({bool silent = false}) async {
-    final api = widget.api;
-    if (api == null || !widget.engineReady) return;
+    final downloads = widget.downloads;
+    if (downloads == null || !widget.engineReady) return;
     if (_loadBusy && silent) return;
     final generation = ++_loadGeneration;
     _loadBusy = true;
@@ -158,7 +158,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       });
     }
     try {
-      final st = await api.getDownloadStatus();
+      final st = await downloads.getStatus();
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _status = st;
@@ -167,7 +167,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     } catch (e) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        if (!silent) _error = e.toString();
+        if (!silent) {
+          _error = _sanitizedEngineMessage(
+            e,
+            fallback: 'Não foi possível carregar os downloads.',
+          );
+        }
         _loading = false;
       });
     } finally {
@@ -189,17 +194,24 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       ).showSnackBar(SnackBar(content: Text(label)));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Erro: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _sanitizedEngineMessage(
+              e,
+              fallback: 'Não foi possível concluir esta ação.',
+            ),
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _actionBusy = false);
     }
   }
 
   Future<void> _confirmClear() async {
-    final api = widget.api;
-    if (api == null || _actionBusy) return;
+    final downloads = widget.downloads;
+    if (downloads == null || _actionBusy) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -221,7 +233,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       ),
     );
     if (confirmed == true && mounted) {
-      await _run(api.clearDownloader, 'Fila limpa');
+      await _run(downloads.clear, 'Fila limpa');
     }
   }
 
@@ -231,18 +243,16 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       return const AsyncBody(
         isLoading: false,
         isEmpty: true,
-        emptyMessage: 'Inicie o Suwayomi para gerenciar downloads.',
+        emptyMessage: 'Os recursos de leitura estão indisponíveis.',
         child: SizedBox.shrink(),
       );
     }
 
     final st = _status;
-    final queue = st?.queue ?? const <DownloadQueueItem>[];
-    final running = (st?.state ?? '').toUpperCase().contains('START');
-    final activeCount = queue
-        .where((i) => i.state.toUpperCase().contains('DOWNLOAD'))
-        .length;
-    final actionsEnabled = widget.api != null && !_actionBusy;
+    final queue = st?.queue ?? const <EngineDownloadItem>[];
+    final running = st?.managerState == DownloadManagerState.running;
+    final activeCount = st?.activeCount ?? 0;
+    final actionsEnabled = widget.downloads != null && !_actionBusy;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -258,10 +268,9 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   ? _pillButton(
                       label: 'Pausar tudo',
                       onTap: actionsEnabled
-                          ? () => _run(
-                              () => widget.api!.stopDownloader(),
-                              'Downloader pausado',
-                            )
+                          ? () => _run(() async {
+                              await widget.downloads!.pause();
+                            }, 'Downloader pausado')
                           : null,
                     )
                   : _pillButton(
@@ -269,7 +278,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                       accent: true,
                       onTap: actionsEnabled
                           ? () => _run(
-                              () => widget.api!.startDownloader(),
+                              widget.downloads!.resume,
                               'Downloader iniciado',
                             )
                           : null,
@@ -478,11 +487,11 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     );
   }
 
-  Widget _queueCard(DownloadQueueItem item) {
-    final title = item.manga?.title ?? 'Obra';
-    final ch = item.chapter?.name ?? 'Capítulo';
+  Widget _queueCard(EngineDownloadItem item) {
+    final title = item.mangaTitle ?? 'Obra';
+    final ch = item.chapterName ?? 'Capítulo';
     final prog = item.progress;
-    final isError = item.state.toUpperCase().contains('ERROR');
+    final isError = item.state == DownloadItemState.failed;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
@@ -517,7 +526,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
               Text(
                 [
                   if (prog != null) '${(prog * 100).toStringAsFixed(0)}%',
-                  item.state.toLowerCase(),
+                  _downloadStateLabel(item.state),
                 ].join(' · '),
                 style: TextStyle(
                   fontSize: 11,
@@ -525,7 +534,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   fontWeight: isError ? FontWeight.w700 : FontWeight.w400,
                 ),
               ),
-              if (item.chapter != null) ...[
+              if (item.chapterId != null) ...[
                 const SizedBox(width: 8),
                 YomuIconButton(
                   tooltip: 'Remover da fila',
@@ -534,8 +543,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                   iconSize: 14,
                   color: YomuTokens.textSubtle,
                   onTap: () => _run(
-                    () =>
-                        widget.api!.dequeueChapterDownloads([item.chapter!.id]),
+                    () => widget.downloads!.dequeueChapters([item.chapterId!]),
                     'Removido da fila',
                   ),
                 ),
@@ -637,4 +645,15 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       ),
     );
   }
+}
+
+String _downloadStateLabel(DownloadItemState state) => switch (state) {
+  DownloadItemState.queued => 'na fila',
+  DownloadItemState.downloading => 'baixando',
+  DownloadItemState.completed => 'concluído',
+  DownloadItemState.failed => 'falhou',
+};
+
+String _sanitizedEngineMessage(Object error, {required String fallback}) {
+  return error is EngineException ? error.failure.message : fallback;
 }

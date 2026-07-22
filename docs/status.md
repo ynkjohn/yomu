@@ -40,6 +40,7 @@
 | **Motor R3 — Biblioteca sobre contratos Yomu** | ✅ concluída nesta subfase |
 | **Motor R4 — Core/PWA sobre contratos Yomu** | ✅ concluída nesta subfase |
 | **Motor R5 — detalhes e descoberta desktop** | ✅ reviewer independente PASS |
+| **Motor R6 — reader, progresso, downloads e Maya** | ✅ reviewer independente PASS |
 
 ## Phases
 
@@ -60,6 +61,7 @@
 | Motor Interno Transparente R3 | ✅ Biblioteca sem API/DTO/URL do fornecedor |
 | Motor Interno Transparente R4 | ✅ Core/PWA sem dependência direta do fornecedor |
 | Motor Interno Transparente R5 | ✅ detalhes e descoberta migrados; reviewer PASS |
+| Motor Interno Transparente R6 | ✅ mutações migradas e drains preparados; reviewer PASS |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |
@@ -84,6 +86,39 @@
   `tool\verify_workspace.ps1` com `ALL CHECKS PASSED` e build Windows Debug
   aprovado em 19,2 s.
 - Reviewer independente: `PASS`, sem achado obrigatório ou bloqueante.
+
+## R6 — Reader, progresso, downloads e Maya
+
+- Baseline committed: R5 `22f7b0c`; upstream e remoto permanecem em
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, sem push.
+- `ReaderScreen`, `DownloadsScreen` e as ações de download de
+  `MangaDetailScreen` recebem somente gateways/modelos Yomu. Páginas e mídia
+  permanecem opacas; o reader usa bytes limitados a 40 MiB e não usa URL do
+  motor nem `Image.network`.
+- `ReadingProgressCoordinator` é compartilhado entre desktop e Core, preserva
+  página 0-based, high-water monotônico, coalescing, A→B→A, save final,
+  bloqueio de novas mutações e drain limitado. Resposta ou erro antigo não
+  regressa um save mais novo.
+- `DownloadsGateway` normaliza estados em enums Yomu e preserva enqueue,
+  dequeue, pause, resume e clear. Consulta de atividade e pause/ack ficam
+  disponíveis para o shutdown de R7; estado upstream desconhecido falha
+  fechado dentro do adapter.
+- `ReadingEngineMayaPort` substitui o bridge nomeado pelo fornecedor e usa
+  apenas `LibraryGateway` e `DownloadsGateway`. `MayaLibraryPort`,
+  `MayaService`, `ActionProposal` e confirmação explícita permanecem
+  invariantes.
+- `HomeShell` continua o único composition root. O abort durante a abertura do
+  provider Maya fecha o controller antes de Auth/SQLite. Lifecycle automático,
+  supervisor e ativação dos drains continuam reservados para R7.
+- Gates atuais: core 14/14, Suwayomi 86/86, local server 43/43, AI 66/66,
+  storage 39/39, desktop 200/200, PWA aprovada, analyzers limpos e
+  `tool\verify_workspace.ps1` com `ALL CHECKS PASSED` em 216,1 s; build
+  Windows Debug aprovado em 39,3 s.
+- O primeiro review retornou `FAIL` para o callback transitório de MangaDetail
+  e um provider não fechado no abort precoce. Ambos foram corrigidos, os gates
+  afetados passaram 58/58 e a nova revisão independente retornou `PASS`.
+- Schema SQLite permanece v5; não houve mudança de ownership, dependência,
+  SDK, JAR/JRE, porta ou wire `/api/v1`.
 
 ## P2C — provider personalizado OpenAI-compatible (commit local `eda852b`)
 

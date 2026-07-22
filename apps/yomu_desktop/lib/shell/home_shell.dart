@@ -24,7 +24,6 @@ import '../screens/server_screen.dart';
 import '../services/maya_credential_store.dart';
 import '../services/maya_provider_adapters.dart';
 import '../services/maya_provider_controller.dart';
-import '../services/suwayomi_maya_port.dart';
 import '../services/windows_maya_credential_store.dart';
 import '../services/windows_window_chrome.dart';
 import 'desktop_lifecycle.dart';
@@ -108,8 +107,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   SuwayomiApi? _api;
   SuwayomiLibraryAdapter? _libraryAdapter;
   SuwayomiCoreAdapter? _coreAdapter;
+  SuwayomiDownloadsAdapter? _downloadsAdapter;
   SuwayomiExtensionsAdapter? _extensionsAdapter;
   SuwayomiEngineReadinessAdapter? _engineReadiness;
+  ReadingProgressCoordinator? _progressCoordinator;
   YomuServer? _yomuServer;
   DeviceAuthStore? _auth;
   MayaService? _maya;
@@ -174,6 +175,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       YomuDatabase? db;
       DeviceAuthStore? auth;
       MayaService? maya;
+      MayaStore? mayaStore;
       MayaProviderController? mayaProvider;
       SuwayomiProcessManager? manager;
       YomuServer? server;
@@ -205,6 +207,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               legacyFile: File(p.join(root.path, 'device_sessions.json')),
             );
             if (!mounted || _lifecycle.shuttingDown) {
+              await mayaProvider?.close();
               await _teardownResources(auth: auth, db: db);
               auth = null;
               db = null;
@@ -213,7 +216,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             }
           },
           initializeOptionalMaya: () async {
-            final store = await MayaStore.open(
+            mayaStore = await MayaStore.open(
               database: db!,
               legacyFile: File(p.join(root.path, 'maya_chat.json')),
             );
@@ -223,21 +226,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             } catch (_) {
               credentialStore = const UnavailableMayaCredentialStore();
             }
-            mayaProvider = await OptionalMayaProviderBootstrap.open(
-              () => MayaProviderController.open(
+            mayaProvider = await OptionalMayaProviderBootstrap.openAbortable(
+              initialize: () => MayaProviderController.open(
                 database: db!,
                 credentialStore: credentialStore,
                 adapterFactory: createMayaProviderAdapterFactory(),
               ),
-            );
-            maya = MayaService(
-              store: store,
-              libraryPort: SuwayomiMayaPort(() => _api),
-              llm: mayaProvider,
+              shouldAbort: () => !mounted || _lifecycle.shuttingDown,
+              dispose: (provider) => provider.close(),
             );
             if (!mounted || _lifecycle.shuttingDown) {
-              await _teardownResources(maya: maya, auth: auth, db: db);
-              maya = null;
+              await _teardownResources(auth: auth, db: db);
+              mayaStore = null;
               mayaProvider = null;
               auth = null;
               db = null;
@@ -247,6 +247,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           },
           onMayaUnavailable: (_) {
             maya = null;
+            mayaStore = null;
             mayaUnavailableReason = _mayaLegacyMigrationBlockedMessage;
           },
           startRemainingServices: () async {
@@ -290,10 +291,23 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 );
               },
             );
+            final progressCoordinator = ReadingProgressCoordinator(coreAdapter);
+            final downloadsAdapter = SuwayomiDownloadsAdapter(readingApi);
             final extensionsAdapter = SuwayomiExtensionsAdapter(readingApi);
             final engineReadiness = SuwayomiEngineReadinessAdapter.fromManager(
               listenedManager,
             );
+            final store = mayaStore;
+            if (store != null) {
+              maya = MayaService(
+                store: store,
+                libraryPort: ReadingEngineMayaPort(
+                  library: libraryAdapter,
+                  downloads: downloadsAdapter,
+                ),
+                llm: mayaProvider,
+              );
+            }
 
             final pwaDir = await _resolvePwaDir();
             server = _buildYomuServer(
@@ -303,6 +317,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               lanAddresses: const [],
               libraryAdapter: libraryAdapter,
               coreAdapter: coreAdapter,
+              progressCoordinator: progressCoordinator,
               engineReadiness: engineReadiness,
             );
             await server!.start();
@@ -357,8 +372,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               _api = SuwayomiApi(liveManager.createClient());
               _libraryAdapter = libraryAdapter;
               _coreAdapter = coreAdapter;
+              _downloadsAdapter = downloadsAdapter;
               _extensionsAdapter = extensionsAdapter;
               _engineReadiness = engineReadiness;
+              _progressCoordinator = progressCoordinator;
               _maya = liveMaya;
               _mayaProvider = liveMayaProvider;
               _mayaUnavailableReason = liveMayaUnavailableReason;
@@ -379,6 +396,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       } on _BootstrapAborted {
         // Clean abort (unmount/shutdown) — resources already handled.
       } catch (e) {
+        if (maya == null) {
+          await mayaProvider?.close();
+        }
         await _teardownResources(
           statusSub: statusSub ?? _statusSub,
           server: server ?? _yomuServer,
@@ -398,8 +418,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _api = null;
         _libraryAdapter = null;
         _coreAdapter = null;
+        _downloadsAdapter = null;
         _extensionsAdapter = null;
         _engineReadiness = null;
+        _progressCoordinator = null;
         if (!mounted) return;
         final msg = e is YomuAlreadyRunningException
             ? e.toString()
@@ -417,7 +439,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     StreamSubscription<SuwayomiStatus>? statusSub,
     YomuServer? server,
     MayaService? maya,
-    Future<void> Function()? releaseMayaPort,
     DeviceAuthStore? auth,
     SuwayomiProcessManager? manager,
     YomuDatabase? db,
@@ -435,7 +456,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       closeMaya: () async {
         await maya?.close();
       },
-      releaseMayaPort: releaseMayaPort,
       closeAuth: () async {
         await auth?.close();
       },
@@ -459,7 +479,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final auth = _auth;
     final manager = _manager;
     final db = _db ?? YomuDatabase.instance;
-    final api = _api;
     _statusSub = null;
     _yomuServer = null;
     _maya = null;
@@ -467,20 +486,18 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     _mayaUnavailableReason = null;
     _auth = null;
     _manager = null;
+    _api = null;
     _libraryAdapter = null;
     _coreAdapter = null;
+    _downloadsAdapter = null;
     _extensionsAdapter = null;
     _engineReadiness = null;
+    _progressCoordinator = null;
     _db = null;
     await _teardownResources(
       statusSub: sub,
       server: server,
       maya: maya,
-      // Maya's Suwayomi port resolves through `_api`. Keep this exact client
-      // available until all already-admitted Maya mutations have drained.
-      releaseMayaPort: () async {
-        if (identical(_api, api)) _api = null;
-      },
       auth: auth,
       manager: manager,
       db: db,
@@ -494,6 +511,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     required List<String> lanAddresses,
     required SuwayomiLibraryAdapter libraryAdapter,
     required SuwayomiCoreAdapter coreAdapter,
+    required ReadingProgressCoordinator progressCoordinator,
     required SuwayomiEngineReadinessAdapter engineReadiness,
   }) {
     final port = 8787;
@@ -511,7 +529,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       library: libraryAdapter,
       mangaDetails: coreAdapter,
       reader: coreAdapter,
-      progress: coreAdapter,
+      progress: progressCoordinator,
       catalog: coreAdapter,
       media: coreAdapter,
     );
@@ -525,11 +543,13 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       final auth = _auth;
       final libraryAdapter = _libraryAdapter;
       final coreAdapter = _coreAdapter;
+      final progressCoordinator = _progressCoordinator;
       final engineReadiness = _engineReadiness;
       if (manager == null ||
           auth == null ||
           libraryAdapter == null ||
           coreAdapter == null ||
+          progressCoordinator == null ||
           engineReadiness == null) {
         return;
       }
@@ -557,6 +577,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               lanAddresses: addrs,
               libraryAdapter: libraryAdapter,
               coreAdapter: coreAdapter,
+              progressCoordinator: progressCoordinator,
               engineReadiness: engineReadiness,
             );
             try {
@@ -901,7 +922,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   Future<void> _openMangaDetails(int mangaId) async {
     final core = _coreAdapter;
-    if (core == null || !_engineReady) throw _readingUnavailableException;
+    final downloads = _downloadsAdapter;
+    if (core == null || downloads == null || !_engineReady) {
+      throw _readingUnavailableException;
+    }
     try {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -910,9 +934,9 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             reader: core,
             catalog: core,
             media: core,
+            downloads: downloads,
             mangaId: mangaId,
             onOpenChapter: _openReadingChapter,
-            onDownloadChapters: _downloadReadingChapters,
           ),
         ),
       );
@@ -936,50 +960,25 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     required List<ReadingChapter> chapters,
     required bool openSettings,
   }) async {
-    final api = _api;
-    if (api == null || !_engineReady) throw _readingUnavailableException;
-    ChapterInfo legacy(ReadingChapter value) => ChapterInfo(
-      id: value.id,
-      name: value.name,
-      chapterNumber: value.chapterNumber,
-      pageCount: value.pageCount,
-      sourceOrder: value.readingOrder,
-      scanlator: value.scanlator,
-      lastPageRead: value.lastPageRead,
-      isRead: value.isRead,
-      isDownloaded: value.isDownloaded,
-      mangaId: value.mangaId,
-    );
+    final reader = _coreAdapter;
+    final progress = _progressCoordinator;
+    if (reader == null || progress == null || !_engineReady) {
+      throw _readingUnavailableException;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ReaderScreen(
-          api: api,
+          reader: reader,
+          progress: progress,
+          media: reader,
           mangaId: mangaId,
           mangaTitle: mangaTitle,
-          chapter: legacy(chapter),
-          chapters: chapters.map(legacy).toList(growable: false),
+          chapter: chapter,
+          chapters: chapters,
           openSettingsOnStart: openSettings,
         ),
       ),
     );
-  }
-
-  Future<void> _downloadReadingChapters(List<int> chapterIds) async {
-    final api = _api;
-    if (api == null || !_engineReady) throw _readingUnavailableException;
-    try {
-      await api.enqueueChapterDownloads(chapterIds);
-      await api.startDownloader();
-    } catch (_) {
-      throw const EngineException(
-        EngineFailure(
-          kind: EngineFailureKind.temporarilyUnavailable,
-          code: 'engine_download_enqueue_failed',
-          message: 'Não foi possível enfileirar o download.',
-          retryable: true,
-        ),
-      );
-    }
   }
 
   Widget _body() {
@@ -1095,7 +1094,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         onOpenManga: _openLibraryManga,
         onContinueReading: _continueLibraryManga,
       ),
-      'downloads' => DownloadsScreen(api: _api, engineReady: _engineReady),
+      'downloads' => DownloadsScreen(
+        downloads: _downloadsAdapter,
+        engineReady: _engineReady,
+      ),
       'maya' => MayaScreen(
         service: _maya,
         engineReady: _engineReady,

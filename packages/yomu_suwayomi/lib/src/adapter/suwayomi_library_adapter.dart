@@ -33,6 +33,24 @@ final class SuwayomiLibraryAdapter
   }
 
   @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {
+    try {
+      await _api.setInLibrary(mangaId, inLibrary);
+    } on EngineException {
+      rethrow;
+    } catch (_) {
+      throw const EngineException(
+        EngineFailure(
+          kind: EngineFailureKind.temporarilyUnavailable,
+          code: 'engine_library_update_failed',
+          message: 'Não foi possível atualizar a biblioteca.',
+          retryable: true,
+        ),
+      );
+    }
+  }
+
+  @override
   Future<MediaPayload> fetch(
     MediaReference reference, {
     required int maxBytes,

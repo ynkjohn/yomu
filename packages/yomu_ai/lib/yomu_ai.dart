@@ -5,6 +5,7 @@ export 'src/heuristic_engine.dart';
 export 'src/legacy_maya_migrator.dart'
     hide LegacyMayaFileOps, LegacyMayaMoveNoReplaceResult;
 export 'src/maya_port.dart';
+export 'src/reading_engine_maya_port.dart';
 export 'src/maya_service.dart';
 export 'src/maya_store.dart';
 export 'src/models.dart';

@@ -759,3 +759,101 @@ Allowlist nominal de R5:
 `mcps/tasks/tools/**`, `pubspec.lock`, builds e artefatos temporários permanecem
 fora. R6 parte do commit próprio deste checkpoint e exige nova revalidação do
 baseline.
+
+## Checkpoint R6 — Reader, progresso, downloads e Maya
+
+R6 parte do commit R5 `22f7b0c` e migra as capacidades mutáveis restantes para
+contratos Yomu, preparando drains sem ativar ainda o lifecycle automático. Não
+altera schema, persistência, ownership, portas, bundle, JAR, JRE, SDK ou versões
+de dependências. O SQLite Yomu permanece no schema v5.
+
+Fronteira implementada:
+
+- `ReadingProgressCoordinator` é compartilhado entre desktop e Yomu Core,
+  mantém páginas 0-based e serializa/coalesce saves por high-water monotônico;
+- transições A→B→A preservam ordem, saves finais são explícitos e respostas ou
+  erros antigos não vencem progresso posterior;
+- novas mutações podem ser bloqueadas e o drain possui resultado tipado
+  `drained`/`timedOut`, pronto para o shutdown coordenado de R7;
+- `ReaderScreen` recebe apenas `ReaderGateway`, o coordenador e
+  `EngineMediaGateway`; capítulos, páginas e mídia usam modelos/referências
+  opacas e bytes limitados a 40 MiB;
+- `DownloadsGateway` expõe snapshots e enums Yomu, preserva enqueue, dequeue,
+  pause, resume e clear e adiciona atividade e pause/ack limitados;
+- `SuwayomiDownloadsAdapter` é a única camada que interpreta strings upstream;
+  estados desconhecidos e progresso inválido falham fechados e erros são
+  sanitizados;
+- `DownloadsScreen` e as ações de download de `MangaDetailScreen` usam
+  diretamente `DownloadsGateway`; o callback transitório permitido em R5 foi
+  removido;
+- `ReadingEngineMayaPort` substitui `SuwayomiMayaPort` e depende somente de
+  `LibraryGateway` e `DownloadsGateway`; listagem, membership e enqueue+resume
+  continuam sob `MayaLibraryPort`, `MayaService`, `ActionProposal` e confirmação
+  explícita;
+- `HomeShell` permanece o único composition root e compartilha uma instância de
+  cada adapter/coordenador. Se shutdown vencer a abertura do provider Maya, o
+  controller é fechado antes de Auth e SQLite;
+- supervisor, auto-start, recovery, readiness única e ativação automática dos
+  drains permanecem fora e pertencem à R7.
+
+Validação de R6:
+
+- `yomu_core`: 14/14;
+- `yomu_suwayomi`: 86/86;
+- `yomu_local_server`: 43/43, com wire `/api/v1` preservado;
+- `yomu_ai`: 66/66;
+- `yomu_storage`: 39/39;
+- desktop completo: 200/200;
+- PWA health, preload e reader races: aprovados;
+- analyzers do desktop e workspace: limpos;
+- `tool\verify_workspace.ps1`: `ALL CHECKS PASSED` em 216,1 s;
+- build Windows Debug aprovado em 39,3 s;
+- formatter Dart 3.8.1 limitado à allowlist R6;
+- boundary scan sem fornecedor, DTO, URL interna, callback legado ou
+  `Image.network` nas superfícies migradas;
+- `git diff --check` limpo e hash protegido preservado em
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`;
+- review inicial: `FAIL` para o callback de MangaDetail e cleanup do provider no
+  abort; ambos corrigidos e gates afetados 58/58;
+- reviewer independente final: `PASS`, sem achado obrigatório ou bloqueante;
+- nenhum runtime do produto foi necessário e não havia processo relacionado ou
+  listener nas portas 8787/14567.
+
+Allowlist nominal de R6:
+
+- `apps/yomu_desktop/lib/screens/downloads_screen.dart`;
+- `apps/yomu_desktop/lib/screens/manga_detail_screen.dart`;
+- `apps/yomu_desktop/lib/screens/reader_screen.dart`;
+- `apps/yomu_desktop/lib/services/suwayomi_maya_port.dart` (remoção);
+- `apps/yomu_desktop/lib/shell/desktop_lifecycle.dart`;
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_desktop/test/desktop_lifecycle_test.dart`;
+- `apps/yomu_desktop/test/downloads_screen_test.dart`;
+- `apps/yomu_desktop/test/home_detail_gateway_test.dart`;
+- `apps/yomu_desktop/test/library_screen_test.dart`;
+- `apps/yomu_desktop/test/promoted_regressions_test.dart`;
+- `apps/yomu_desktop/test/reader_race_test.dart`;
+- `apps/yomu_desktop/test/reader_screen_test.dart`;
+- `apps/yomu_desktop/test/suwayomi_maya_port_test.dart` (remoção);
+- `packages/yomu_ai/lib/src/maya_port.dart`;
+- `packages/yomu_ai/lib/src/reading_engine_maya_port.dart`;
+- `packages/yomu_ai/lib/yomu_ai.dart`;
+- `packages/yomu_ai/test/reading_engine_maya_port_test.dart`;
+- `packages/yomu_core/lib/src/reading_engine/downloads_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/library_gateway.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reading_progress_coordinator.dart`;
+- `packages/yomu_core/lib/yomu_core.dart`;
+- `packages/yomu_core/test/reading_engine_contracts_test.dart`;
+- `packages/yomu_core/test/reading_progress_coordinator_test.dart`;
+- `packages/yomu_local_server/test/yomu_server_reading_routes_test.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_downloads_adapter.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_library_adapter.dart`;
+- `packages/yomu_suwayomi/lib/yomu_suwayomi.dart`;
+- `packages/yomu_suwayomi/test/suwayomi_downloads_adapter_test.dart`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/status.md`.
+
+`AGENTS.md`, arquivos status-only/EOL, `design_prod/**`, `.playwright-cli/**`,
+`mcps/tasks/tools/**`, `pubspec.lock`, builds e artefatos temporários permanecem
+fora. R7 só pode começar após o commit próprio de R6 e nova revalidação factual.

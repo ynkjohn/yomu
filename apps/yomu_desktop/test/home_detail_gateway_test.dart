@@ -47,8 +47,8 @@ void main() {
     required ReaderGateway reader,
     CatalogGateway catalog = const _CatalogGateway(),
     EngineMediaGateway media = const _EmptyMediaGateway(),
+    DownloadsGateway? downloads,
     OpenReadingChapter? onOpen,
-    DownloadReadingChapters? onDownload,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -58,6 +58,7 @@ void main() {
           reader: reader,
           catalog: catalog,
           media: media,
+          downloads: downloads ?? _RecordingDownloadsGateway(),
           mangaId: 7,
           onOpenChapter:
               onOpen ??
@@ -68,7 +69,6 @@ void main() {
                 required chapters,
                 required openSettings,
               }) async {},
-          onDownloadChapters: onDownload ?? (_) async {},
         ),
       ),
     );
@@ -213,7 +213,7 @@ void main() {
         ReadingChapter(id: 20, name: 'Capítulo 2', readingOrder: 2),
       ]);
       final media = _RecordingMediaGateway();
-      final downloads = <List<int>>[];
+      final downloads = _RecordingDownloadsGateway();
       int? openedChapter;
       List<int>? openedOrder;
 
@@ -222,6 +222,7 @@ void main() {
         details: details,
         reader: reader,
         media: media,
+        downloads: downloads,
         onOpen:
             ({
               required mangaId,
@@ -236,7 +237,6 @@ void main() {
               openedChapter = chapter.id;
               openedOrder = chapters.map((item) => item.id).toList();
             },
-        onDownload: (ids) async => downloads.add(List<int>.from(ids)),
       );
       await tester.pump();
 
@@ -254,13 +254,15 @@ void main() {
       await tester.ensureVisible(find.text('Baixar'));
       await tester.tap(find.text('Baixar'));
       await tester.pump();
-      expect(downloads, const [
+      expect(downloads.enqueued, const [
         [30, 10, 20],
       ]);
+      expect(downloads.resumeCalls, 1);
 
       await tester.tap(find.byTooltip('Baixar capítulo').first);
       await tester.pump();
-      expect(downloads.last, const [30]);
+      expect(downloads.enqueued.last, const [30]);
+      expect(downloads.resumeCalls, 2);
 
       await tester.ensureVisible(find.text('Começar leitura'));
       await tester.tap(find.text('Começar leitura'));
@@ -371,6 +373,9 @@ final class _DeferredLibraryGateway implements LibraryGateway {
   @override
   Future<List<LibraryManga>> listLibrary() => _completer.future;
 
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
+
   void complete(List<LibraryManga> items) => _completer.complete(items);
 }
 
@@ -385,6 +390,9 @@ final class _RecordingLibraryGateway implements LibraryGateway {
     calls++;
     return items;
   }
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
 }
 
 final class _ThrowingLibraryGateway implements LibraryGateway {
@@ -394,6 +402,10 @@ final class _ThrowingLibraryGateway implements LibraryGateway {
 
   @override
   Future<List<LibraryManga>> listLibrary() => Future.error(StateError(message));
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) =>
+      Future.error(StateError(message));
 }
 
 final class _MutableDetailsGateway implements MangaDetailsGateway {
@@ -548,4 +560,44 @@ final class _EmptyMediaGateway implements EngineMediaGateway {
     MediaReference reference, {
     required int maxBytes,
   }) async => MediaPayload(bytes: const []);
+}
+
+final class _RecordingDownloadsGateway implements DownloadsGateway {
+  final enqueued = <List<int>>[];
+  int resumeCalls = 0;
+
+  @override
+  Future<void> clear() async {}
+
+  @override
+  Future<void> dequeueChapters(List<int> chapterIds) async {}
+
+  @override
+  Future<void> enqueueChapters(List<int> chapterIds) async {
+    enqueued.add(List<int>.from(chapterIds));
+  }
+
+  @override
+  Future<DownloadsSnapshot> getStatus() async => DownloadsSnapshot(
+    managerState: DownloadManagerState.paused,
+    queue: const [],
+  );
+
+  @override
+  Future<bool> hasActivity() async => false;
+
+  @override
+  Future<DownloadPauseAck> pause() async => const DownloadPauseAck(
+    managerState: DownloadManagerState.paused,
+    acknowledged: true,
+  );
+
+  @override
+  Future<DownloadPauseAck> pauseAndAwaitAck({required Duration timeout}) =>
+      pause();
+
+  @override
+  Future<void> resume() async {
+    resumeCalls++;
+  }
 }

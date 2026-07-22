@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:collection';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 enum _ReaderMode { rtl, ltr, doublePage, vertical, webtoon }
@@ -13,10 +11,10 @@ enum _ReaderFit { height, width, original }
 
 enum _ReaderTheme { black, graphite, paper }
 
-/// Canonical chapter order for reader adjacency: ascending sourceOrder, then id.
-List<ChapterInfo> chronologicalChapters(List<ChapterInfo> chapters) {
-  final list = List<ChapterInfo>.from(chapters);
-  int order(ChapterInfo chapter) => chapter.sourceOrder ?? chapter.id;
+/// Canonical chapter order for reader adjacency: ascending readingOrder, then id.
+List<ReadingChapter> chronologicalChapters(List<ReadingChapter> chapters) {
+  final list = List<ReadingChapter>.from(chapters);
+  int order(ReadingChapter chapter) => chapter.readingOrder ?? chapter.id;
   list.sort((a, b) => order(a).compareTo(order(b)));
   return list;
 }
@@ -78,8 +76,8 @@ class ReaderLoadGate {
 }
 
 @immutable
-class ReaderProgressSnapshot {
-  const ReaderProgressSnapshot({
+class ReaderSaveSnapshot {
+  const ReaderSaveSnapshot({
     required this.chapterId,
     required this.page,
     required this.pageCount,
@@ -92,99 +90,17 @@ class ReaderProgressSnapshot {
   final bool wasRead;
 
   bool get isRead => wasRead || (pageCount > 0 && page >= pageCount - 1);
-
-  ReaderProgressSnapshot mergeMonotonic(ReaderProgressSnapshot newer) {
-    assert(chapterId == newer.chapterId);
-    return ReaderProgressSnapshot(
-      chapterId: chapterId,
-      page: math.max(page, newer.page),
-      pageCount: math.max(pageCount, newer.pageCount),
-      wasRead: isRead || newer.isRead,
-    );
-  }
 }
 
-typedef ReaderProgressSaver =
-    Future<ChapterInfo> Function(ReaderProgressSnapshot snapshot);
-typedef ReaderProgressSaved =
-    void Function(ReaderProgressSnapshot snapshot, ChapterInfo chapter);
-typedef ReaderProgressFailed =
-    void Function(ReaderProgressSnapshot snapshot, Object error);
 typedef ReaderPageContentBuilder =
-    Widget Function(BuildContext context, int index, String absoluteUrl);
-
-/// Serializes progress writes while keeping every write tied to one immutable
-/// chapter/page snapshot. Pending writes coalesce only within the same chapter;
-/// a chapter transition never replaces the previous chapter's final snapshot.
-class ReaderProgressSaveQueue {
-  ReaderProgressSaveQueue({
-    required ReaderProgressSaver save,
-    ReaderProgressSaved? onSaved,
-    ReaderProgressFailed? onFailed,
-    VoidCallback? onIdle,
-  }) : _save = save,
-       _onSaved = onSaved,
-       _onFailed = onFailed,
-       _onIdle = onIdle;
-
-  final ReaderProgressSaver _save;
-  ReaderProgressSaved? _onSaved;
-  ReaderProgressFailed? _onFailed;
-  VoidCallback? _onIdle;
-  final ListQueue<int> _pendingOrder = ListQueue<int>();
-  final Map<int, ReaderProgressSnapshot> _pendingByChapter = {};
-  final Map<int, ReaderProgressSnapshot> _highWaterByChapter = {};
-  Future<void>? _draining;
-
-  bool get isSaving => _draining != null;
-
-  Future<void> enqueue(ReaderProgressSnapshot snapshot) {
-    final highWater = _highWaterByChapter[snapshot.chapterId];
-    final coalesced = highWater == null
-        ? snapshot
-        : highWater.mergeMonotonic(snapshot);
-    _highWaterByChapter[snapshot.chapterId] = coalesced;
-    if (!_pendingByChapter.containsKey(snapshot.chapterId)) {
-      _pendingOrder.addLast(snapshot.chapterId);
-    }
-    _pendingByChapter[snapshot.chapterId] = coalesced;
-    return _draining ??= _drain();
-  }
-
-  void detachCallbacks() {
-    _onSaved = null;
-    _onFailed = null;
-    _onIdle = null;
-  }
-
-  Future<void> _drain() async {
-    try {
-      while (_pendingOrder.isNotEmpty) {
-        final chapterId = _pendingOrder.removeFirst();
-        final snapshot = _pendingByChapter.remove(chapterId);
-        if (snapshot == null) continue;
-        try {
-          final updated = await _save(snapshot);
-          _onSaved?.call(snapshot, updated);
-        } catch (error) {
-          _onFailed?.call(snapshot, error);
-        }
-      }
-    } finally {
-      _draining = null;
-      if (_pendingOrder.isNotEmpty) {
-        _draining = _drain();
-      } else {
-        _onIdle?.call();
-      }
-    }
-  }
-}
+    Widget Function(BuildContext context, int index, MediaReference reference);
 
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
     super.key,
-    required this.api,
+    required this.reader,
+    required this.progress,
+    required this.media,
     required this.mangaId,
     required this.mangaTitle,
     required this.chapter,
@@ -193,11 +109,13 @@ class ReaderScreen extends StatefulWidget {
     @visibleForTesting this.pageContentBuilder,
   });
 
-  final SuwayomiApi api;
+  final ReaderGateway reader;
+  final ReadingProgressCoordinator progress;
+  final EngineMediaGateway media;
   final int mangaId;
   final String mangaTitle;
-  final ChapterInfo chapter;
-  final List<ChapterInfo> chapters;
+  final ReadingChapter chapter;
+  final List<ReadingChapter> chapters;
   final bool openSettingsOnStart;
   @visibleForTesting
   final ReaderPageContentBuilder? pageContentBuilder;
@@ -224,12 +142,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int _seekGeneration = 0;
   String? _error;
   String? _saveError;
-  List<String> _pages = [];
+  List<MediaReference> _pages = [];
   int _index = 0;
-  late final ReaderProgressSaveQueue _saveQueue;
   double _zoom = 1;
-  late ChapterInfo _chapter;
-  late List<ChapterInfo> _orderedChapters;
+  late ReadingChapter _chapter;
+  late List<ReadingChapter> _orderedChapters;
   _ReaderMode _mode = _ReaderMode.rtl;
   _ReaderFit _fit = _ReaderFit.height;
   _ReaderTheme _theme = _ReaderTheme.black;
@@ -252,32 +169,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     super.initState();
     _chapter = widget.chapter;
     _orderedChapters = chronologicalChapters(widget.chapters);
-    _saveQueue = ReaderProgressSaveQueue(
-      save: (snapshot) => widget.api.updateChapterProgress(
-        chapterId: snapshot.chapterId,
-        lastPageRead: snapshot.page,
-        isRead: snapshot.isRead,
-      ),
-      onSaved: (snapshot, updated) {
-        if (!mounted || _chapter.id != snapshot.chapterId) return;
-        setState(() {
-          _chapter = updated;
-          _saveError = null;
-          _saving = _saveQueue.isSaving;
-        });
-      },
-      onFailed: (snapshot, error) {
-        if (!mounted || _chapter.id != snapshot.chapterId) return;
-        setState(() {
-          _saveError = '$error';
-          _saving = _saveQueue.isSaving;
-        });
-      },
-      onIdle: () {
-        if (!mounted) return;
-        setState(() => _saving = false);
-      },
-    );
     _settingsOpen = widget.openSettingsOnStart;
     _load();
   }
@@ -286,8 +177,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void dispose() {
     _saveDebounce?.cancel();
     final finalSnapshot = _captureSaveSnapshot();
-    _saveQueue.detachCallbacks();
-    if (finalSnapshot != null) unawaited(_saveQueue.enqueue(finalSnapshot));
+    if (finalSnapshot != null) unawaited(_saveFinal(finalSnapshot));
     _seekGeneration++;
     _seekingScroll = false;
     _focus.dispose();
@@ -304,12 +194,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _finished = false;
     });
     try {
-      final remote = await widget.api.getChapter(chapterId);
+      final remote = await widget.reader.getChapter(chapterId);
       if (!mounted || !_loadGate.accepts(request, _chapter.id)) return;
       final resolvedChapter = remote != null && remote.id == chapterId
           ? remote
           : _chapter;
-      final result = await widget.api.fetchChapterPages(chapterId);
+      final result = await widget.reader.getPages(chapterId);
       if (!mounted ||
           !_loadGate.accepts(request, _chapter.id) ||
           result.chapterId != chapterId) {
@@ -354,7 +244,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     } catch (error) {
       if (!mounted || !_loadGate.accepts(request, _chapter.id)) return;
       setState(() {
-        _error = '$error';
+        _error = _sanitizedEngineMessage(
+          error,
+          fallback: 'Não foi possível carregar este capítulo.',
+        );
         _loading = false;
         _transitioning = false;
       });
@@ -368,9 +261,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
   }
 
-  ReaderProgressSnapshot? _captureSaveSnapshot() {
+  ReaderSaveSnapshot? _captureSaveSnapshot() {
     if (_pages.isEmpty) return null;
-    return ReaderProgressSnapshot(
+    return ReaderSaveSnapshot(
       chapterId: _chapter.id,
       page: _index,
       pageCount: _pages.length,
@@ -387,9 +280,41 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _saveError = null;
       });
     }
-    await _saveQueue.enqueue(snapshot);
-    if (mounted && _chapter.id == snapshot.chapterId) {
-      setState(() => _saving = _saveQueue.isSaving);
+    try {
+      final saved = await widget.progress.updateProgress(
+        chapterId: snapshot.chapterId,
+        lastPageRead: snapshot.page,
+        isRead: snapshot.isRead,
+      );
+      if (mounted && _chapter.id == snapshot.chapterId) {
+        setState(() {
+          _chapter = _chapterWithProgress(_chapter, saved);
+          _saveError = null;
+          _saving = widget.progress.hasPendingWrites;
+        });
+      }
+    } catch (error) {
+      if (mounted && _chapter.id == snapshot.chapterId) {
+        setState(() {
+          _saveError = _sanitizedEngineMessage(
+            error,
+            fallback: 'Não foi possível salvar o progresso.',
+          );
+          _saving = widget.progress.hasPendingWrites;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveFinal(ReaderSaveSnapshot snapshot) async {
+    try {
+      await widget.progress.saveFinal(
+        chapterId: snapshot.chapterId,
+        lastPageRead: snapshot.page,
+        isRead: snapshot.isRead,
+      );
+    } catch (_) {
+      // The shared lifecycle drain owns any remaining shutdown outcome.
     }
   }
 
@@ -552,7 +477,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final previousSnapshot = _captureSaveSnapshot();
     _saveDebounce?.cancel();
     if (previousSnapshot != null) {
-      unawaited(_saveQueue.enqueue(previousSnapshot));
+      unawaited(_saveFinal(previousSnapshot));
     }
     setState(() {
       _transitioning = true;
@@ -568,7 +493,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _load();
   }
 
-  void _openChapter(ChapterInfo chapter) {
+  void _openChapter(ReadingChapter chapter) {
     if (chapter.id == _chapter.id) {
       setState(() => _chaptersOpen = false);
       return;
@@ -577,7 +502,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final previousSnapshot = _captureSaveSnapshot();
     _saveDebounce?.cancel();
     if (previousSnapshot != null) {
-      unawaited(_saveQueue.enqueue(previousSnapshot));
+      unawaited(_saveFinal(previousSnapshot));
     }
     setState(() {
       _transitioning = true;
@@ -886,7 +811,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   Widget _pageImage(int index, {bool vertical = false}) {
-    final url = widget.api.absoluteUrl(_pages[index]);
+    final reference = _pages[index];
     return Container(
       margin: EdgeInsets.only(bottom: _mode == _ReaderMode.webtoon ? 0 : 10),
       constraints: vertical ? const BoxConstraints(minHeight: 300) : null,
@@ -906,26 +831,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
       clipBehavior: Clip.antiAlias,
       child:
-          widget.pageContentBuilder?.call(context, index, url) ??
-          Image.network(
-            url,
+          widget.pageContentBuilder?.call(context, index, reference) ??
+          _ReaderPageImage(
+            reference: reference,
+            media: widget.media,
             fit: vertical ? BoxFit.fitWidth : _boxFit,
-            gaplessPlayback: true,
-            loadingBuilder: (context, child, progress) => progress == null
-                ? child
-                : const SizedBox(
-                    height: 420,
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-            errorBuilder: (_, error, __) => SizedBox(
-              height: 420,
-              child: Center(
-                child: Text(
-                  'Erro ao carregar a página ${index + 1}',
-                  style: const TextStyle(color: YomuTokens.danger),
-                ),
-              ),
-            ),
+            pageNumber: index + 1,
           ),
     );
   }
@@ -1764,4 +1675,110 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
     ),
   );
+}
+
+ReadingChapter _chapterWithProgress(
+  ReadingChapter chapter,
+  ReadingProgressSnapshot progress,
+) {
+  return ReadingChapter(
+    id: chapter.id,
+    name: chapter.name,
+    chapterNumber: chapter.chapterNumber,
+    pageCount: chapter.pageCount,
+    readingOrder: chapter.readingOrder,
+    scanlator: chapter.scanlator,
+    lastPageRead: progress.lastPageRead,
+    isRead: chapter.isRead || progress.isRead,
+    isDownloaded: chapter.isDownloaded,
+    mangaId: chapter.mangaId,
+  );
+}
+
+String _sanitizedEngineMessage(Object error, {required String fallback}) {
+  return error is EngineException ? error.failure.message : fallback;
+}
+
+class _ReaderPageImage extends StatefulWidget {
+  const _ReaderPageImage({
+    required this.reference,
+    required this.media,
+    required this.fit,
+    required this.pageNumber,
+  });
+
+  final MediaReference reference;
+  final EngineMediaGateway media;
+  final BoxFit fit;
+  final int pageNumber;
+
+  @override
+  State<_ReaderPageImage> createState() => _ReaderPageImageState();
+}
+
+class _ReaderPageImageState extends State<_ReaderPageImage> {
+  late Future<MediaPayload> _payload;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReaderPageImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.reference != widget.reference ||
+        !identical(oldWidget.media, widget.media)) {
+      _load();
+    }
+  }
+
+  void _load() {
+    _payload = widget.media.fetch(widget.reference, maxBytes: 40 * 1024 * 1024);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<MediaPayload>(
+      future: _payload,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox(
+            height: 420,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final payload = snapshot.data;
+        if (payload == null ||
+            payload.statusCode < 200 ||
+            payload.statusCode >= 300 ||
+            payload.bytes.isEmpty) {
+          return SizedBox(
+            height: 420,
+            child: Center(
+              child: Text(
+                'Erro ao carregar a página ${widget.pageNumber}',
+                style: const TextStyle(color: YomuTokens.danger),
+              ),
+            ),
+          );
+        }
+        return Image.memory(
+          payload.bytes,
+          fit: widget.fit,
+          gaplessPlayback: true,
+          errorBuilder: (_, _, _) => SizedBox(
+            height: 420,
+            child: Center(
+              child: Text(
+                'Erro ao carregar a página ${widget.pageNumber}',
+                style: const TextStyle(color: YomuTokens.danger),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

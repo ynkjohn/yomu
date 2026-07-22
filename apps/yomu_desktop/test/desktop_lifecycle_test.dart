@@ -229,6 +229,31 @@ void main() {
   });
 
   test(
+    'optional Maya provider closes an instance when shutdown wins opening',
+    () async {
+      final instance = Object();
+      final opening = Completer<Object>();
+      var shouldAbort = false;
+      var closeCalls = 0;
+
+      final provider = OptionalMayaProviderBootstrap.openAbortable<Object>(
+        initialize: () => opening.future,
+        shouldAbort: () => shouldAbort,
+        dispose: (value) async {
+          expect(identical(value, instance), isTrue);
+          closeCalls++;
+        },
+      );
+
+      shouldAbort = true;
+      opening.complete(instance);
+
+      expect(await provider, isNull);
+      expect(closeCalls, 1);
+    },
+  );
+
+  test(
     'HttpServerRestartCoordinator disposes new server on abort after start',
     () async {
       final events = <String>[];

@@ -15,8 +15,6 @@ typedef OpenReadingChapter =
       required bool openSettings,
     });
 
-typedef DownloadReadingChapters = Future<void> Function(List<int> chapterIds);
-
 enum _ChapterFilter { all, unread, downloaded }
 
 String _engineMessage(Object error, {required String fallback}) =>
@@ -29,18 +27,18 @@ class MangaDetailScreen extends StatefulWidget {
     required this.reader,
     required this.catalog,
     required this.media,
+    required this.downloads,
     required this.mangaId,
     required this.onOpenChapter,
-    required this.onDownloadChapters,
   });
 
   final MangaDetailsGateway details;
   final ReaderGateway reader;
   final CatalogGateway catalog;
   final EngineMediaGateway media;
+  final DownloadsGateway downloads;
   final int mangaId;
   final OpenReadingChapter onOpenChapter;
-  final DownloadReadingChapters onDownloadChapters;
 
   @override
   State<MangaDetailScreen> createState() => _MangaDetailScreenState();
@@ -214,7 +212,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
   Future<void> _downloadChapter(ReadingChapter chapter) async {
     setState(() => _busy = true);
     try {
-      await widget.onDownloadChapters([chapter.id]);
+      await _enqueueDownloads([chapter.id]);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Download enfileirado: ${chapter.name}')),
@@ -242,9 +240,7 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     if (_chapters.isEmpty) return;
     setState(() => _busy = true);
     try {
-      await widget.onDownloadChapters(
-        _chapters.map((chapter) => chapter.id).toList(),
-      );
+      await _enqueueDownloads(_chapters.map((chapter) => chapter.id).toList());
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('${_chapters.length} capítulos enfileirados')),
@@ -266,6 +262,11 @@ class _MangaDetailScreenState extends State<MangaDetailScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _enqueueDownloads(List<int> chapterIds) async {
+    await widget.downloads.enqueueChapters(chapterIds);
+    await widget.downloads.resume();
   }
 
   Future<void> _openChapter(

@@ -480,6 +480,10 @@ final class _ThrowingLibraryGateway implements LibraryGateway {
 
   @override
   Future<List<LibraryManga>> listLibrary() => Future.error(StateError(message));
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) =>
+      Future.error(StateError(message));
 }
 
 final class _EngineFailingLibraryGateway implements LibraryGateway {
@@ -495,6 +499,11 @@ final class _EngineFailingLibraryGateway implements LibraryGateway {
         retryable: true,
       ),
     );
+  }
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {
+    await listLibrary();
   }
 }
 

@@ -73,6 +73,26 @@ temporary reader/download callbacks are composed only by `HomeShell`. The
 reader, progress, downloads and Maya mutation surfaces remain the R6 slice;
 R5 does not move data ownership or change SQLite schema v5.
 
+R6 moves the remaining mutable desktop consumers to Yomu-owned contracts.
+`ReaderScreen` receives `ReaderGateway`, opaque page references,
+`EngineMediaGateway` and the shared `ReadingProgressCoordinator`; page bytes
+remain bounded at 40 MiB. The coordinator keeps positions 0-based, serializes
+and coalesces writes by chapter high-water, preserves A→B→A ordering, absorbs
+stale responses/errors, supports an explicit final save and exposes a bounded
+drain after new mutations are blocked.
+
+`DownloadsGateway` normalizes manager and item states before they reach
+`DownloadsScreen`, Manga details or Maya. Unknown upstream states and invalid
+progress fail closed inside `SuwayomiDownloadsAdapter`; enqueue, dequeue,
+pause, resume, clear, activity and pause/ack remain explicit capabilities.
+`ReadingEngineMayaPort` depends only on `LibraryGateway` and
+`DownloadsGateway`; `MayaLibraryPort`, `MayaService`, `ActionProposal` and
+explicit confirmation remain unchanged. `HomeShell` is still the sole
+composition root, and a provider opened while shutdown wins bootstrap is
+closed before Auth/SQLite teardown. Automatic engine lifecycle and drains are
+implemented as capabilities only and remain inactive until R7. SQLite stays
+at schema v5 and reading facts remain owned solely by the engine.
+
 ## Dual catalog (Source Builder)
 
 - Extension sources: runtime = Suwayomi; appear in Suwayomi UI/API.

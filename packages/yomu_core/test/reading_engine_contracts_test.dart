@@ -188,6 +188,9 @@ final class _TestReadiness implements EngineReadiness {
 final class _TestLibraryGateway implements LibraryGateway {
   @override
   Future<List<LibraryManga>> listLibrary() async => const [];
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
 }
 
 final class _TestMediaGateway implements EngineMediaGateway {

@@ -144,6 +144,9 @@ final class _FakeLibraryGateway implements LibraryGateway {
 
   @override
   Future<List<LibraryManga>> listLibrary() async => items;
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
 }
 
 final class _ThrowingLibraryGateway implements LibraryGateway {
@@ -153,6 +156,10 @@ final class _ThrowingLibraryGateway implements LibraryGateway {
 
   @override
   Future<List<LibraryManga>> listLibrary() => Future.error(StateError(message));
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) =>
+      Future.error(StateError(message));
 }
 
 final class _RecordingMediaGateway implements EngineMediaGateway {

@@ -15,7 +15,6 @@ import 'package:yomu_desktop/screens/server_screen.dart';
 import 'package:yomu_desktop/services/maya_credential_store.dart';
 import 'package:yomu_desktop/services/maya_provider_controller.dart';
 import 'package:yomu_storage/yomu_storage.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 void main() {
@@ -180,6 +179,12 @@ void main() {
           reader: reader,
           catalog: const _EmptyCatalogGateway(),
           media: const _EmptyMediaGateway(),
+          downloads: _FakeDownloadsGateway(
+            snapshot: DownloadsSnapshot(
+              managerState: DownloadManagerState.paused,
+              queue: const [],
+            ),
+          ),
           mangaId: 7,
           onOpenChapter:
               ({
@@ -189,7 +194,6 @@ void main() {
                 required chapters,
                 required openSettings,
               }) async {},
-          onDownloadChapters: (_) async {},
         ),
       ),
     );
@@ -363,17 +367,19 @@ void main() {
     tester,
   ) async {
     await setDesktopSurface(tester);
-    final api = _FakeSuwayomiApi(
-      downloadStatus: const DownloadStatusInfo(
-        state: 'STOPPED',
-        queue: [DownloadQueueItem(state: 'QUEUED')],
+    final downloads = _FakeDownloadsGateway(
+      snapshot: DownloadsSnapshot(
+        managerState: DownloadManagerState.paused,
+        queue: const [EngineDownloadItem(state: DownloadItemState.queued)],
       ),
     );
 
     await tester.pumpWidget(
       MaterialApp(
         theme: buildYomuTheme(),
-        home: Scaffold(body: DownloadsScreen(api: api, engineReady: true)),
+        home: Scaffold(
+          body: DownloadsScreen(downloads: downloads, engineReady: true),
+        ),
       ),
     );
     await tester.pump();
@@ -381,14 +387,14 @@ void main() {
 
     await tester.tap(find.text('Limpar fila'));
     await tester.pump();
-    expect(api.clearDownloaderCalls, 0);
+    expect(downloads.clearCalls, 0);
     expect(find.text('Limpar downloads?'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Limpar fila'));
     await tester.pump();
     await tester.pump();
 
-    expect(api.clearDownloaderCalls, 1);
+    expect(downloads.clearCalls, 1);
   });
 
   testWidgets('Maya keeps persisted history visible while the engine is off', (
@@ -967,22 +973,45 @@ void main() {
   });
 }
 
-class _FakeSuwayomiApi extends SuwayomiApi {
-  _FakeSuwayomiApi({
-    this.downloadStatus = const DownloadStatusInfo(state: 'STOPPED', queue: []),
-  }) : super(SuwayomiClient(baseUrl: 'http://127.0.0.1:14567'));
+class _FakeDownloadsGateway implements DownloadsGateway {
+  _FakeDownloadsGateway({required this.snapshot});
 
-  DownloadStatusInfo downloadStatus;
-  int clearDownloaderCalls = 0;
+  DownloadsSnapshot snapshot;
+  int clearCalls = 0;
 
   @override
-  Future<DownloadStatusInfo> getDownloadStatus() async => downloadStatus;
+  Future<DownloadsSnapshot> getStatus() async => snapshot;
 
   @override
-  Future<void> clearDownloader() async {
-    clearDownloaderCalls++;
-    downloadStatus = const DownloadStatusInfo(state: 'STOPPED', queue: []);
+  Future<void> clear() async {
+    clearCalls++;
+    snapshot = DownloadsSnapshot(
+      managerState: DownloadManagerState.paused,
+      queue: const [],
+    );
   }
+
+  @override
+  Future<void> dequeueChapters(List<int> chapterIds) async {}
+
+  @override
+  Future<void> enqueueChapters(List<int> chapterIds) async {}
+
+  @override
+  Future<bool> hasActivity() async => snapshot.hasActivity;
+
+  @override
+  Future<DownloadPauseAck> pause() async => const DownloadPauseAck(
+    managerState: DownloadManagerState.paused,
+    acknowledged: true,
+  );
+
+  @override
+  Future<DownloadPauseAck> pauseAndAwaitAck({required Duration timeout}) =>
+      pause();
+
+  @override
+  Future<void> resume() async {}
 }
 
 class _FakeLibraryGateway implements LibraryGateway {
@@ -992,6 +1021,9 @@ class _FakeLibraryGateway implements LibraryGateway {
 
   @override
   Future<List<LibraryManga>> listLibrary() async => library;
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
 }
 
 class _FakeMangaDetailsGateway implements MangaDetailsGateway {

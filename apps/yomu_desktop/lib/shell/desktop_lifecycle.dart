@@ -218,4 +218,21 @@ class OptionalMayaProviderBootstrap {
       return null;
     }
   }
+
+  /// Transfers a successfully opened provider only while bootstrap still owns
+  /// it. If shutdown wins the race, disposal completes before this returns.
+  static Future<T?> openAbortable<T>({
+    required Future<T> Function() initialize,
+    required bool Function() shouldAbort,
+    required Future<void> Function(T instance) dispose,
+  }) async {
+    try {
+      final instance = await initialize();
+      if (!shouldAbort()) return instance;
+      await dispose(instance);
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
 }

@@ -3,16 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_desktop/screens/reader_screen.dart';
-import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 
-ChapterInfo _chapter(int id, {int? lastPageRead, bool isRead = false}) =>
-    ChapterInfo(
+ReadingChapter _chapter(int id, {int? lastPageRead, bool isRead = false}) =>
+    ReadingChapter(
       id: id,
       name: 'Capítulo $id',
       lastPageRead: lastPageRead,
       isRead: isRead,
-      sourceOrder: id,
+      readingOrder: id,
     );
 
 class _ProgressCall {
@@ -23,59 +23,106 @@ class _ProgressCall {
   final bool? isRead;
 }
 
-class _FakeReaderApi extends SuwayomiApi {
+final class _FakeMediaReference implements MediaReference {
+  const _FakeMediaReference(this.path);
+
+  final String path;
+}
+
+class _FakeReaderApi
+    implements ReaderGateway, ReadingProgressGateway, EngineMediaGateway {
   _FakeReaderApi({
-    required Iterable<ChapterInfo> chapters,
+    required Iterable<ReadingChapter> chapters,
     required Map<int, List<String>> pages,
   }) : chapters = {for (final chapter in chapters) chapter.id: chapter},
-       pages = Map<int, List<String>>.from(pages),
-       super(SuwayomiClient(baseUrl: 'http://127.0.0.1:14567'));
+       pages = pages.map(
+         (chapterId, values) => MapEntry(
+           chapterId,
+           values.map(_FakeMediaReference.new).toList(growable: false),
+         ),
+       );
 
-  final Map<int, ChapterInfo> chapters;
-  final Map<int, List<String>> pages;
-  final Map<int, Completer<ChapterPages>> blockedPages = {};
+  final Map<int, ReadingChapter> chapters;
+  final Map<int, List<_FakeMediaReference>> pages;
+  final Map<int, Completer<ReadingChapterPages>> blockedPages = {};
   final List<int> fetchCalls = [];
+  final List<int> mediaLimits = [];
   final List<_ProgressCall> progressCalls = [];
-  Completer<ChapterInfo>? nextProgressSave;
+  Completer<ReadingProgressSnapshot>? nextProgressSave;
 
   @override
-  Future<ChapterInfo?> getChapter(int chapterId) async => chapters[chapterId];
+  Future<ReadingChapter?> getChapter(int chapterId) async =>
+      chapters[chapterId];
 
   @override
-  Future<ChapterPages> fetchChapterPages(int chapterId) {
+  Future<ReadingChapterPages> getPages(int chapterId) {
     fetchCalls.add(chapterId);
     final blocked = blockedPages[chapterId];
     if (blocked != null) return blocked.future;
     return Future.value(
-      ChapterPages(chapterId: chapterId, pages: pages[chapterId] ?? const []),
+      ReadingChapterPages(
+        chapterId: chapterId,
+        pages: pages[chapterId] ?? const [],
+      ),
     );
   }
 
   @override
-  Future<ChapterInfo> updateChapterProgress({
+  Future<List<ReadingChapter>> listChapters(int mangaId) async =>
+      chapters.values.toList(growable: false);
+
+  @override
+  Future<List<ReadingChapter>> refreshChapters(int mangaId) =>
+      listChapters(mangaId);
+
+  @override
+  Future<ReadingProgressSnapshot> updateProgress({
     required int chapterId,
     required int lastPageRead,
-    bool? isRead,
+    required bool isRead,
   }) async {
     progressCalls.add(_ProgressCall(chapterId, lastPageRead, isRead));
-    final updated = chapters[chapterId]!.copyWith(
+    final current = chapters[chapterId]!;
+    chapters[chapterId] = ReadingChapter(
+      id: current.id,
+      name: current.name,
+      chapterNumber: current.chapterNumber,
+      pageCount: current.pageCount,
+      readingOrder: current.readingOrder,
+      scanlator: current.scanlator,
+      lastPageRead: lastPageRead,
+      isRead: isRead,
+      isDownloaded: current.isDownloaded,
+      mangaId: current.mangaId,
+    );
+    final updated = ReadingProgressSnapshot(
+      chapterId: chapterId,
       lastPageRead: lastPageRead,
       isRead: isRead,
     );
-    chapters[chapterId] = updated;
     final blocked = nextProgressSave;
     nextProgressSave = null;
     if (blocked != null) return blocked.future;
     return updated;
+  }
+
+  @override
+  Future<MediaPayload> fetch(
+    MediaReference reference, {
+    required int maxBytes,
+  }) async {
+    mediaLimits.add(maxBytes);
+    return MediaPayload(bytes: const [1]);
   }
 }
 
 Future<void> _pumpReader(
   WidgetTester tester, {
   required _FakeReaderApi api,
-  required ChapterInfo chapter,
-  required List<ChapterInfo> chapters,
+  required ReadingChapter chapter,
+  required List<ReadingChapter> chapters,
   bool openSettings = false,
+  bool useEngineMedia = false,
   ReaderPageContentBuilder? pageContentBuilder,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1440, 900));
@@ -83,23 +130,30 @@ Future<void> _pumpReader(
   await tester.pumpWidget(
     MaterialApp(
       home: ReaderScreen(
-        api: api,
+        reader: api,
+        progress: ReadingProgressCoordinator(api),
+        media: api,
         mangaId: 1,
         mangaTitle: 'Obra',
         chapter: chapter,
         chapters: chapters,
         openSettingsOnStart: openSettings,
-        pageContentBuilder: pageContentBuilder,
+        pageContentBuilder: useEngineMedia
+            ? null
+            : pageContentBuilder ??
+                  (context, index, reference) => SizedBox(
+                    key: ValueKey(
+                      'page:${(reference as _FakeMediaReference).path}',
+                    ),
+                    height: 420,
+                  ),
       ),
     ),
   );
   await tester.pumpAndSettle();
 }
 
-Finder _pageImage(String suffix) => find.byWidgetPredicate((widget) {
-  if (widget is! Image || widget.image is! NetworkImage) return false;
-  return (widget.image as NetworkImage).url.endsWith(suffix);
-});
+Finder _pageImage(String suffix) => find.byKey(ValueKey('page:$suffix'));
 
 void main() {
   testWidgets('transição bloqueia avanço duplicado até a carga terminar', (
@@ -114,7 +168,7 @@ void main() {
         3: ['/chapter-3/page-0'],
       },
     );
-    api.blockedPages[2] = Completer<ChapterPages>();
+    api.blockedPages[2] = Completer<ReadingChapterPages>();
     await _pumpReader(
       tester,
       api: api,
@@ -341,7 +395,7 @@ void main() {
       },
     );
     await _pumpReader(tester, api: api, chapter: chapter, chapters: [chapter]);
-    final blocked = Completer<ChapterInfo>();
+    final blocked = Completer<ReadingProgressSnapshot>();
     api.nextProgressSave = blocked;
 
     await tester.tap(find.byTooltip('Próxima página'));
@@ -349,7 +403,13 @@ void main() {
     expect(api.progressCalls, hasLength(1));
 
     await tester.pumpWidget(const SizedBox.shrink());
-    blocked.complete(_chapter(1, lastPageRead: 1, isRead: true));
+    blocked.complete(
+      const ReadingProgressSnapshot(
+        chapterId: 1,
+        lastPageRead: 1,
+        isRead: true,
+      ),
+    );
     await tester.pump();
     await tester.pump();
 
@@ -357,5 +417,27 @@ void main() {
     expect(api.progressCalls.last.page, 1);
     expect(api.progressCalls.last.isRead, isTrue);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('páginas opacas respeitam o limite de 40 MiB do Core', (
+    tester,
+  ) async {
+    final chapter = _chapter(1);
+    final api = _FakeReaderApi(
+      chapters: [chapter],
+      pages: {
+        1: ['/page-0'],
+      },
+    );
+
+    await _pumpReader(
+      tester,
+      api: api,
+      chapter: chapter,
+      chapters: [chapter],
+      useEngineMedia: true,
+    );
+
+    expect(api.mediaLimits, contains(40 * 1024 * 1024));
   });
 }

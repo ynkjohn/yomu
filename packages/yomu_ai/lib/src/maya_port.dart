@@ -5,9 +5,9 @@ import 'package:meta/meta.dart';
 
 import 'models.dart';
 
-/// Port implemented by the desktop shell to reach Suwayomi / UI.
+/// Port implemented by the host to reach Yomu reading capabilities / UI.
 ///
-/// Maya never talks to Suwayomi ports on LAN; the host injects loopback access.
+/// Maya never talks to engine ports on LAN; the host injects local access.
 abstract class MayaLibraryPort {
   Future<List<MayaLibraryItem>> listLibrary();
 
