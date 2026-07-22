@@ -42,6 +42,7 @@
 | **Motor R5 — detalhes e descoberta desktop** | ✅ reviewer independente PASS |
 | **Motor R6 — reader, progresso, downloads e Maya** | ✅ reviewer independente PASS |
 | **Motor R7 — readiness única e supervisor** | ✅ reviewer independente PASS |
+| **Motor R8 — diagnóstico, UI simplificada e guard** | ✅ reviews R8 e integrada PASS |
 
 ## Phases
 
@@ -64,6 +65,7 @@
 | Motor Interno Transparente R5 | ✅ detalhes e descoberta migrados; reviewer PASS |
 | Motor Interno Transparente R6 | ✅ mutações migradas e drains preparados; reviewer PASS |
 | Motor Interno Transparente R7 | ✅ gates verdes; reviewer independente PASS |
+| Motor Interno Transparente R8 | ✅ reviews R8 e integrada PASS |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |
@@ -155,6 +157,51 @@
   `/api/v1` e ownership não mudaram. O `FAIL` inicial sobre admissão durante os
   drains foi corrigido; uma reauditoria limitada desses achados e a revisão
   independente final retornaram `PASS`, sem achado obrigatório ou bloqueante.
+
+## R8 — Diagnóstico, simplificação da UI e guard final
+
+- Baseline committed: R7 `2456274`; upstream e remoto permanecem em
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, sem push.
+- `ServerScreen` mantém somente LAN, endereços do Yomu Core, pareamento e
+  sessões/dispositivos. PID, Java/JRE, JAR, root, porta interna e ações de
+  processo ficam em `DiagnosticsScreen`.
+- A UI comum usa “motor interno” e “recursos de leitura”. A implementação
+  “Suwayomi” aparece no desktop somente no Diagnóstico e é derivada de
+  `EngineDiagnosticsSnapshot`, sem DTO ou estado fornecedor na tela.
+- A indisponibilidade na Home oferece `Tentar novamente`; o indicador do motor
+  abre Diagnóstico, sem expor administração técnica na tela comum.
+- Parar e reiniciar exigem `EngineOwnershipStatus.owned`; o adapter revalida a
+  ownership imediatamente antes da operação. Ownership estrangeira ou
+  inconclusiva desabilita retry técnico e não cria loop automático.
+- `SuwayomiStatus` e `SuwayomiProcessState` foram removidos do Core e mantidos
+  dentro de `yomu_suwayomi`. `HomeShell` continua o único composition root e a
+  readiness do supervisor continua única.
+- O novo `tool/verify_engine_boundary.ps1` proíbe fornecedor em telas,
+  `yomu_local_server` e `yomu_ai`, além de DTOs, `absoluteUrl`, URL 14567,
+  estados upstream e `Image.network` na UI/Core. O guard não possui allowlist
+  permanente de tela ou Core e é chamado por `tool\verify_workspace.ps1`.
+- Gates atuais: core 21/21, Suwayomi 112/112 (live opt-in separado), local
+  server 47/47, AI 69/69, storage 39/39, desktop 206/206 e PWA aprovada;
+  analyzers limpos; guard aprovado; `tool\verify_workspace.ps1` com
+  `ALL CHECKS PASSED` em 153,3 s; build Windows Debug aprovado em 13,9 s;
+  `git diff --check` limpo.
+- Prova runtime: uma instância com `APPDATA`/`LOCALAPPDATA` temporários iniciou
+  o Core e o motor pinado, permaneceu integralmente no monitor secundário e foi
+  fechada. Em verificação manual complementar, o usuário conferiu Servidor e
+  Diagnóstico e respondeu `PASS`, depois confirmou o fechamento normal. Ao fim
+  havia zero processos relacionados e zero listeners em 8787/14567. O root
+  temporário foi validado e removido.
+- Evidência visual somente da janela Yomu:
+  `C:\Users\joaop\Downloads\yomu-sol-final\2026-07-22\01-r8-isolated-home.png`
+  (SHA-256 `265C0B34B1F168A579DD98ED6CC1F5CC471BEC1166826BED08C801A8C850AB7F`)
+  e `02-r8-diagnostico.png`
+  (SHA-256 `35E80E1B45052B13A8C5F8425920BBF66463F3E785F7C2F0FB6B8093FC5B2C75`).
+- Schema SQLite permanece v5; não houve mudança de dependência, SDK, JAR/JRE,
+  porta, ownership dos dados ou wire `/api/v1`. O reviewer independente de R8
+  e a revisão integrada R0–R8 retornaram `PASS`, sem achado obrigatório.
+- Duas pastas temporárias de testes de uma execução intermediária permanecem
+  fora do workspace e sem processo associado; não entram no commit ou push e
+  não foram removidas porque exclusão destrutiva não está autorizada.
 
 ## P2C — provider personalizado OpenAI-compatible (commit local `eda852b`)
 

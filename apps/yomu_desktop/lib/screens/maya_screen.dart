@@ -897,8 +897,8 @@ class _MayaProviderDialogState extends State<_MayaProviderDialog> {
                   style: TextStyle(fontSize: 12.5),
                 ),
                 subtitle: const Text(
-                  'Snapshot transitório e limitado; o banco Suwayomi não é '
-                  'copiado para o SQLite Yomu.',
+                  'Snapshot transitório e limitado; os dados de leitura não são '
+                  'copiados para o SQLite Yomu.',
                   style: TextStyle(color: YomuTokens.textSubtle, fontSize: 11),
                 ),
               ),
@@ -1380,7 +1380,7 @@ class _MayaUnavailable extends StatelessWidget {
       const SizedBox(height: 8),
       Text(
         reason ??
-            'Inicie o Suwayomi para a Maya consultar a biblioteca.\n'
+            'Tente novamente para a Maya consultar a biblioteca.\n'
                 'As ações só são executadas depois da sua confirmação.',
         textAlign: TextAlign.center,
         style: const TextStyle(

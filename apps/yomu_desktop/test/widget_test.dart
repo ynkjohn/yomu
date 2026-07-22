@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yomu_core/yomu_core.dart';
+import 'package:yomu_desktop/screens/diagnostics_screen.dart';
 import 'package:yomu_desktop/screens/extensions_screen.dart';
 import 'package:yomu_desktop/screens/server_screen.dart';
 import 'package:yomu_desktop/shell/home_shell.dart';
@@ -18,7 +19,10 @@ void main() {
       ),
     );
 
-    expect(unavailable.label, 'Yomu Core indisponível · Motor ready');
+    expect(
+      unavailable.label,
+      'Yomu Core indisponível · motor interno disponível',
+    );
     expect(unavailable.color, YomuTokens.danger);
 
     final available = deriveYomuCoreStatus(
@@ -31,7 +35,9 @@ void main() {
     expect(available.color, YomuTokens.success);
   });
 
-  testWidgets('ServerScreen shows stopped motor state', (tester) async {
+  testWidgets('ServerScreen keeps only LAN, address and pairing controls', (
+    tester,
+  ) async {
     final semantics = tester.ensureSemantics();
     await tester.binding.setSurfaceSize(const Size(1200, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -41,18 +47,7 @@ void main() {
       MaterialApp(
         theme: buildYomuTheme(),
         home: ServerScreen(
-          status: const SuwayomiStatus(
-            state: SuwayomiProcessState.stopped,
-            message: 'parado',
-            version: 'v2.3.2238-r2238',
-            baseUrl: 'http://127.0.0.1:14567',
-          ),
           yomuPort: 8787,
-          managedRootDir: r'C:\tmp\yomu\data\suwayomi',
-          onStart: () {},
-          onStop: () {},
-          onRestart: () {},
-          onHealthCheck: () {},
           lanEnabled: false,
           onToggleLan: (value) => requestedLanState = value,
           pairingCode: null,
@@ -66,11 +61,18 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('stopped'), findsOneWidget);
-    expect(find.textContaining('127.0.0.1:14567'), findsWidgets);
-    expect(find.text('Iniciar'), findsOneWidget);
-    expect(find.textContaining('Yomu HTTP'), findsOneWidget);
+    expect(find.text('Servidor'), findsOneWidget);
+    expect(find.text('http://127.0.0.1:8787/'), findsOneWidget);
     expect(find.textContaining('Permitir acesso na LAN'), findsOneWidget);
+    for (final technical in [
+      'Suwayomi',
+      'Java/JRE',
+      'PID',
+      'Parar motor',
+      'Reiniciar motor',
+    ]) {
+      expect(find.textContaining(technical), findsNothing);
+    }
     final lanToggle = find.bySemanticsLabel('Permitir acesso na LAN (Wi-Fi)');
     expect(lanToggle, findsOneWidget);
     final lanNode = tester.getSemantics(lanToggle);
@@ -84,56 +86,119 @@ void main() {
     semantics.dispose();
   });
 
-  testWidgets('ServerScreen shows running motor state', (tester) async {
-    final semantics = tester.ensureSemantics();
+  testWidgets('DiagnosticsScreen exposes technical details and owned actions', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    var retries = 0;
+    var stops = 0;
+    var restarts = 0;
+    var refreshes = 0;
 
     await tester.pumpWidget(
       MaterialApp(
         theme: buildYomuTheme(),
-        home: ServerScreen(
-          status: const SuwayomiStatus(
-            state: SuwayomiProcessState.running,
-            message: 'Suwayomi pronto',
-            version: 'v2.3.2238-r2238',
-            baseUrl: 'http://127.0.0.1:14567',
-            pid: 42,
+        home: DiagnosticsScreen(
+          readiness: const EngineReadinessSnapshot(
+            state: EngineReadinessState.ready,
+          ),
+          diagnostics: EngineDiagnosticsSnapshot(
+            readiness: const EngineReadinessSnapshot(
+              state: EngineReadinessState.ready,
+            ),
+            engineName: 'Suwayomi',
+            engineVersion: 'v2.3.2238-r2238',
+            protocolVersion: 'v1',
+            capabilities: const ['library', 'reader'],
+            runtimeName: 'OpenJDK',
+            runtimeVersion: '21',
+            processId: 42,
+            host: '127.0.0.1',
+            port: 14567,
+            artifactPath: r'C:\Yomu\engine.jar',
+            dataRoot: r'C:\Yomu\data',
+            compatibility: EngineCompatibilityStatus.compatible,
+            ownership: EngineOwnershipStatus.owned,
           ),
           yomuPort: 8787,
-          managedRootDir: r'C:\tmp\yomu\data\suwayomi',
-          aboutVersion: 'v2.3.2238 / r2238',
-          onStart: () {},
-          onStop: () {},
-          onRestart: () {},
-          onHealthCheck: () {},
           lanEnabled: true,
-          onToggleLan: (_) {},
-          pairingCode: '123456',
-          pairingExpiresAt: DateTime.now().add(const Duration(minutes: 5)),
-          onStartPairing: () {},
-          onCancelPairing: () {},
-          lanAddresses: const ['192.168.1.10'],
-          sessionCount: 1,
-          busy: true,
+          onRetry: () => retries++,
+          onStop: () => stops++,
+          onRestart: () => restarts++,
+          onRefresh: () => refreshes++,
         ),
       ),
     );
     await tester.pump();
 
-    expect(find.text('running'), findsOneWidget);
-    expect(find.textContaining('Suwayomi pronto'), findsOneWidget);
-    expect(find.text('Parar'), findsOneWidget);
-    expect(find.textContaining('Código: 123456'), findsOneWidget);
-    expect(find.textContaining('http://192.168.1.10:8787/'), findsOneWidget);
-    final lanNode = tester.getSemantics(
-      find.bySemanticsLabel('Permitir acesso na LAN (Wi-Fi)'),
+    expect(find.text('Suwayomi'), findsOneWidget);
+    expect(find.text('127.0.0.1:14567'), findsOneWidget);
+    expect(find.text('OpenJDK 21'), findsOneWidget);
+    expect(find.text('42'), findsOneWidget);
+    expect(find.text('Parar motor'), findsOneWidget);
+    expect(find.text('Reiniciar motor'), findsOneWidget);
+    expect(find.text('Tentar novamente'), findsOneWidget);
+
+    await tester.tap(find.text('Parar motor'));
+    await tester.tap(find.text('Reiniciar motor'));
+    await tester.tap(find.text('Atualizar diagnóstico'));
+    expect(stops, 1);
+    expect(restarts, 1);
+    expect(refreshes, 1);
+    expect(retries, 0, reason: 'retry is disabled while readiness is ready');
+  });
+
+  testWidgets('DiagnosticsScreen disables process actions without ownership', (
+    tester,
+  ) async {
+    const readiness = EngineReadinessSnapshot(
+      state: EngineReadinessState.actionRequired,
+      failure: EngineFailure(
+        kind: EngineFailureKind.actionRequired,
+        code: 'engine_foreign_process',
+        message: 'O motor interno precisa de atenção.',
+        retryable: false,
+      ),
     );
-    expect(lanNode.hasFlag(SemanticsFlag.isToggled), isTrue);
-    expect(lanNode.hasFlag(SemanticsFlag.isEnabled), isFalse);
-    expect(lanNode.hasFlag(SemanticsFlag.isLiveRegion), isTrue);
-    expect(lanNode.value, contains('Alteração em andamento'));
-    semantics.dispose();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildYomuTheme(),
+        home: DiagnosticsScreen(
+          readiness: readiness,
+          diagnostics: EngineDiagnosticsSnapshot(
+            readiness: readiness,
+            engineName: 'Suwayomi',
+            compatibility: EngineCompatibilityStatus.unknown,
+            ownership: EngineOwnershipStatus.foreign,
+          ),
+          yomuPort: 8787,
+          lanEnabled: false,
+          onRetry: () => fail('retry must stay disabled'),
+          onStop: () => fail('stop must stay disabled'),
+          onRestart: () => fail('restart must stay disabled'),
+          onRefresh: () {},
+        ),
+      ),
+    );
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Tentar novamente'),
+          )
+          .onPressed,
+      isNull,
+    );
+    for (final label in ['Parar motor', 'Reiniciar motor']) {
+      expect(
+        tester
+            .widget<OutlinedButton>(find.widgetWithText(OutlinedButton, label))
+            .onPressed,
+        isNull,
+        reason: label,
+      );
+    }
   });
 
   testWidgets(
@@ -148,16 +213,7 @@ void main() {
         MaterialApp(
           theme: buildYomuTheme(),
           home: ServerScreen(
-            status: const SuwayomiStatus(
-              state: SuwayomiProcessState.stopped,
-              baseUrl: 'http://127.0.0.1:14567',
-            ),
             yomuPort: 8787,
-            managedRootDir: r'C:\tmp\yomu\data\suwayomi',
-            onStart: () {},
-            onStop: () {},
-            onRestart: () {},
-            onHealthCheck: () {},
             lanEnabled: false,
             onToggleLan: (_) {},
             pairingCode: null,

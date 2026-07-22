@@ -3,6 +3,8 @@ import 'package:yomu_core/yomu_core.dart';
 import '../compatibility/suwayomi_compatibility_probe.dart';
 import '../process/process_ownership.dart';
 import '../process/suwayomi_process_manager.dart';
+import '../process/suwayomi_process_failure.dart';
+import '../process/suwayomi_status.dart';
 
 abstract interface class ManagedReadingEngineProcess {
   Stream<Object?> get interruptions;
@@ -12,6 +14,10 @@ abstract interface class ManagedReadingEngineProcess {
   Future<Result<SuwayomiStatus>> start({required Duration timeout});
 
   Future<Result<SuwayomiStatus>> recover();
+
+  Future<Result<bool>> stopOwned();
+
+  Future<Result<SuwayomiStatus>> restartOwned();
 
   Future<bool> checkHealth();
 
@@ -54,6 +60,35 @@ final class SuwayomiManagedReadingEngineProcess
 
   @override
   Future<Result<SuwayomiStatus>> recover() => manager.restart();
+
+  @override
+  Future<Result<bool>> stopOwned() async {
+    final ownership = await manager.verifyCurrentOwnership();
+    if (ownership.verdict != OwnershipVerdict.yomuOwned) {
+      return _ownershipFailure<bool>(ownership);
+    }
+    await manager.stop();
+    if (manager.status.state != SuwayomiProcessState.stopped) {
+      return const Err<bool>(
+        'O encerramento do processo owned não foi confirmado.',
+        SuwayomiProcessFailure(
+          kind: SuwayomiProcessFailureKind.stopUnconfirmed,
+          code: 'engine_stop_unconfirmed',
+          message: 'O encerramento do processo owned não foi confirmado.',
+        ),
+      );
+    }
+    return const Ok(true);
+  }
+
+  @override
+  Future<Result<SuwayomiStatus>> restartOwned() async {
+    final ownership = await manager.verifyCurrentOwnership();
+    if (ownership.verdict != OwnershipVerdict.yomuOwned) {
+      return _ownershipFailure<SuwayomiStatus>(ownership);
+    }
+    return manager.restart();
+  }
 
   @override
   Future<bool> checkHealth() async {
@@ -106,5 +141,19 @@ final class SuwayomiManagedReadingEngineProcess
   Future<void> shutdown() async {
     await manager.shutdown();
     await manager.closeAfterShutdown();
+  }
+
+  Result<T> _ownershipFailure<T>(OwnershipCheck ownership) {
+    final foreign = ownership.verdict == OwnershipVerdict.foreignOrUnverifiable;
+    return Err<T>(
+      'A operação técnica exige ownership comprovada.',
+      SuwayomiProcessFailure(
+        kind: foreign
+            ? SuwayomiProcessFailureKind.ownershipUnverifiable
+            : SuwayomiProcessFailureKind.stopUnconfirmed,
+        code: foreign ? 'engine_ownership_unverifiable' : 'engine_not_running',
+        message: 'A operação técnica exige ownership comprovada.',
+      ),
+    );
   }
 }

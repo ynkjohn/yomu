@@ -13,6 +13,7 @@ import 'package:yomu_suwayomi/yomu_suwayomi.dart';
 import 'package:yomu_ui/yomu_ui.dart';
 
 import '../screens/downloads_screen.dart';
+import '../screens/diagnostics_screen.dart';
 import '../screens/explore_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/library_screen.dart';
@@ -38,6 +39,16 @@ Color _motorStateColor(EngineReadinessState state) => switch (state) {
   EngineReadinessState.actionRequired => YomuTokens.danger,
 };
 
+String _motorStateLabel(EngineReadinessState state) => switch (state) {
+  EngineReadinessState.initializing => 'inicializando',
+  EngineReadinessState.starting => 'iniciando',
+  EngineReadinessState.ready => 'disponível',
+  EngineReadinessState.temporarilyUnavailable => 'indisponível',
+  EngineReadinessState.recovering => 'recuperando',
+  EngineReadinessState.actionRequired => 'ação necessária',
+  EngineReadinessState.shuttingDown => 'encerrando',
+};
+
 @visibleForTesting
 ({String label, Color color}) deriveYomuCoreStatus({
   required int? boundPort,
@@ -45,7 +56,8 @@ Color _motorStateColor(EngineReadinessState state) => switch (state) {
 }) {
   if (boundPort == null) {
     return (
-      label: 'Yomu Core indisponível · Motor ${readiness.state.name}',
+      label:
+          'Yomu Core indisponível · motor interno ${_motorStateLabel(readiness.state)}',
       color: YomuTokens.danger,
     );
   }
@@ -53,7 +65,8 @@ Color _motorStateColor(EngineReadinessState state) => switch (state) {
     return (label: 'Yomu Core ativo · :$boundPort', color: YomuTokens.success);
   }
   return (
-    label: 'Yomu Core ativo · :$boundPort · Motor ${readiness.state.name}',
+    label:
+        'Yomu Core ativo · :$boundPort · motor interno ${_motorStateLabel(readiness.state)}',
     color: _motorStateColor(readiness.state),
   );
 }
@@ -82,7 +95,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     ),
     YomuNavItem(
       id: 'server',
-      label: 'Servidor e Motor',
+      label: 'Servidor',
       icon: YomuIcons.server,
       group: YomuNavGroup.system,
     ),
@@ -144,31 +157,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   EngineDiagnosticsSnapshot? get _engineDiagnostics =>
       _engineLifecycle?.diagnostics;
-
-  SuwayomiStatus get _technicalEngineStatus {
-    final readiness = _readingEngineReadiness;
-    final diagnostics = _engineDiagnostics;
-    final state = switch (readiness.state) {
-      EngineReadinessState.initializing => SuwayomiProcessState.stopped,
-      EngineReadinessState.starting ||
-      EngineReadinessState.recovering => SuwayomiProcessState.starting,
-      EngineReadinessState.ready => SuwayomiProcessState.running,
-      EngineReadinessState.temporarilyUnavailable =>
-        SuwayomiProcessState.unhealthy,
-      EngineReadinessState.actionRequired => SuwayomiProcessState.crashed,
-      EngineReadinessState.shuttingDown => SuwayomiProcessState.stopping,
-    };
-    return SuwayomiStatus(
-      state: state,
-      version: diagnostics?.engineVersion,
-      baseUrl: diagnostics?.host == null || diagnostics?.port == null
-          ? null
-          : 'http://${diagnostics!.host}:${diagnostics.port}',
-      message: readiness.failure?.message,
-      pid: diagnostics?.processId,
-      lastHealthCheck: diagnostics?.lastHealthCheck,
-    );
-  }
 
   @override
   void initState() {
@@ -756,7 +744,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
           title: const Text('Permitir acesso na LAN?'),
           content: const Text(
             'O Yomu Core passará a escutar em 0.0.0.0:8787 na rede local. '
-            'O Suwayomi continua só em 127.0.0.1:14567.\n\n'
+            'O motor interno continua restrito a este computador.\n\n'
             'API autenticada por pareamento. Use só em Wi‑Fi de confiança.',
           ),
           actions: [
@@ -925,33 +913,59 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  Future<void> _startSuwayomi() async {
+  Future<EngineReadinessSnapshot?> _runEngineDiagnosticAction(
+    Future<EngineReadinessSnapshot> Function(ReadingEngineSupervisor lifecycle)
+    action,
+  ) async {
     final lifecycle = _engineLifecycle;
-    if (lifecycle == null || _lifecycle.shuttingDown) return;
+    if (lifecycle == null || _lifecycle.shuttingDown) return null;
     setState(() => _busyEngine = true);
-    final result = await lifecycle.retry();
-    if (!mounted) return;
+    final result = await action(lifecycle);
+    if (!mounted) return null;
     setState(() => _busyEngine = false);
-    final failure = result.failure;
-    if (failure != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(failure.message)));
-    }
+    return result;
   }
 
-  Future<void> _stopSuwayomi() async {
-    if (!mounted) return;
+  Future<void> _retryEngine() async {
+    final result = await _runEngineDiagnosticAction(
+      (lifecycle) => lifecycle.retry(),
+    );
+    if (!mounted || result?.failure == null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(result!.failure!.message)));
+  }
+
+  Future<void> _stopEngineForDiagnostics() async {
+    final result = await _runEngineDiagnosticAction(
+      (lifecycle) => lifecycle.stopOwnedForDiagnostics(),
+    );
+    if (!mounted || result == null) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text(
-          'O motor interno é gerenciado automaticamente pelo Yomu.',
+          result.failure?.message ?? 'O motor interno foi encerrado.',
         ),
       ),
     );
   }
 
-  Future<void> _restartSuwayomi() => _startSuwayomi();
+  Future<void> _restartEngineForDiagnostics() async {
+    final result = await _runEngineDiagnosticAction(
+      (lifecycle) => lifecycle.restartOwnedForDiagnostics(),
+    );
+    if (!mounted || result?.failure == null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(result!.failure!.message)));
+  }
+
+  Future<void> _refreshEngineDiagnostics() async {
+    final lifecycle = _engineLifecycle;
+    if (lifecycle == null || _lifecycle.shuttingDown) return;
+    if (lifecycle.current.isReady) await lifecycle.checkNow();
+    if (mounted && !_lifecycle.shuttingDown) setState(() {});
+  }
 
   Future<void> _openLibraryManga(LibraryManga manga) async {
     await _openMangaDetails(manga.id);
@@ -1106,16 +1120,14 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         library: _libraryGateway,
         media: _libraryAdapter,
         engineReady: _engineReady,
+        onRetryEngine: () => unawaited(_retryEngine()),
         onNavigate: (id) => setState(() => _selected = id),
         onOpenManga: _openLibraryManga,
         onContinueReading: _continueLibraryManga,
       ),
       'server' => ServerScreen(
-        status: _technicalEngineStatus,
         yomuPort: _yomuServer?.boundPort ?? 8787,
-        managedRootDir: _engineDiagnostics?.dataRoot ?? '—',
-        aboutVersion: _engineDiagnostics?.engineVersion,
-        busy: _busyEngine || _busyHttp || _busyAuth,
+        busy: _busyHttp || _busyAuth,
         lanEnabled: _lanEnabled,
         onToggleLan: (v) => unawaited(_toggleLan(v)),
         pairingCode: displayCode,
@@ -1136,19 +1148,17 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             .toList(),
         onRevokeSession: _revokeSession,
         onRevokeAllSessions: _revokeAllSessions,
-        onStart: () => unawaited(_startSuwayomi()),
-        onStop: () => unawaited(_stopSuwayomi()),
-        onRestart: () => unawaited(_restartSuwayomi()),
-        onHealthCheck: () async {
-          final lifecycle = _engineLifecycle;
-          if (lifecycle == null || _lifecycle.shuttingDown) return;
-          if (_engineReady) {
-            await lifecycle.checkNow();
-          } else {
-            await lifecycle.retry();
-          }
-          if (mounted && !_lifecycle.shuttingDown) setState(() {});
-        },
+      ),
+      'diag' => DiagnosticsScreen(
+        readiness: _readingEngineReadiness,
+        diagnostics: _engineDiagnostics,
+        yomuPort: _yomuServer?.boundPort,
+        lanEnabled: _lanEnabled,
+        busy: _busyEngine,
+        onRetry: () => unawaited(_retryEngine()),
+        onStop: () => unawaited(_stopEngineForDiagnostics()),
+        onRestart: () => unawaited(_restartEngineForDiagnostics()),
+        onRefresh: () => unawaited(_refreshEngineDiagnostics()),
       ),
       'explore' => ExploreScreen(
         catalog: _coreAdapter,
@@ -1185,8 +1195,6 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             ? 'O historico persistente sera conectado em uma fase posterior.'
             : _selected == 'backup'
             ? 'Backup e restauracao serao conectados em uma fase posterior.'
-            : _selected == 'diag'
-            ? 'A coleta e exportacao de diagnostico serao conectadas em uma fase posterior.'
             : 'Destino preservado conforme o design_prod.',
       ),
     };

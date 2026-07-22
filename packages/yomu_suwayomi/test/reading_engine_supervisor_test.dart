@@ -417,6 +417,53 @@ void main() {
     expect(supervisor.current.failure!.message, isNot(contains('secret')));
     await supervisor.shutdown();
   });
+
+  test(
+    'diagnostics stop is ownership-gated and does not trigger recovery',
+    () async {
+      final process = _FakeProcess();
+      final delays = _ManualDelays();
+      final supervisor = _supervisor(process, delays);
+      await supervisor.ensureStarted();
+
+      final result = await supervisor.stopOwnedForDiagnostics();
+
+      expect(process.stopOwnedCalls, 1);
+      expect(process.recoverCalls, 0);
+      expect(result.state, EngineReadinessState.actionRequired);
+      expect(result.failure!.code, 'engine_stopped_manually');
+      expect(supervisor.diagnostics.ownership, EngineOwnershipStatus.none);
+      await supervisor.shutdown();
+    },
+  );
+
+  test(
+    'diagnostics restart refuses unproven ownership without retry loop',
+    () async {
+      final process = _FakeProcess()
+        ..restartOwnedResult = const Err<SuwayomiStatus>(
+          'ownership',
+          SuwayomiProcessFailure(
+            kind: SuwayomiProcessFailureKind.ownershipUnverifiable,
+            code: 'engine_ownership_unverifiable',
+            message: 'secret process detail',
+          ),
+        );
+      final delays = _ManualDelays();
+      final supervisor = _supervisor(process, delays);
+      await supervisor.ensureStarted();
+
+      final result = await supervisor.restartOwnedForDiagnostics();
+
+      expect(process.restartOwnedCalls, 1);
+      expect(process.recoverCalls, 0);
+      expect(result.state, EngineReadinessState.actionRequired);
+      expect(result.failure!.code, 'engine_ownership_unverifiable');
+      expect(result.failure!.message, isNot(contains('secret')));
+      expect(delays.requested, contains(const Duration(seconds: 30)));
+      await supervisor.shutdown();
+    },
+  );
 }
 
 ReadingEngineSupervisor _supervisor(
@@ -483,6 +530,8 @@ final class _FakeProcess implements ManagedReadingEngineProcess {
   final List<Duration> startTimeouts = [];
   int startCalls = 0;
   int recoverCalls = 0;
+  int stopOwnedCalls = 0;
+  int restartOwnedCalls = 0;
   int healthCalls = 0;
   int shutdownCalls = 0;
   int beginShutdownCalls = 0;
@@ -497,6 +546,8 @@ final class _FakeProcess implements ManagedReadingEngineProcess {
   Object? recoverError;
   Object? healthError;
   Object? compatibilityError;
+  Result<bool> stopOwnedResult = const Ok(true);
+  Result<SuwayomiStatus> restartOwnedResult = const Ok(_running);
   SuwayomiCompatibilityResult compatibility =
       SuwayomiCompatibilityResult.compatible(
         engineVersion: 'v2.3.2238-r2238',
@@ -549,6 +600,18 @@ final class _FakeProcess implements ManagedReadingEngineProcess {
           ? const Ok(_running)
           : recoverResults.removeFirst(),
     );
+  }
+
+  @override
+  Future<Result<bool>> stopOwned() async {
+    stopOwnedCalls++;
+    return stopOwnedResult;
+  }
+
+  @override
+  Future<Result<SuwayomiStatus>> restartOwned() async {
+    restartOwnedCalls++;
+    return restartOwnedResult;
   }
 
   @override

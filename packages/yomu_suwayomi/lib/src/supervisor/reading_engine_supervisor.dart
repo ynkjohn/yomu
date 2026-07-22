@@ -4,6 +4,7 @@ import 'package:yomu_core/yomu_core.dart';
 
 import '../compatibility/suwayomi_compatibility_probe.dart';
 import '../process/suwayomi_process_failure.dart';
+import '../process/suwayomi_status.dart';
 import 'managed_reading_engine_process.dart';
 
 typedef SupervisorNow = DateTime Function();
@@ -166,6 +167,76 @@ final class ReadingEngineSupervisor
       generation: generation,
       allowAutomaticRecovery: true,
     );
+  }
+
+  /// Technical stop exposed only by Diagnostics.
+  ///
+  /// The adapter revalidates ownership immediately before touching the
+  /// process. A successful stop leaves the supervisor reusable through
+  /// [retry], without activating automatic recovery.
+  Future<EngineReadinessSnapshot> stopOwnedForDiagnostics() {
+    if (_shuttingDown || _closed) return Future.value(_current);
+    return _serialized(() async {
+      final generation = ++_generation;
+      _publish(
+        const EngineReadinessSnapshot(state: EngineReadinessState.shuttingDown),
+      );
+      Result<bool> result;
+      try {
+        result = await _process.stopOwned();
+      } catch (_) {
+        if (_isCurrent(generation)) {
+          _publishFailure(_unexpectedFailure('engine_stop_unclassified'));
+        }
+        return _current;
+      }
+      if (!_isCurrent(generation)) return _current;
+      Object? cause;
+      final stopped = result.when(
+        ok: (value) => value,
+        err: (_, error) {
+          cause = error;
+          return false;
+        },
+      );
+      if (!stopped) {
+        _publishFailure(_mapProcessFailure(cause));
+        return _current;
+      }
+      _ownership = EngineOwnershipStatus.none;
+      _compatibility = EngineCompatibilityStatus.unknown;
+      _compatibilityResult = null;
+      _healthySince = null;
+      _publish(
+        const EngineReadinessSnapshot(
+          state: EngineReadinessState.actionRequired,
+          failure: EngineFailure(
+            kind: EngineFailureKind.actionRequired,
+            code: 'engine_stopped_manually',
+            message: 'O motor interno foi encerrado pelo Diagnóstico.',
+            retryable: true,
+          ),
+        ),
+      );
+      return _current;
+    });
+  }
+
+  /// Technical restart exposed only by Diagnostics and ownership-gated by the
+  /// vendor adapter immediately before stop/start.
+  Future<EngineReadinessSnapshot> restartOwnedForDiagnostics() {
+    if (_shuttingDown || _closed) return Future.value(_current);
+    return _serialized(() async {
+      final generation = ++_generation;
+      _publish(
+        const EngineReadinessSnapshot(state: EngineReadinessState.starting),
+      );
+      return _runStartOperation(
+        operation: _process.restartOwned,
+        generation: generation,
+        allowAutomaticRecovery: true,
+      );
+    });
   }
 
   Future<EngineReadinessSnapshot> _runStartOperation({

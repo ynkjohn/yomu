@@ -18,6 +18,9 @@ if ($flutterBin) {
   $env:Path = "$flutterBin;" + $env:Path
 }
 
+Write-Host '== reading engine architecture guard =='
+& (Join-Path $root 'tool/verify_engine_boundary.ps1')
+
 Write-Host '== pinned engine compatibility manifest =='
 $engineManifest = Get-Content `
   'packages/yomu_suwayomi/vendor/engine_manifest.json' -Raw | ConvertFrom-Json

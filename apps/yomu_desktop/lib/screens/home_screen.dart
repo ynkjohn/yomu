@@ -11,6 +11,7 @@ class HomeScreen extends StatefulWidget {
     required this.library,
     required this.media,
     required this.engineReady,
+    required this.onRetryEngine,
     required this.onNavigate,
     required this.onOpenManga,
     required this.onContinueReading,
@@ -19,6 +20,7 @@ class HomeScreen extends StatefulWidget {
   final LibraryGateway? library;
   final EngineMediaGateway? media;
   final bool engineReady;
+  final VoidCallback onRetryEngine;
   final ValueChanged<String> onNavigate;
   final Future<void> Function(LibraryManga manga) onOpenManga;
   final Future<void> Function(LibraryManga manga) onContinueReading;
@@ -237,9 +239,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           _HomeNotice(
                             color: YomuTokens.warning,
                             message:
-                                'O motor local está parado. Biblioteca remota e novidades estão indisponíveis.',
-                            action: 'Abrir Servidor e Motor',
-                            onPressed: () => widget.onNavigate('server'),
+                                'Os recursos de leitura estão indisponíveis no momento.',
+                            action: 'Tentar novamente',
+                            onPressed: widget.onRetryEngine,
                           )
                         else if (!_loading && _library.isEmpty)
                           _EmptyHome(
@@ -267,7 +269,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 width: 300,
                                 child: _SystemHealthCard(
                                   engineReady: widget.engineReady,
-                                  onServer: () => widget.onNavigate('server'),
+                                  onDiagnostics: () =>
+                                      widget.onNavigate('diag'),
                                   onDownloads: () =>
                                       widget.onNavigate('downloads'),
                                 ),
@@ -687,12 +690,12 @@ class _ResumeCard extends StatelessWidget {
 class _SystemHealthCard extends StatelessWidget {
   const _SystemHealthCard({
     required this.engineReady,
-    required this.onServer,
+    required this.onDiagnostics,
     required this.onDownloads,
   });
 
   final bool engineReady;
-  final VoidCallback onServer;
+  final VoidCallback onDiagnostics;
   final VoidCallback onDownloads;
 
   @override
@@ -719,7 +722,7 @@ class _SystemHealthCard extends StatelessWidget {
         _HealthRow(
           color: engineReady ? YomuTokens.success : YomuTokens.danger,
           label: engineReady ? 'Motor operando' : 'Motor parado',
-          onPressed: onServer,
+          onPressed: onDiagnostics,
         ),
         _HealthRow(
           color: YomuTokens.accent,

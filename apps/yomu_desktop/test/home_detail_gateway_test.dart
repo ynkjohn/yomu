@@ -31,6 +31,7 @@ void main() {
             library: library,
             media: media,
             engineReady: engineReady,
+            onRetryEngine: () {},
             onNavigate: (_) {},
             onOpenManga: onOpen ?? (_) async {},
             onContinueReading: onContinue ?? (_) async {},
@@ -115,7 +116,11 @@ void main() {
     await tester.pump();
 
     expect(find.text('Motor antigo'), findsNothing);
-    expect(find.textContaining('O motor local está parado.'), findsOneWidget);
+    expect(
+      find.text('Os recursos de leitura estão indisponíveis no momento.'),
+      findsOneWidget,
+    );
+    expect(find.text('Tentar novamente'), findsOneWidget);
   });
 
   testWidgets('Home sanitizes unexpected failures', (tester) async {

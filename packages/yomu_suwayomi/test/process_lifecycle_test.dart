@@ -5,8 +5,21 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
-import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_suwayomi/yomu_suwayomi.dart';
+
+Future<void> _deleteDirectoryIfPresent(Directory directory) async {
+  const maxAttempts = 20;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await directory.delete(recursive: true);
+      return;
+    } on FileSystemException {
+      if (!await directory.exists()) return;
+      if (attempt == maxAttempts) rethrow;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+}
 
 class _FixedJavaResolver extends JavaResolver {
   _FixedJavaResolver(this.exe);
@@ -152,9 +165,7 @@ class _StopFixture {
     process.completeExit();
     await Future<void>.delayed(Duration.zero);
     await manager.dispose();
-    try {
-      root.deleteSync(recursive: true);
-    } catch (_) {}
+    await _deleteDirectoryIfPresent(root);
   }
 }
 
@@ -269,7 +280,7 @@ String _ownedCmd({
 void main() {
   test('foreign listener on port is not adopted and not killed', () async {
     final root = Directory.systemTemp.createTempSync('yomu-life');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
 
@@ -310,7 +321,7 @@ void main() {
     'owned identity not healthy is preserved for supervised recovery',
     () async {
       final root = Directory.systemTemp.createTempSync('yomu-stop-id');
-      addTearDown(() => root.deleteSync(recursive: true));
+      addTearDown(() => _deleteDirectoryIfPresent(root));
       final paths = SuwayomiPaths(root);
       await paths.ensureLayout();
 
@@ -379,7 +390,7 @@ void main() {
 
   test('stop incomplete keeps identity file for retry', () async {
     final root = Directory.systemTemp.createTempSync('yomu-stop-id2');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
 
@@ -435,7 +446,7 @@ void main() {
     'identity save is atomic (temp + rename without delete-first)',
     () async {
       final root = Directory.systemTemp.createTempSync('yomu-atomic');
-      addTearDown(() => root.deleteSync(recursive: true));
+      addTearDown(() => _deleteDirectoryIfPresent(root));
       final file = File(p.join(root.path, 'id.json'));
       final id1 = ManagedInstanceIdentity(
         runId: 'aa',
@@ -465,7 +476,7 @@ void main() {
 
   test('stop without process and foreign identity stays unhealthy', () async {
     final root = Directory.systemTemp.createTempSync('yomu-stop');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
 
@@ -507,7 +518,7 @@ void main() {
     'healthy reattach reuses owned identity without second start race',
     () async {
       final root = Directory.systemTemp.createTempSync('yomu-reattach');
-      addTearDown(() => root.deleteSync(recursive: true));
+      addTearDown(() => _deleteDirectoryIfPresent(root));
       final paths = SuwayomiPaths(root);
       await paths.ensureLayout();
 
@@ -585,7 +596,7 @@ void main() {
 
   test('reattach rejects health served by a different listener PID', () async {
     final root = Directory.systemTemp.createTempSync('yomu-reattach-foreign');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
 
@@ -671,7 +682,7 @@ void main() {
 
   test('reattach rejects divergent root without kill or second JVM', () async {
     final root = Directory.systemTemp.createTempSync('yomu-root-mismatch-');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
     final manifest = _manifest();
@@ -743,7 +754,7 @@ void main() {
 
   test('kill=false on owned stop keeps identity and unhealthy', () async {
     final root = Directory.systemTemp.createTempSync('yomu-killfalse');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final paths = SuwayomiPaths(root);
     await paths.ensureLayout();
 
@@ -916,7 +927,7 @@ void main() {
 
   test('identity .bak recovery after primary corruption', () async {
     final root = Directory.systemTemp.createTempSync('yomu-bak');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final file = File(p.join(root.path, 'id.json'));
     final id = ManagedInstanceIdentity(
       runId: 'bakrun',
@@ -941,7 +952,7 @@ void main() {
 
   test('identity rejects invalid startedAt', () async {
     final root = Directory.systemTemp.createTempSync('yomu-started');
-    addTearDown(() => root.deleteSync(recursive: true));
+    addTearDown(() => _deleteDirectoryIfPresent(root));
     final file = File(p.join(root.path, 'id.json'));
     await file.writeAsString(
       '{"runId":"x","pid":1,"startedAt":"not-a-date",'
@@ -989,11 +1000,7 @@ void main() {
     'identity.save fail + kill=false: Process.start once; second start refused',
     () async {
       final root = Directory.systemTemp.createTempSync('yomu-savefail');
-      addTearDown(() {
-        try {
-          root.deleteSync(recursive: true);
-        } catch (_) {}
-      });
+      addTearDown(() => _deleteDirectoryIfPresent(root));
       final paths = SuwayomiPaths(root);
       await paths.ensureLayout();
 

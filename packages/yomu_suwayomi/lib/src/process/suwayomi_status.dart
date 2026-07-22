@@ -1,4 +1,4 @@
-/// Lifecycle of the managed Suwayomi-Server process.
+/// Internal lifecycle of the managed Suwayomi-Server process.
 enum SuwayomiProcessState {
   stopped,
   starting,
@@ -8,7 +8,7 @@ enum SuwayomiProcessState {
   stopping,
 }
 
-/// Snapshot shown in the desktop status bar and health API.
+/// Vendor-process snapshot kept inside the Suwayomi adapter boundary.
 class SuwayomiStatus {
   const SuwayomiStatus({
     required this.state,
@@ -47,12 +47,12 @@ class SuwayomiStatus {
   }
 
   Map<String, Object?> toJson() => {
-        'state': state.name,
-        'version': version,
-        'baseUrl': baseUrl,
-        'message': message,
-        'pid': pid,
-        'lastHealthCheck': lastHealthCheck?.toIso8601String(),
-        'isReady': isReady,
-      };
+    'state': state.name,
+    'version': version,
+    'baseUrl': baseUrl,
+    'message': message,
+    'pid': pid,
+    'lastHealthCheck': lastHealthCheck?.toIso8601String(),
+    'isReady': isReady,
+  };
 }

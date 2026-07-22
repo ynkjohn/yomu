@@ -974,3 +974,107 @@ Allowlist nominal de R7:
 `.playwright-cli/**`, `mcps/tasks/tools/**`, builds e roots temporários ficam
 fora. R8 só pode começar após o `PASS` final de R7, staging nominal, inspeção
 integral do staged diff e commit próprio de R7.
+
+## Checkpoint R8 — Diagnóstico, UI simplificada e guard final
+
+R8 parte do commit R7 `245627428bb0e70a90a6d7c0ae76c28f646ebbd1` e
+conclui a experiência de motor interno transparente sem incluir “Novidades
+desktop”. Upstream e remoto permanecem em
+`31c6764314ee52d5a9c30efe0b5b291e840f50e9`, sem push. O SQLite Yomu
+continua no schema v5; JAR, JRE, SDK, dependências, portas, ownership dos dados
+e wire `/api/v1` não mudaram.
+
+Fronteira e UI implementadas:
+
+- `ServerScreen` contém somente LAN, endereços, pareamento e
+  sessões/dispositivos;
+- `DiagnosticsScreen` recebe apenas `EngineReadinessSnapshot` e
+  `EngineDiagnosticsSnapshot` e concentra implementação, versão, protocolo,
+  capacidades, PID, Java/JRE, JAR, root, porta interna, compatibility e
+  ownership;
+- parar e reiniciar ficam habilitados somente para processo owned, e o adapter
+  revalida ownership imediatamente antes de tocar o processo;
+- ownership estrangeira ou inconclusiva desabilita ações técnicas e não entra
+  em recovery automático;
+- `SuwayomiStatus` e `SuwayomiProcessState` saíram do Core e permanecem dentro
+  do adapter fornecedor;
+- textos comuns usam “motor interno” ou “recursos de leitura”; no desktop, a
+  marca da implementação aparece somente no Diagnóstico;
+- a Home oferece a ação comum `Tentar novamente` para indisponibilidade do
+  motor e direciona detalhes técnicos exclusivamente ao Diagnóstico;
+- `HomeShell` permanece o único composition root; a readiness continua única;
+- `tool/verify_engine_boundary.ps1` proíbe imports/DTOs/URLs/estados fornecedor
+  na UI/Core, qualquer dependência do fornecedor em `yomu_local_server` ou
+  `yomu_ai` e `Image.network` para mídia do motor, sem allowlist permanente de
+  tela ou Core;
+- aliases wire `suwayomiReady` e `suwayomi` permanecem temporariamente; novos
+  consumidores continuam usando `engineReady`/`readingEngine`.
+
+Validação de R8 antes das revisões finais:
+
+- `yomu_core`: 21/21;
+- `yomu_suwayomi`: 112/112, com prova live opt-in separada;
+- `yomu_local_server`: 47/47;
+- `yomu_ai`: 69/69;
+- `yomu_storage`: 39/39;
+- desktop completo: 206/206;
+- PWA health, preload e reader races: aprovados;
+- analyzers dos packages e workspace: limpos;
+- guard arquitetural: `ENGINE BOUNDARY GUARD PASSED`;
+- `tool\verify_workspace.ps1`: `ALL CHECKS PASSED` em 153,3 s;
+- build Windows Debug aprovado em 13,9 s;
+- formatter Dart 3.8.1 limitado à allowlist R8;
+- `git diff --check` limpo e hash protegido preservado em
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`;
+- a race de teardown de diretório temporário foi corrigida com cleanup
+  assíncrono, retries limitados e propagação de falha persistente; a suíte
+  `yomu_suwayomi` passou 112/112 e o verifier integral passou após a correção;
+- prova runtime isolada no monitor secundário e verificação manual complementar:
+  o usuário conferiu Servidor e Diagnóstico, respondeu `PASS` e confirmou o
+  fechamento normal; ao fim havia zero processos do produto e zero listeners
+  em 8787/14567; o root temporário criado pela prova foi validado e removido;
+- evidências da janela Yomu:
+  `C:\Users\joaop\Downloads\yomu-sol-final\2026-07-22\01-r8-isolated-home.png`
+  (`265C0B34B1F168A579DD98ED6CC1F5CC471BEC1166826BED08C801A8C850AB7F`) e
+  `02-r8-diagnostico.png`
+  (`35E80E1B45052B13A8C5F8425920BBF66463F3E785F7C2F0FB6B8093FC5B2C75`).
+
+O reviewer independente de R8 e a revisão integrada R0–R8 retornaram `PASS`,
+sem achado obrigatório ou bloqueante. Staging nominal, inspeção integral do
+staged diff, commit próprio R8 e push normal dos commits locais estão liberados
+pela autorização já concedida.
+
+Duas pastas temporárias de testes de uma execução intermediária permanecem fora
+do workspace, sem processo associado: `yomu-atomic2a44b34e` e
+`yomu-stop-handle3b402a0e`. Não foram removidas porque a exclusão destrutiva não
+está autorizada; não entram no commit nem afetam produto, build ou push.
+
+Allowlist nominal de R8:
+
+- `apps/yomu_desktop/lib/screens/diagnostics_screen.dart`;
+- `apps/yomu_desktop/lib/screens/home_screen.dart`;
+- `apps/yomu_desktop/lib/screens/maya_screen.dart`;
+- `apps/yomu_desktop/lib/screens/server_screen.dart`;
+- `apps/yomu_desktop/lib/shell/desktop_lifecycle.dart`;
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_desktop/test/home_detail_gateway_test.dart`;
+- `apps/yomu_desktop/test/promoted_regressions_test.dart`;
+- `apps/yomu_desktop/test/widget_test.dart`;
+- `packages/yomu_core/lib/src/entities/suwayomi_status.dart` (remoção);
+- `packages/yomu_core/lib/yomu_core.dart`;
+- `packages/yomu_suwayomi/lib/src/process/suwayomi_process_manager.dart`;
+- `packages/yomu_suwayomi/lib/src/process/suwayomi_status.dart`;
+- `packages/yomu_suwayomi/lib/src/supervisor/managed_reading_engine_process.dart`;
+- `packages/yomu_suwayomi/lib/src/supervisor/reading_engine_supervisor.dart`;
+- `packages/yomu_suwayomi/lib/yomu_suwayomi.dart`;
+- `packages/yomu_suwayomi/test/process_lifecycle_test.dart`;
+- `packages/yomu_suwayomi/test/reading_engine_supervisor_test.dart`;
+- `tool/verify_engine_boundary.ps1`;
+- `tool/verify_workspace.ps1`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/status.md`.
+
+`AGENTS.md`, `pubspec.lock`, arquivos status-only/EOL, `design_prod/**`,
+`.playwright-cli/**`, `mcps/tasks/tools/**`, builds, screenshots e roots
+temporários permanecem fora.

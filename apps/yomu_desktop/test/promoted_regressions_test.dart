@@ -92,6 +92,7 @@ void main() {
   ) async {
     await setDesktopSurface(tester);
     String? destination;
+    var retries = 0;
 
     await tester.pumpWidget(
       MaterialApp(
@@ -101,6 +102,7 @@ void main() {
             library: null,
             media: const _EmptyMediaGateway(),
             engineReady: false,
+            onRetryEngine: () => retries++,
             onNavigate: (value) => destination = value,
             onOpenManga: (_) async {},
             onContinueReading: (_) async {},
@@ -112,6 +114,10 @@ void main() {
 
     expect(find.text('Buscar nas fontes…'), findsOneWidget);
     expect(find.textContaining('biblioteca e nas fontes'), findsNothing);
+    expect(find.text('Tentar novamente'), findsOneWidget);
+    expect(find.textContaining('Servidor e Motor'), findsNothing);
+    await tester.tap(find.text('Tentar novamente'));
+    expect(retries, 1);
 
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
     await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
@@ -136,6 +142,7 @@ void main() {
             library: library,
             media: const _EmptyMediaGateway(),
             engineReady: true,
+            onRetryEngine: () {},
             onNavigate: (value) => destination = value,
             onOpenManga: (_) async {},
             onContinueReading: (_) async {},
@@ -235,6 +242,7 @@ void main() {
             library: library,
             media: const _EmptyMediaGateway(),
             engineReady: true,
+            onRetryEngine: () {},
             onNavigate: (_) {},
             onOpenManga: (_) async {},
             onContinueReading: (_) async {},
@@ -278,6 +286,7 @@ void main() {
             library: library,
             media: const _EmptyMediaGateway(),
             engineReady: true,
+            onRetryEngine: () {},
             onNavigate: (value) => destination = value,
             onOpenManga: (_) async {},
             onContinueReading: (_) async {},
@@ -302,7 +311,7 @@ void main() {
 
     await tester.tap(find.bySemanticsLabel('Motor operando'));
     await tester.pump();
-    expect(destination, 'server');
+    expect(destination, 'diag');
     semantics.dispose();
   });
 
@@ -328,16 +337,7 @@ void main() {
         theme: buildYomuTheme(),
         home: Scaffold(
           body: ServerScreen(
-            status: const SuwayomiStatus(
-              state: SuwayomiProcessState.running,
-              baseUrl: 'http://127.0.0.1:14567',
-            ),
             yomuPort: 8787,
-            managedRootDir: r'C:\tmp\yomu',
-            onStart: () {},
-            onStop: () {},
-            onRestart: () {},
-            onHealthCheck: () {},
             lanEnabled: true,
             onToggleLan: (_) {},
             pairingCode: null,

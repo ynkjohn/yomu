@@ -116,6 +116,29 @@ a sanitized 503. Startup, recovery and shutdown generation checks prevent late
 async results from publishing readiness or creating a second JVM. Ports remain
 fixed at 127.0.0.1:14567 and 8787, and SQLite remains schema v5.
 
+R8 closes the product boundary in the desktop UI. `ServerScreen` contains only
+LAN opt-in, Yomu Core addresses, pairing and paired sessions; Java, JAR, PID,
+the internal port and process controls live exclusively in
+`DiagnosticsScreen`. Common product copy refers to the internal engine or
+reading capabilities. The current implementation name is rendered only from a
+generic `EngineDiagnosticsSnapshot`, so no vendor DTO or lifecycle state leaks
+back into Yomu Core or ordinary screens.
+
+Diagnostics stop and restart revalidate process ownership in the Suwayomi
+adapter immediately before acting. Foreign or inconclusive ownership disables
+technical process actions and cannot enter an automatic retry loop. The
+vendor-specific `SuwayomiStatus` and `SuwayomiProcessState` now live inside
+`yomu_suwayomi`; product readiness remains the sole `EngineLifecycle` stream.
+`HomeShell` is still the only composition root.
+
+`tool/verify_engine_boundary.ps1`, invoked by the workspace verifier, rejects
+direct `yomu_suwayomi` imports outside that composition root, any dependency
+from `yomu_local_server` or `yomu_ai`, vendor DTO/process types, internal engine
+URLs, `absoluteUrl`, upstream download-state strings and direct network images
+in desktop UI/Core. There is no permanent screen/Core allowlist. `/api/v1`,
+including the temporary `suwayomiReady`/`suwayomi` aliases, ports, schema v5,
+JAR/JRE and data ownership remain unchanged.
+
 ## Dual catalog (Source Builder)
 
 - Extension sources: runtime = Suwayomi; appear in Suwayomi UI/API.

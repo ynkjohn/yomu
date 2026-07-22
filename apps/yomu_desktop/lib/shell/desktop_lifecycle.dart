@@ -239,7 +239,7 @@ class StorageFirstBootstrap {
   /// JSON. Only [LegacyMayaMigrationException] degrades Maya; storage failures
   /// continue to fail bootstrap.
   /// [onMayaUnavailable] receives the typed legacy failure for sanitization.
-  /// [startRemainingServices] creates Suwayomi manager and Core HTTP.
+  /// [startRemainingServices] creates the reading engine and Core HTTP.
   static Future<void> run({
     required Future<void> Function() openStorage,
     required Future<void> Function() initializeAuth,

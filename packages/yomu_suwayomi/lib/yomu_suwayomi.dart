@@ -17,5 +17,6 @@ export 'src/process/process_ownership.dart';
 export 'src/process/suwayomi_process_failure.dart';
 export 'src/process/suwayomi_process_manager.dart'
     show SuwayomiProcessManager, kYomuSuwayomiPort, kSuwayomiRootDirProperty;
+export 'src/process/suwayomi_status.dart';
 export 'src/supervisor/managed_reading_engine_process.dart';
 export 'src/supervisor/reading_engine_supervisor.dart';

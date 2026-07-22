@@ -15,6 +15,7 @@ import '../java/java_resolver.dart';
 import 'managed_instance_identity.dart';
 import 'process_ownership.dart';
 import 'suwayomi_process_failure.dart';
+import 'suwayomi_status.dart';
 
 /// Default loopback port dedicated to Yomu-managed Suwayomi.
 const int kYomuSuwayomiPort = 14567;

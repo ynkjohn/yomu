@@ -3,7 +3,6 @@ library;
 
 export 'src/entities/personal_status.dart';
 export 'src/entities/source_origin.dart';
-export 'src/entities/suwayomi_status.dart';
 export 'src/reading_engine/catalog_gateway.dart';
 export 'src/reading_engine/downloads_gateway.dart';
 export 'src/reading_engine/engine_diagnostics.dart';
