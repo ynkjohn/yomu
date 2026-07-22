@@ -25,6 +25,43 @@
     "license": "MPL-2.0",
     "licenseUrl": "https://raw.githubusercontent.com/Suwayomi/Suwayomi-Server/v2.3.2238/LICENSE"
   },
+  "compatibility": {
+    "restApiVersion": "v1",
+    "graphqlPath": "/api/graphql",
+    "capabilities": [
+      "library",
+      "manga-details",
+      "reader",
+      "progress",
+      "catalog",
+      "extensions",
+      "downloads"
+    ],
+    "requiredQueryFields": [
+      "chapter",
+      "downloadStatus",
+      "extensionStores",
+      "extensions",
+      "manga",
+      "mangas",
+      "sources"
+    ],
+    "requiredMutationFields": [
+      "addExtensionStore",
+      "clearDownloader",
+      "dequeueChapterDownloads",
+      "enqueueChapterDownloads",
+      "fetchChapterPages",
+      "fetchExtensions",
+      "fetchMangaAndChapters",
+      "fetchSourceManga",
+      "startDownloader",
+      "stopDownloader",
+      "updateChapter",
+      "updateExtension",
+      "updateManga"
+    ]
+  },
   "jre": {
     "vendor": "Eclipse Temurin",
     "version": "21.0.11+10",

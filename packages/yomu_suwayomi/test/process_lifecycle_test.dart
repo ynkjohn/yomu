@@ -307,7 +307,7 @@ void main() {
   });
 
   test(
-    'owned identity not healthy: kill with ownership, preserve if port stuck',
+    'owned identity not healthy is preserved for supervised recovery',
     () async {
       final root = Directory.systemTemp.createTempSync('yomu-stop-id');
       addTearDown(() => root.deleteSync(recursive: true));
@@ -361,11 +361,15 @@ void main() {
       final result = await manager.start(
         readyTimeout: const Duration(milliseconds: 400),
       );
-      expect(probe.killed, contains(5555));
+      expect(probe.killed, isEmpty);
       result.when(
         ok: (_) => fail('expected error while port still held'),
-        err: (m, _) {
+        err: (m, cause) {
           expect(m.toLowerCase(), contains('identidade'));
+          expect(
+            (cause as SuwayomiProcessFailure).kind,
+            SuwayomiProcessFailureKind.readinessTimeout,
+          );
         },
       );
       expect(paths.instanceIdentity.existsSync(), isTrue);
@@ -527,6 +531,7 @@ void main() {
         p.join(paths.runtimeDir.path, 'Suwayomi-Server-v2.3.2238.jar'),
       )..createSync(recursive: true);
       final rootAbs = paths.dataDir.absolute.path;
+      File(p.join(paths.dataDir.path, 'server.conf')).writeAsStringSync('');
       final started = DateTime.utc(2026, 7, 9, 12);
       const runId = 'reattach1';
       final cl = _ownedCmd(
@@ -577,6 +582,164 @@ void main() {
       expect(manager.identity?.runId, runId);
     },
   );
+
+  test('reattach rejects health served by a different listener PID', () async {
+    final root = Directory.systemTemp.createTempSync('yomu-reattach-foreign');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final paths = SuwayomiPaths(root);
+    await paths.ensureLayout();
+
+    const testPort = 24604;
+    final health = await HttpServer.bind(
+      InternetAddress.loopbackIPv4,
+      testPort,
+    );
+    addTearDown(health.close);
+    health.listen((req) async {
+      req.response.statusCode = 200;
+      req.response.headers.contentType = ContentType.json;
+      req.response.write('{"ok":true}');
+      await req.response.close();
+    });
+
+    final java = File(p.join(root.path, 'java.exe'))..writeAsStringSync('fake');
+    final jar = paths.jarFile(_manifest().suwayomi.jarFile)
+      ..createSync(recursive: true);
+    File(p.join(paths.dataDir.path, 'server.conf')).writeAsStringSync('');
+    final started = DateTime.utc(2026, 7, 9, 12);
+    const runId = 'owned-not-listener';
+    final identity = ManagedInstanceIdentity(
+      runId: runId,
+      pid: 4242,
+      startedAt: started,
+      javaExecutable: java.absolute.path,
+      jarPath: jar.absolute.path,
+      rootDir: paths.dataDir.absolute.path,
+      port: testPort,
+    );
+    await identity.save(paths.instanceIdentity);
+    final probe = _FakeProbe(
+      listenerPid: 5252,
+      snapshots: {
+        4242: ProcessSnapshot(
+          pid: 4242,
+          exists: true,
+          commandLine: _ownedCmd(
+            javaAbs: java.absolute.path,
+            jarAbs: jar.absolute.path,
+            rootAbs: paths.dataDir.absolute.path,
+            runId: runId,
+            started: started,
+            port: testPort,
+          ),
+        ),
+      },
+    );
+    var starts = 0;
+    final manager = SuwayomiProcessManager(
+      paths: paths,
+      manifest: _manifest(),
+      ownershipProbe: probe,
+      port: testPort,
+      processStartForTest:
+          (
+            executable,
+            arguments, {
+            workingDirectory,
+            environment,
+            runInShell = false,
+          }) {
+            starts++;
+            throw StateError('must not start');
+          },
+    );
+
+    final result = await manager.start(
+      readyTimeout: const Duration(seconds: 1),
+    );
+
+    result.when(
+      ok: (_) => fail('foreign listener must not be accepted'),
+      err: (_, cause) => expect(
+        (cause as SuwayomiProcessFailure).kind,
+        SuwayomiProcessFailureKind.ownershipUnverifiable,
+      ),
+    );
+    expect(starts, 0);
+    expect(probe.killed, isEmpty);
+  });
+
+  test('reattach rejects divergent root without kill or second JVM', () async {
+    final root = Directory.systemTemp.createTempSync('yomu-root-mismatch-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final paths = SuwayomiPaths(root);
+    await paths.ensureLayout();
+    final manifest = _manifest();
+    final java = File(p.join(root.path, 'java.exe'))..writeAsStringSync('fake');
+    final jar = paths.jarFile(manifest.suwayomi.jarFile);
+    final otherRoot = Directory(p.join(root.path, 'other-root'))
+      ..createSync(recursive: true);
+    final started = DateTime.utc(2026, 7, 9, 13);
+    const runId = 'wrongroot';
+    const testPort = 24569;
+    final commandLine = _ownedCmd(
+      javaAbs: java.absolute.path,
+      jarAbs: jar.absolute.path,
+      rootAbs: otherRoot.absolute.path,
+      runId: runId,
+      started: started,
+      port: testPort,
+    );
+    await ManagedInstanceIdentity(
+      runId: runId,
+      pid: 4343,
+      startedAt: started,
+      javaExecutable: java.absolute.path,
+      jarPath: jar.absolute.path,
+      rootDir: otherRoot.absolute.path,
+      port: testPort,
+    ).save(paths.instanceIdentity);
+    final probe = _FakeProbe(
+      listenerPid: 4343,
+      snapshots: {
+        4343: ProcessSnapshot(
+          pid: 4343,
+          exists: true,
+          commandLine: commandLine,
+        ),
+      },
+    );
+    var starts = 0;
+    final manager = SuwayomiProcessManager(
+      paths: paths,
+      manifest: manifest,
+      ownershipProbe: probe,
+      port: testPort,
+      processStartForTest:
+          (
+            executable,
+            arguments, {
+            workingDirectory,
+            environment,
+            runInShell = false,
+          }) {
+            starts++;
+            throw StateError('must not start');
+          },
+    );
+
+    final result = await manager.start(readyTimeout: Duration.zero);
+
+    result.when(
+      ok: (_) => fail('expected root mismatch'),
+      err: (_, cause) => expect(
+        (cause as SuwayomiProcessFailure).kind,
+        SuwayomiProcessFailureKind.rootMismatch,
+      ),
+    );
+    expect(starts, 0);
+    expect(probe.killed, isEmpty);
+  });
 
   test('kill=false on owned stop keeps identity and unhealthy', () async {
     final root = Directory.systemTemp.createTempSync('yomu-killfalse');

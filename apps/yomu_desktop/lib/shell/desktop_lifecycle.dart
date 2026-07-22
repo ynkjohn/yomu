@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:yomu_ai/yomu_ai.dart';
+import 'package:yomu_core/yomu_core.dart';
 
 /// Holds the native desktop exit response until owned resources are torn down.
 ///
@@ -70,12 +71,17 @@ class DesktopLifecycleQueue {
     return c.future;
   }
 
-  /// Idempotent shutdown: marks [shuttingDown], waits for in-flight ops via [run].
-  Future<void> shutdown(Future<void> Function() teardown) {
+  /// Idempotent shutdown: seals admission synchronously, then waits for any
+  /// in-flight lifecycle operation before teardown.
+  Future<void> shutdown(
+    Future<void> Function() teardown, {
+    void Function()? beginShutdown,
+  }) {
     if (_shutdownFuture != null) return _shutdownFuture!;
     shuttingDown = true;
     final c = Completer<void>();
     _shutdownFuture = c.future;
+    beginShutdown?.call();
     unawaited(
       run(() async {
         try {
@@ -87,6 +93,27 @@ class DesktopLifecycleQueue {
       }),
     );
     return _shutdownFuture!;
+  }
+}
+
+/// Seals every mutable desktop entry point before coordinated drains begin.
+///
+/// The callbacks keep lifecycle/vendor implementations in [HomeShell], while
+/// this synchronous boundary is shared with tests that prove no mutation can
+/// be admitted once the first shutdown step returns.
+class DesktopShutdownAdmission {
+  static void stopAccepting({
+    EngineMutationGate? engineMutations,
+    MayaService? maya,
+    void Function()? beginCoreShutdown,
+    void Function()? stopProgressWrites,
+    void Function()? beginEngineShutdown,
+  }) {
+    engineMutations?.stopAccepting();
+    maya?.stopAccepting();
+    beginCoreShutdown?.call();
+    stopProgressWrites?.call();
+    beginEngineShutdown?.call();
   }
 }
 
@@ -135,45 +162,69 @@ class HttpServerRestartCoordinator {
   }
 }
 
-/// Resource teardown order:
-/// subscription → Core HTTP → Maya → Auth → Suwayomi → DB.
+/// Coordinated shutdown order:
+/// block mutations → final progress → drains → pause downloads → Core HTTP →
+/// Maya/Auth → owned engine → DB.
 ///
 /// [closeServer] always runs even if [stopServer] throws.
 class ResourceTeardown {
   static Future<void> run({
     Future<void> Function()? cancelSubscription,
-    Future<void> Function()? stopServer,
+    Future<void> Function()? beginShutdown,
+    Future<void> Function()? flushFinalProgress,
+    Future<void> Function()? sealFinalProgress,
+    Future<void> Function()? drainProgress,
+    Future<bool> Function()? drainRequests,
+    Future<void> Function()? sealAdmittedProgress,
+    Future<void> Function()? pauseDownloads,
+    Future<void> Function({required bool force})? stopServer,
     Future<void> Function()? closeServer,
     Future<void> Function()? closeMaya,
     Future<void> Function()? releaseMayaPort,
     Future<void> Function()? closeAuth,
+    Future<void> Function()? shutdownEngine,
     Future<void> Function()? disposeManager,
     Future<void> Function()? closeDb,
   }) async {
-    try {
-      await cancelSubscription?.call();
-    } catch (_) {}
-    try {
-      await stopServer?.call();
-    } catch (_) {}
-    try {
-      await closeServer?.call();
-    } catch (_) {}
-    try {
-      await closeMaya?.call();
-    } catch (_) {}
-    try {
-      await releaseMayaPort?.call();
-    } catch (_) {}
-    try {
-      await closeAuth?.call();
-    } catch (_) {}
-    try {
-      await disposeManager?.call();
-    } catch (_) {}
-    try {
-      await closeDb?.call();
-    } catch (_) {}
+    Future<void> bestEffort(Future<void> Function()? operation) async {
+      try {
+        await operation?.call();
+      } catch (_) {}
+    }
+
+    await bestEffort(beginShutdown);
+    await bestEffort(cancelSubscription);
+    await bestEffort(flushFinalProgress);
+    await bestEffort(sealFinalProgress);
+    var forceServerStop = false;
+    Future<void> drainServerRequests() async {
+      try {
+        forceServerStop = await drainRequests?.call() ?? false;
+      } catch (_) {
+        // An indeterminate request drain must not turn graceful stop into an
+        // unbounded wait.
+        forceServerStop = true;
+      }
+    }
+
+    await Future.wait<void>([bestEffort(drainProgress), drainServerRequests()]);
+    await bestEffort(sealAdmittedProgress);
+    await bestEffort(pauseDownloads);
+    await bestEffort(
+      stopServer == null ? null : () => stopServer(force: forceServerStop),
+    );
+    await bestEffort(closeServer);
+    await bestEffort(closeMaya);
+    await bestEffort(releaseMayaPort);
+    await bestEffort(closeAuth);
+    if (shutdownEngine != null) {
+      // Ownership confirmation is safety-critical: do not report exit success
+      // or close SQLite when the owned process could not be stopped.
+      await shutdownEngine();
+    } else {
+      await bestEffort(disposeManager);
+    }
+    await bestEffort(closeDb);
   }
 }
 

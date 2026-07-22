@@ -13,15 +13,19 @@ void main() {
   test('core status never reports active without a bound server', () {
     final unavailable = deriveYomuCoreStatus(
       boundPort: null,
-      motorState: SuwayomiProcessState.running,
+      readiness: const EngineReadinessSnapshot(
+        state: EngineReadinessState.ready,
+      ),
     );
 
-    expect(unavailable.label, 'Yomu Core indisponível · Motor running');
+    expect(unavailable.label, 'Yomu Core indisponível · Motor ready');
     expect(unavailable.color, YomuTokens.danger);
 
     final available = deriveYomuCoreStatus(
       boundPort: 8787,
-      motorState: SuwayomiProcessState.running,
+      readiness: const EngineReadinessSnapshot(
+        state: EngineReadinessState.ready,
+      ),
     );
     expect(available.label, 'Yomu Core ativo · :8787');
     expect(available.color, YomuTokens.success);

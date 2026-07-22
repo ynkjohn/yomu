@@ -7,6 +7,13 @@ import 'package:path/path.dart' as p;
 final class VendorManifest {
   const VendorManifest({
     required this.suwayomi,
+    this.compatibility = const EngineCompatibilitySpec(
+      restApiVersion: 'v1',
+      graphqlPath: '/api/graphql',
+      capabilities: [],
+      requiredQueryFields: [],
+      requiredMutationFields: [],
+    ),
     this.jre,
     this.schemaVersion = 1,
     this.noticesFile = 'THIRD_PARTY_NOTICES.md',
@@ -17,6 +24,7 @@ final class VendorManifest {
   final int schemaVersion;
   final String noticesFile;
   final SuwayomiArtifact suwayomi;
+  final EngineCompatibilitySpec compatibility;
   final JreArtifact? jre;
 
   factory VendorManifest.fromJson(Map<String, dynamic> json) {
@@ -34,6 +42,9 @@ final class VendorManifest {
       schemaVersion: schemaVersion as int,
       noticesFile: _leafFileName(json, 'noticesFile'),
       suwayomi: SuwayomiArtifact.fromJson(_requiredMap(json, 'suwayomi')),
+      compatibility: EngineCompatibilitySpec.fromJson(
+        _requiredMap(json, 'compatibility'),
+      ),
       jre: JreArtifact.fromJson(jreJson),
     );
   }
@@ -108,7 +119,55 @@ final class VendorManifest {
     'schemaVersion': schemaVersion,
     'noticesFile': noticesFile,
     'suwayomi': suwayomi.toJson(),
+    'compatibility': compatibility.toJson(),
     if (jre != null) 'jre': jre!.toJson(),
+  };
+}
+
+/// Pinned protocol and capability surface expected from the bundled engine.
+final class EngineCompatibilitySpec {
+  const EngineCompatibilitySpec({
+    required this.restApiVersion,
+    required this.graphqlPath,
+    required this.capabilities,
+    required this.requiredQueryFields,
+    required this.requiredMutationFields,
+  });
+
+  final String restApiVersion;
+  final String graphqlPath;
+  final List<String> capabilities;
+  final List<String> requiredQueryFields;
+  final List<String> requiredMutationFields;
+
+  factory EngineCompatibilitySpec.fromJson(Map<String, dynamic> json) {
+    final graphqlPath = _requiredString(json, 'graphqlPath');
+    final uri = Uri.tryParse(graphqlPath);
+    if (uri == null ||
+        !graphqlPath.startsWith('/') ||
+        uri.hasScheme ||
+        uri.hasAuthority ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      throw const FormatException(
+        'Manifest compatibility.graphqlPath must be an absolute URL path.',
+      );
+    }
+    return EngineCompatibilitySpec(
+      restApiVersion: _requiredString(json, 'restApiVersion'),
+      graphqlPath: graphqlPath,
+      capabilities: _requiredNames(json, 'capabilities'),
+      requiredQueryFields: _requiredNames(json, 'requiredQueryFields'),
+      requiredMutationFields: _requiredNames(json, 'requiredMutationFields'),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'restApiVersion': restApiVersion,
+    'graphqlPath': graphqlPath,
+    'capabilities': capabilities,
+    'requiredQueryFields': requiredQueryFields,
+    'requiredMutationFields': requiredMutationFields,
   };
 }
 
@@ -484,4 +543,20 @@ List<String> _requiredRelativePaths(Map<String, dynamic> json, String key) {
     _validateRelativePath(path, key);
   }
   return List<String>.unmodifiable(paths);
+}
+
+List<String> _requiredNames(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is! List || value.isEmpty || value.any((item) => item is! String)) {
+    throw FormatException('Manifest field $key must be a non-empty name list.');
+  }
+  final names = value.cast<String>();
+  final pattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_.-]*$');
+  if (names.any((name) => !pattern.hasMatch(name)) ||
+      names.toSet().length != names.length) {
+    throw FormatException(
+      'Manifest field $key contains an invalid or duplicate name.',
+    );
+  }
+  return List<String>.unmodifiable(names);
 }

@@ -14,6 +14,7 @@ import '../config/vendor_manifest.dart';
 import '../java/java_resolver.dart';
 import 'managed_instance_identity.dart';
 import 'process_ownership.dart';
+import 'suwayomi_process_failure.dart';
 
 /// Default loopback port dedicated to Yomu-managed Suwayomi.
 const int kYomuSuwayomiPort = 14567;
@@ -112,10 +113,71 @@ class SuwayomiProcessManager {
   SuwayomiClient createClient() =>
       SuwayomiClient(baseUrl: baseUrl, httpClient: _http);
 
+  /// Synchronously seals lifecycle admission before coordinated shutdown.
+  void beginShutdown() {
+    _shuttingDown = true;
+  }
+
+  Future<OwnershipCheck> verifyCurrentOwnership() async {
+    final stored =
+        _identity ?? await ManagedInstanceIdentity.load(identityFile);
+    final listener = await _ownership.probe.findListenerPid(port);
+    if (stored == null) {
+      return OwnershipCheck(
+        verdict: listener == null
+            ? OwnershipVerdict.dead
+            : OwnershipVerdict.foreignOrUnverifiable,
+        message: listener == null
+            ? 'Nenhuma instância gerenciada está ativa.'
+            : 'Há um listener sem identidade Yomu comprovada.',
+      );
+    }
+    if (!_sameAbsolutePath(stored.rootDir, managedRootDir) ||
+        stored.port != port ||
+        !_sameAbsolutePath(
+          stored.jarPath,
+          paths.jarFile(manifest.suwayomi.jarFile).absolute.path,
+        )) {
+      return const OwnershipCheck(
+        verdict: OwnershipVerdict.foreignOrUnverifiable,
+        message:
+            'A identidade ativa diverge do root, porta ou artefato pinado.',
+      );
+    }
+    final check = await _ownership.verifyIdentity(stored);
+    if (check.verdict != OwnershipVerdict.yomuOwned) return check;
+    if (listener != stored.pid) {
+      return OwnershipCheck(
+        verdict: OwnershipVerdict.foreignOrUnverifiable,
+        snapshot: check.snapshot,
+        message: listener == null
+            ? 'O processo owned não é o listener da porta gerenciada.'
+            : 'A porta gerenciada pertence a outro PID.',
+      );
+    }
+    _identity = stored;
+    return check;
+  }
+
   void _emit(SuwayomiStatus next) {
     _status = next;
     if (!_controller.isClosed) _controller.add(next);
   }
+
+  Err<T> _failure<T>(
+    SuwayomiProcessFailureKind kind,
+    String code,
+    String message, [
+    Object? cause,
+  ]) => Err<T>(
+    message,
+    SuwayomiProcessFailure(
+      kind: kind,
+      code: code,
+      message: message,
+      cause: cause,
+    ),
+  );
 
   Future<T> _serialized<T>(Future<T> Function() op) {
     final c = Completer<T>();
@@ -139,12 +201,16 @@ class SuwayomiProcessManager {
     if (packagedArtifactsOnly) {
       packagedSeed = _findPackagedSeedJar();
       if (packagedSeed == null) {
-        return const Err(
+        return _failure(
+          SuwayomiProcessFailureKind.artifactMissing,
+          'engine_artifact_missing',
           'Motor empacotado ausente. Repare ou reinstale o Yomu.',
         );
       }
       if (!await _verifySha256(packagedSeed, expected)) {
-        return const Err(
+        return _failure(
+          SuwayomiProcessFailureKind.artifactInvalid,
+          'engine_artifact_invalid',
           'Motor empacotado inválido. Repare ou reinstale o Yomu.',
         );
       }
@@ -165,7 +231,11 @@ class SuwayomiProcessManager {
     }
 
     if (!allowDownload) {
-      return Err('Suwayomi JAR ausente ou hash inválido: ${jar.path}');
+      return _failure(
+        SuwayomiProcessFailureKind.artifactMissing,
+        'engine_artifact_missing',
+        'Suwayomi JAR ausente ou hash inválido: ${jar.path}',
+      );
     }
 
     _emit(
@@ -181,7 +251,11 @@ class SuwayomiProcessManager {
         Uri.parse(manifest.suwayomi.downloadUrl),
       );
       if (response.statusCode != 200) {
-        return Err('Falha ao baixar Suwayomi (HTTP ${response.statusCode}).');
+        return _failure(
+          SuwayomiProcessFailureKind.artifactMissing,
+          'engine_artifact_unavailable',
+          'Falha ao baixar Suwayomi (HTTP ${response.statusCode}).',
+        );
       }
       downloadTemp = _temporarySibling(jar);
       await downloadTemp.writeAsBytes(response.bodyBytes, flush: true);
@@ -189,7 +263,9 @@ class SuwayomiProcessManager {
       if (!ok) {
         await downloadTemp.delete();
         downloadTemp = null;
-        return const Err(
+        return _failure(
+          SuwayomiProcessFailureKind.artifactInvalid,
+          'engine_artifact_invalid',
           'Checksum SHA-256 do JAR Suwayomi não confere com o manifest pinado.',
         );
       }
@@ -201,7 +277,12 @@ class SuwayomiProcessManager {
       return result;
     } catch (e) {
       if (downloadTemp?.existsSync() ?? false) await downloadTemp!.delete();
-      return Err('Erro ao obter Suwayomi JAR: $e', e);
+      return _failure(
+        SuwayomiProcessFailureKind.artifactMissing,
+        'engine_artifact_unavailable',
+        'Erro ao obter Suwayomi JAR: $e',
+        e,
+      );
     }
   }
 
@@ -250,7 +331,11 @@ class SuwayomiProcessManager {
     required File destination,
   }) async {
     if (!await _verifySha256(seed, manifest.suwayomi.sha256)) {
-      return Err('JAR seed encontrado mas SHA-256 inválido: ${seed.path}');
+      return _failure(
+        SuwayomiProcessFailureKind.artifactInvalid,
+        'engine_artifact_invalid',
+        'JAR seed encontrado mas SHA-256 inválido: ${seed.path}',
+      );
     }
 
     final temp = _temporarySibling(destination);
@@ -258,12 +343,21 @@ class SuwayomiProcessManager {
       await seed.copy(temp.path);
       if (!await _verifySha256(temp, manifest.suwayomi.sha256)) {
         await temp.delete();
-        return const Err('Falha de integridade ao preparar o motor interno.');
+        return _failure(
+          SuwayomiProcessFailureKind.artifactInvalid,
+          'engine_artifact_invalid',
+          'Falha de integridade ao preparar o motor interno.',
+        );
       }
       return _promoteVerifiedJar(temp: temp, destination: destination);
     } catch (e) {
       if (temp.existsSync()) await temp.delete();
-      return Err('Erro ao instalar o motor interno empacotado: $e', e);
+      return _failure(
+        SuwayomiProcessFailureKind.artifactInvalid,
+        'engine_artifact_install_failed',
+        'Erro ao instalar o motor interno empacotado: $e',
+        e,
+      );
     }
   }
 
@@ -278,7 +372,12 @@ class SuwayomiProcessManager {
       return Ok(installed);
     } catch (e) {
       if (temp.existsSync()) await temp.delete();
-      return Err('Erro ao ativar o motor interno verificado: $e', e);
+      return _failure(
+        SuwayomiProcessFailureKind.artifactInvalid,
+        'engine_artifact_install_failed',
+        'Erro ao ativar o motor interno verificado: $e',
+        e,
+      );
     }
   }
 
@@ -368,7 +467,11 @@ server.authMode = NONE
       _emit(
         const SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg),
       );
-      return const Err(msg);
+      return _failure(
+        SuwayomiProcessFailureKind.stopUnconfirmed,
+        'engine_shutdown_in_progress',
+        msg,
+      );
     }
 
     if (_process != null && _status.state == SuwayomiProcessState.running) {
@@ -380,6 +483,7 @@ server.authMode = NONE
       readyTimeout: readyTimeout,
     );
     if (existing != null) return existing;
+    if (_shuttingDown) return _shutdownInProgressFailure();
 
     // After handle: still holding process or in-memory identity without a clean
     // stop → refuse (even if identity file is missing).
@@ -396,11 +500,16 @@ server.authMode = NONE
           pid: _process?.pid ?? _identity?.pid,
         ),
       );
-      return Err(msg);
+      return _failure(
+        SuwayomiProcessFailureKind.ownershipUnverifiable,
+        'engine_ownership_unverifiable',
+        msg,
+      );
     }
 
     // Phase 2D: never blind-adopt health-only foreign processes.
     final portIssue = await _resolvePortOccupantBeforeStart();
+    if (_shuttingDown) return _shutdownInProgressFailure();
     if (portIssue != null) {
       _emit(
         SuwayomiStatus(
@@ -409,7 +518,11 @@ server.authMode = NONE
           baseUrl: baseUrl,
         ),
       );
-      return Err(portIssue);
+      return _failure(
+        SuwayomiProcessFailureKind.foreignPort,
+        'engine_foreign_port',
+        portIssue,
+      );
     }
 
     _combinedLog.clear();
@@ -424,13 +537,18 @@ server.authMode = NONE
       paths: paths,
       minMajor: manifest.suwayomi.minJre,
     );
+    if (_shuttingDown) return _shutdownInProgressFailure();
     if (java == null) {
       final msg =
           'Java ${manifest.suwayomi.minJre}+ não encontrado. '
           'Use o JRE empacotado (jre/ ao lado do .exe) ou o monorepo '
           r'vendor\jre21. Opcional: YOMU_JAVA_HOME como override explícito.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
-      return Err(msg);
+      return _failure(
+        SuwayomiProcessFailureKind.runtimeMissing,
+        'engine_runtime_missing',
+        msg,
+      );
     }
     if (java.versionMajor < manifest.suwayomi.minJre) {
       final msg =
@@ -439,22 +557,38 @@ server.authMode = NONE
           'O Yomu deve usar o JRE empacotado/runtime; não altere JAVA_HOME. '
           'Reinstale o app ou rode tool/bundle_jre_windows.ps1.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
-      return Err(msg);
+      return _failure(
+        SuwayomiProcessFailureKind.runtimeIncompatible,
+        'engine_runtime_incompatible',
+        msg,
+      );
     }
 
     final jarResult = await ensureJar();
+    if (_shuttingDown) return _shutdownInProgressFailure();
+    Object? jarFailure;
     final jar = jarResult.when(
       ok: (f) => f,
-      err: (m, _) {
+      err: (m, cause) {
+        jarFailure = cause;
         _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: m));
         return null;
       },
     );
     if (jar == null) {
-      return Err(_status.message ?? 'JAR indisponível');
+      return Err(
+        _status.message ?? 'JAR indisponível',
+        jarFailure ??
+            const SuwayomiProcessFailure(
+              kind: SuwayomiProcessFailureKind.artifactMissing,
+              code: 'engine_artifact_missing',
+              message: 'Motor interno indisponível.',
+            ),
+      );
     }
 
     await writeManagedConfig();
+    if (_shuttingDown) return _shutdownInProgressFailure();
 
     _logSink = paths.processLog.openWrite(mode: FileMode.append);
     final runId = _newRunId();
@@ -493,7 +627,17 @@ server.authMode = NONE
     } catch (e) {
       final msg = 'Falha ao iniciar processo Suwayomi: $e';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
-      return Err(msg, e);
+      return _failure(
+        SuwayomiProcessFailureKind.launchFailed,
+        'engine_launch_failed',
+        msg,
+        e,
+      );
+    }
+
+    if (_shuttingDown) {
+      await _stopBody(expectPortFree: true);
+      return _shutdownInProgressFailure();
     }
 
     final pid = _process!.pid;
@@ -533,7 +677,12 @@ server.authMode = NONE
             pid: pid,
           ),
         );
-        return Err(msg, e);
+        return _failure(
+          SuwayomiProcessFailureKind.ownershipUnverifiable,
+          'engine_ownership_unverifiable',
+          msg,
+          e,
+        );
       }
       _process = null;
       _identity = null;
@@ -547,18 +696,29 @@ server.authMode = NONE
           baseUrl: baseUrl,
         ),
       );
-      return Err(msg, e);
+      return _failure(
+        SuwayomiProcessFailureKind.ownershipUnverifiable,
+        'engine_identity_persistence_failed',
+        msg,
+        e,
+      );
     }
 
+    if (_shuttingDown) {
+      await _stopBody(expectPortFree: true);
+      return _shutdownInProgressFailure();
+    }
+
+    final startedProcess = _process!;
     void onLog(String data) {
       _combinedLog.write(data);
       _logSink?.write(data);
     }
 
-    _process!.stdout.transform(utf8.decoder).listen(onLog);
-    _process!.stderr.transform(utf8.decoder).listen(onLog);
+    startedProcess.stdout.transform(utf8.decoder).listen(onLog);
+    startedProcess.stderr.transform(utf8.decoder).listen(onLog);
     unawaited(
-      _process!.exitCode.then((code) async {
+      startedProcess.exitCode.then((code) async {
         _logSink?.writeln('--- exit code $code ---');
         if (_status.state != SuwayomiProcessState.stopping &&
             _status.state != SuwayomiProcessState.stopped &&
@@ -572,7 +732,7 @@ server.authMode = NONE
             ),
           );
         }
-        _process = null;
+        if (identical(_process, startedProcess)) _process = null;
       }),
     );
 
@@ -589,11 +749,16 @@ server.authMode = NONE
     final ready = await _waitUntilHealthy(readyTimeout);
     if (!ready) {
       await _stopBody(expectPortFree: true);
+      if (_shuttingDown) return _shutdownInProgressFailure();
       final msg =
           'Timeout aguardando health do Suwayomi em $baseUrl. '
           'Verifique Java, porta $port e ${paths.processLog.path}';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
-      return Err(msg);
+      return _failure(
+        SuwayomiProcessFailureKind.readinessTimeout,
+        'engine_start_timeout',
+        msg,
+      );
     }
 
     final isolation = await verifyManagedDataRoot();
@@ -603,7 +768,15 @@ server.authMode = NONE
           isolation.message ??
           'Isolamento falhou: data root não é o diretório gerenciado pelo Yomu.';
       _emit(SuwayomiStatus(state: SuwayomiProcessState.crashed, message: msg));
-      return Err(msg);
+      return _failure(
+        SuwayomiProcessFailureKind.rootMismatch,
+        'engine_root_mismatch',
+        msg,
+      );
+    }
+    if (_shuttingDown) {
+      await _stopBody(expectPortFree: true);
+      return _shutdownInProgressFailure();
     }
 
     final ok = SuwayomiStatus(
@@ -633,12 +806,32 @@ server.authMode = NONE
         _identity ?? await ManagedInstanceIdentity.load(identityFile);
     if (stored == null) {
       if (_process != null) {
-        return Err(
+        return _failure(
+          SuwayomiProcessFailureKind.ownershipUnverifiable,
+          'engine_ownership_unverifiable',
           'Handle de Process em memória (pid ${_process!.pid}) sem identidade '
-          'gravada — start recusado.',
+              'gravada — start recusado.',
         );
       }
       return null;
+    }
+
+    final expectedRoot = Directory(managedRootDir).absolute.path;
+    if (!_sameAbsolutePath(stored.rootDir, expectedRoot) ||
+        stored.port != port) {
+      return _failure(
+        SuwayomiProcessFailureKind.rootMismatch,
+        'engine_root_mismatch',
+        'A identidade existente pertence a outro root ou porta. Start recusado.',
+      );
+    }
+    final expectedJar = paths.jarFile(manifest.suwayomi.jarFile).absolute.path;
+    if (!_sameAbsolutePath(stored.jarPath, expectedJar)) {
+      return _failure(
+        SuwayomiProcessFailureKind.ownershipUnverifiable,
+        'engine_artifact_identity_mismatch',
+        'A identidade existente não corresponde ao artefato pinado.',
+      );
     }
 
     final check = await _ownership.verifyIdentity(stored);
@@ -652,7 +845,9 @@ server.authMode = NONE
         return null;
       }
       // Dead PID but port/health still busy — do not spawn another JVM.
-      return Err(
+      return _failure(
+        SuwayomiProcessFailureKind.ownershipUnverifiable,
+        'engine_ownership_unverifiable',
         check.message ??
             'Identidade aponta para PID morto, mas porta/health ainda ativos. '
                 'Start recusado.',
@@ -662,13 +857,17 @@ server.authMode = NONE
     if (check.verdict != OwnershipVerdict.yomuOwned) {
       // Memory Process/identity without revalidated ownership — never spawn.
       if (_process != null || _identity != null) {
-        return Err(
+        return _failure(
+          SuwayomiProcessFailureKind.ownershipUnverifiable,
+          'engine_ownership_unverifiable',
           'Processo/identidade em memória (pid ${stored.pid}) não revalidável '
-          '(${check.message ?? 'foreignOrUnverifiable'}). Start recusado — '
-          'não iniciaremos outra JVM.',
+              '(${check.message ?? 'foreignOrUnverifiable'}). Start recusado — '
+              'não iniciaremos outra JVM.',
         );
       }
-      return Err(
+      return _failure(
+        SuwayomiProcessFailureKind.ownershipUnverifiable,
+        'engine_ownership_unverifiable',
         check.message ??
             'Identidade em disco não confere com o processo vivo. '
                 'Não iniciaremos outra JVM nem sobrescreveremos a identidade.',
@@ -690,6 +889,24 @@ server.authMode = NONE
 
     final ready = await _waitUntilHealthy(readyTimeout);
     if (ready) {
+      final currentOwnership = await verifyCurrentOwnership();
+      if (currentOwnership.verdict != OwnershipVerdict.yomuOwned) {
+        return _failure(
+          SuwayomiProcessFailureKind.ownershipUnverifiable,
+          'engine_ownership_unverifiable',
+          currentOwnership.message ??
+              'O processo owned deixou de controlar a porta gerenciada.',
+        );
+      }
+      final isolation = await verifyManagedDataRoot();
+      if (!isolation.isOk) {
+        return _failure(
+          SuwayomiProcessFailureKind.rootMismatch,
+          'engine_root_mismatch',
+          isolation.message ?? 'O root ativo não corresponde ao root do Yomu.',
+        );
+      }
+      if (_shuttingDown) return _shutdownInProgressFailure();
       final ok = SuwayomiStatus(
         state: SuwayomiProcessState.running,
         message:
@@ -703,41 +920,36 @@ server.authMode = NONE
       return Ok(ok);
     }
 
-    // Still not healthy: stop with ownership proof, then allow a clean start.
-    final killed = await _ownership.probe.killOwnedPid(stored.pid, force: true);
-    if (!killed) {
-      final msg =
-          'PID ${stored.pid} Yomu-owned não saudável e não pôde ser encerrado. '
-          'Identidade preservada.';
-      _emit(
-        SuwayomiStatus(
-          state: SuwayomiProcessState.unhealthy,
-          message: msg,
-          baseUrl: baseUrl,
-          pid: stored.pid,
-        ),
-      );
-      return Err(msg);
-    }
-    final freed = await _waitPortAndHealthDown(const Duration(seconds: 20));
-    if (!freed) {
-      final msg =
-          'PID ${stored.pid} encerrado, mas porta $port ainda ativa. '
-          'Identidade preservada — não iniciaremos outra JVM.';
-      _emit(
-        SuwayomiStatus(
-          state: SuwayomiProcessState.unhealthy,
-          message: msg,
-          baseUrl: baseUrl,
-        ),
-      );
-      return Err(msg);
-    }
-    await ManagedInstanceIdentity.clear(identityFile);
-    _identity = null;
-    _process = null;
-    return null; // free to start
+    if (_shuttingDown) return _shutdownInProgressFailure();
+
+    // Recovery ownership and backoff belong to ReadingEngineSupervisor.
+    const msg =
+        'Instância Yomu-owned ainda não respondeu dentro do prazo. '
+        'Identidade preservada para recovery supervisionado.';
+    _emit(
+      SuwayomiStatus(
+        state: SuwayomiProcessState.unhealthy,
+        message: msg,
+        baseUrl: baseUrl,
+        pid: stored.pid,
+      ),
+    );
+    return _failure(
+      SuwayomiProcessFailureKind.readinessTimeout,
+      'engine_owned_not_ready',
+      msg,
+    );
   }
+
+  bool _sameAbsolutePath(String left, String right) =>
+      p.normalize(File(left).absolute.path).toLowerCase() ==
+      p.normalize(File(right).absolute.path).toLowerCase();
+
+  Err<SuwayomiStatus> _shutdownInProgressFailure() => _failure(
+    SuwayomiProcessFailureKind.stopUnconfirmed,
+    'engine_shutdown_in_progress',
+    'Shutdown em andamento — start recusado.',
+  );
 
   /// Returns error message if port cannot be used; null if free.
   Future<String?> _resolvePortOccupantBeforeStart() async {
@@ -911,7 +1123,7 @@ server.authMode = NONE
   Future<bool> _waitUntilHealthy(Duration timeout) async {
     final client = createClient();
     final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
+    while (!_shuttingDown && DateTime.now().isBefore(deadline)) {
       if (_process == null && _identity == null) return false;
       final healthy = await client.isHealthy();
       if (healthy) return true;
@@ -1045,7 +1257,12 @@ server.authMode = NONE
     return _serialized(() async {
       await _stopBody(expectPortFree: true);
       if (_status.state != SuwayomiProcessState.stopped) {
-        return Err(_status.message ?? 'Restart abortado: stop incompleto');
+        final message = _status.message ?? 'Restart abortado: stop incompleto';
+        return _failure(
+          SuwayomiProcessFailureKind.stopUnconfirmed,
+          'engine_stop_unconfirmed',
+          message,
+        );
       }
       return _startBody(readyTimeout: const Duration(minutes: 3));
     });
@@ -1070,10 +1287,22 @@ server.authMode = NONE
 
   /// Coordinated shutdown for app close — await this instead of dispose alone.
   Future<void> shutdown() {
+    beginShutdown();
     return _serialized(() async {
-      _shuttingDown = true;
       await _stopBody(expectPortFree: true);
     });
+  }
+
+  Future<void> closeAfterShutdown() async {
+    if (_status.state != SuwayomiProcessState.stopped) {
+      throw const SuwayomiProcessFailure(
+        kind: SuwayomiProcessFailureKind.stopUnconfirmed,
+        code: 'engine_stop_unconfirmed',
+        message: 'O encerramento do processo owned não foi confirmado.',
+      );
+    }
+    if (!_controller.isClosed) await _controller.close();
+    _http.close();
   }
 
   /// Fallback only — prefer [shutdown] from UI.
@@ -1081,8 +1310,9 @@ server.authMode = NONE
     try {
       await shutdown();
     } catch (_) {}
-    if (!_controller.isClosed) await _controller.close();
-    _http.close();
+    if (_status.state == SuwayomiProcessState.stopped) {
+      await closeAfterShutdown();
+    }
   }
 
   String _newRunId() {

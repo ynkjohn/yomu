@@ -2,26 +2,40 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:math' as math;
 
+import 'engine_mutation_gate.dart';
 import 'engine_readiness.dart';
 import 'reading_models.dart';
 import 'reading_progress_gateway.dart';
 
 enum ReadingProgressDrainResult { drained, timedOut }
 
+typedef ReadingProgressSnapshotProvider = ReadingProgressSnapshot? Function();
+
+final class ReadingProgressSessionHandle {
+  const ReadingProgressSessionHandle._(this.id);
+
+  final int id;
+}
+
 /// Serializes and coalesces progress writes across desktop and Yomu Core.
 ///
 /// Page positions remain 0-based. Newer writes for a chapter dominate stale
 /// responses and failures, while chapter transitions preserve FIFO order.
-final class ReadingProgressCoordinator implements ReadingProgressGateway {
+final class ReadingProgressCoordinator
+    implements ReadingProgressGateway, AdmittedReadingProgressGateway {
   ReadingProgressCoordinator(this._upstream);
 
   final ReadingProgressGateway _upstream;
   final ListQueue<int> _pendingOrder = ListQueue<int>();
   final Map<int, _ChapterProgressState> _states = {};
   final Map<int, ReadingProgressSnapshot> _highWaterByChapter = {};
+  final Map<int, ReadingProgressSnapshotProvider> _finalSnapshotProviders = {};
   Future<void>? _draining;
   Completer<void>? _idleCompleter;
   bool _accepting = true;
+  bool _finalSavesAllowed = true;
+  bool _admittedWritesAllowed = true;
+  int _nextSessionId = 0;
 
   bool get isAccepting => _accepting;
   bool get hasPendingWrites => _draining != null || _pendingOrder.isNotEmpty;
@@ -35,7 +49,19 @@ final class ReadingProgressCoordinator implements ReadingProgressGateway {
     chapterId: chapterId,
     lastPageRead: lastPageRead,
     isRead: isRead,
-    allowAfterStop: false,
+    admission: _ProgressAdmission.normal,
+  );
+
+  @override
+  Future<ReadingProgressSnapshot> updateAdmittedProgress({
+    required int chapterId,
+    required int lastPageRead,
+    required bool isRead,
+  }) => _enqueue(
+    chapterId: chapterId,
+    lastPageRead: lastPageRead,
+    isRead: isRead,
+    admission: _ProgressAdmission.admittedRequest,
   );
 
   Future<ReadingProgressSnapshot> saveFinal({
@@ -46,25 +72,23 @@ final class ReadingProgressCoordinator implements ReadingProgressGateway {
     chapterId: chapterId,
     lastPageRead: lastPageRead,
     isRead: isRead,
-    allowAfterStop: true,
+    admission: _ProgressAdmission.finalSnapshot,
   );
 
   Future<ReadingProgressSnapshot> _enqueue({
     required int chapterId,
     required int lastPageRead,
     required bool isRead,
-    required bool allowAfterStop,
+    required _ProgressAdmission admission,
   }) {
-    if (!_accepting && !allowAfterStop) {
+    final allowedAfterStop = switch (admission) {
+      _ProgressAdmission.normal => false,
+      _ProgressAdmission.finalSnapshot => _finalSavesAllowed,
+      _ProgressAdmission.admittedRequest => _admittedWritesAllowed,
+    };
+    if (!_accepting && !allowedAfterStop) {
       return Future<ReadingProgressSnapshot>.error(
-        const EngineException(
-          EngineFailure(
-            kind: EngineFailureKind.operationRejected,
-            code: 'engine_mutations_blocked',
-            message: 'Novas alterações estão temporariamente bloqueadas.',
-            retryable: true,
-          ),
-        ),
+        engineMutationsBlockedException,
       );
     }
     if (chapterId < 0 || lastPageRead < 0) {
@@ -108,6 +132,53 @@ final class ReadingProgressCoordinator implements ReadingProgressGateway {
 
   void stopAccepting() {
     _accepting = false;
+  }
+
+  ReadingProgressSessionHandle registerFinalSnapshotProvider(
+    ReadingProgressSnapshotProvider provider,
+  ) {
+    final handle = ReadingProgressSessionHandle._(++_nextSessionId);
+    _finalSnapshotProviders[handle.id] = provider;
+    return handle;
+  }
+
+  void unregisterFinalSnapshotProvider(ReadingProgressSessionHandle handle) {
+    _finalSnapshotProviders.remove(handle.id);
+  }
+
+  /// Flushes final snapshots for reader sessions admitted before shutdown.
+  Future<void> flushRegisteredFinalSaves() async {
+    final providers = List<ReadingProgressSnapshotProvider>.from(
+      _finalSnapshotProviders.values,
+    );
+    for (final provider in providers) {
+      try {
+        final snapshot = provider();
+        if (snapshot == null) continue;
+        final save = saveFinal(
+          chapterId: snapshot.chapterId,
+          lastPageRead: snapshot.lastPageRead,
+          isRead: snapshot.isRead,
+        );
+        // Admission is synchronous. Completion belongs to the single bounded
+        // drain that follows this step in coordinated shutdown.
+        unawaited(
+          save.then<void>((_) {}, onError: (Object _, StackTrace __) {}),
+        );
+      } catch (_) {
+        // A disposed or inconsistent UI session cannot block other final saves.
+      }
+    }
+  }
+
+  /// Rejects every later progress mutation, including widget disposal saves.
+  void sealFinalSaves() {
+    _finalSavesAllowed = false;
+  }
+
+  /// Rejects API mutations whose admitted request exceeded the request drain.
+  void sealAdmittedWrites() {
+    _admittedWritesAllowed = false;
   }
 
   Future<ReadingProgressDrainResult> drain({required Duration timeout}) async {
@@ -213,6 +284,8 @@ final class ReadingProgressCoordinator implements ReadingProgressGateway {
     );
   }
 }
+
+enum _ProgressAdmission { normal, finalSnapshot, admittedRequest }
 
 final class _ChapterProgressState {
   _ChapterProgressState(this.desired);

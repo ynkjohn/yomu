@@ -146,6 +146,72 @@ void main() {
       ReadingProgressDrainResult.drained,
     );
   });
+
+  test(
+    'shutdown flushes admitted final snapshot then seals every write',
+    () async {
+      final upstream = _ControlledProgressGateway();
+      final coordinator = ReadingProgressCoordinator(upstream);
+      final handle = coordinator.registerFinalSnapshotProvider(
+        () => const ReadingProgressSnapshot(
+          chapterId: 9,
+          lastPageRead: 4,
+          isRead: false,
+        ),
+      );
+
+      coordinator.stopAccepting();
+      await coordinator.flushRegisteredFinalSaves();
+      expect(upstream.calls.single.lastPageRead, 4);
+      expect(
+        await coordinator.drain(timeout: Duration.zero),
+        ReadingProgressDrainResult.timedOut,
+      );
+      upstream.completeNext(page: 4, isRead: false);
+      expect(
+        await coordinator.drain(timeout: const Duration(seconds: 1)),
+        ReadingProgressDrainResult.drained,
+      );
+      coordinator.sealFinalSaves();
+      coordinator.unregisterFinalSnapshotProvider(handle);
+
+      await expectLater(
+        coordinator.saveFinal(chapterId: 9, lastPageRead: 5, isRead: false),
+        throwsA(
+          isA<EngineException>().having(
+            (error) => error.failure.code,
+            'code',
+            'engine_mutations_blocked',
+          ),
+        ),
+      );
+
+      final admitted = coordinator.updateAdmittedProgress(
+        chapterId: 9,
+        lastPageRead: 5,
+        isRead: false,
+      );
+      await Future<void>.delayed(Duration.zero);
+      upstream.completeNext(page: 5, isRead: false);
+      expect((await admitted).lastPageRead, 5);
+      coordinator.sealAdmittedWrites();
+
+      await expectLater(
+        coordinator.updateAdmittedProgress(
+          chapterId: 9,
+          lastPageRead: 6,
+          isRead: false,
+        ),
+        throwsA(
+          isA<EngineException>().having(
+            (error) => error.failure.code,
+            'code',
+            'engine_mutations_blocked',
+          ),
+        ),
+      );
+    },
+  );
 }
 
 Future<void> _flush() => Future<void>.delayed(Duration.zero);

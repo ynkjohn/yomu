@@ -4,6 +4,42 @@ import 'package:test/test.dart';
 import 'package:yomu_core/yomu_core.dart';
 
 void main() {
+  test('engine diagnostics keep operational details out of readiness', () {
+    const readiness = EngineReadinessSnapshot(
+      state: EngineReadinessState.actionRequired,
+      failure: EngineFailure(
+        kind: EngineFailureKind.incompatible,
+        code: 'engine_incompatible',
+        message: 'O motor interno não é compatível com esta versão do Yomu.',
+        retryable: false,
+      ),
+    );
+    final diagnostics = EngineDiagnosticsSnapshot(
+      readiness: readiness,
+      engineName: 'Engine',
+      engineVersion: '1.0',
+      protocolVersion: 'v1',
+      capabilities: const ['library', 'reader'],
+      runtimeName: 'Runtime',
+      runtimeVersion: '21',
+      processId: 42,
+      host: '127.0.0.1',
+      port: 14567,
+      artifactPath: r'C:\engine\engine.jar',
+      dataRoot: r'C:\engine\data',
+      compatibility: EngineCompatibilityStatus.incompatible,
+      ownership: EngineOwnershipStatus.owned,
+    );
+
+    expect(readiness.failure!.message, isNot(contains('14567')));
+    expect(diagnostics.port, 14567);
+    expect(diagnostics.capabilities, ['library', 'reader']);
+    expect(
+      () => diagnostics.capabilities.add('downloads'),
+      throwsUnsupportedError,
+    );
+  });
+
   test('readiness exposes only product state and sanitized failure', () {
     const failure = EngineFailure(
       kind: EngineFailureKind.temporarilyUnavailable,

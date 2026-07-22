@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yomu_ai/yomu_ai.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_desktop/shell/desktop_lifecycle.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
@@ -408,13 +409,77 @@ void main() {
     },
   );
 
+  test(
+    'shutdown seals desktop mutations before an occupied lifecycle queue drains',
+    () async {
+      final queue = DesktopLifecycleQueue();
+      final gate = EngineMutationGate();
+      final libraryDelegate = _ShutdownLibraryGateway();
+      final library = GuardedLibraryGateway(
+        delegate: libraryDelegate,
+        gate: gate,
+      );
+      final mayaPort = _ShutdownMayaPort();
+      final maya = MayaService(
+        store: MayaStore.inMemory(),
+        libraryPort: mayaPort,
+        mutationGate: gate,
+      );
+      final proposal = (await maya.sendUserMessage('baixar')).proposals.single;
+      final queuedOperationEntered = Completer<void>();
+      final releaseQueuedOperation = Completer<void>();
+      var teardownStarted = false;
+      var coreBlocked = false;
+      var progressBlocked = false;
+      var engineBlocked = false;
+
+      final queuedOperation = queue.run(() async {
+        queuedOperationEntered.complete();
+        await releaseQueuedOperation.future;
+      });
+      await queuedOperationEntered.future;
+
+      final shutdown = queue.shutdown(
+        () async => teardownStarted = true,
+        beginShutdown: () {
+          DesktopShutdownAdmission.stopAccepting(
+            engineMutations: gate,
+            maya: maya,
+            beginCoreShutdown: () => coreBlocked = true,
+            stopProgressWrites: () => progressBlocked = true,
+            beginEngineShutdown: () => engineBlocked = true,
+          );
+        },
+      );
+
+      expect(teardownStarted, isFalse);
+      expect(coreBlocked, isTrue);
+      expect(progressBlocked, isTrue);
+      expect(engineBlocked, isTrue);
+      await expectLater(
+        library.setInLibrary(7, true),
+        throwsA(isA<EngineException>()),
+      );
+      await expectLater(maya.confirmProposal(proposal.id), throwsStateError);
+      expect(libraryDelegate.membershipCalls, isEmpty);
+      expect(mayaPort.downloads, isEmpty);
+
+      releaseQueuedOperation.complete();
+      await queuedOperation;
+      await shutdown;
+      expect(teardownStarted, isTrue);
+      await maya.close();
+    },
+  );
+
   test('ResourceTeardown continues through Auth and DB after errors', () async {
     final events = <String>[];
     await ResourceTeardown.run(
       cancelSubscription: () async {
         events.add('subscription');
       },
-      stopServer: () async {
+      stopServer: ({required bool force}) async {
+        expect(force, isFalse);
         events.add('stop');
         throw StateError('stop failed');
       },
@@ -519,6 +584,176 @@ void main() {
     },
   );
 
+  test('ResourceTeardown follows the coordinated R7 shutdown order', () async {
+    final events = <String>[];
+    final progressDrain = Completer<void>();
+    final requestDrain = Completer<void>();
+    final pauseAck = Completer<void>();
+
+    final teardown = ResourceTeardown.run(
+      beginShutdown: () async => events.add('block'),
+      cancelSubscription: () async => events.add('subscription'),
+      flushFinalProgress: () async => events.add('final-progress'),
+      sealFinalProgress: () async => events.add('seal-progress'),
+      drainProgress: () async {
+        events.add('drain-progress');
+        await progressDrain.future;
+      },
+      drainRequests: () async {
+        events.add('drain-requests');
+        await requestDrain.future;
+        return false;
+      },
+      sealAdmittedProgress: () async => events.add('seal-admitted-progress'),
+      pauseDownloads: () async {
+        events.add('pause-downloads');
+        await pauseAck.future;
+      },
+      stopServer: ({required bool force}) async {
+        expect(force, isFalse);
+        events.add('stop-core');
+      },
+      closeMaya: () async => events.add('maya'),
+      closeAuth: () async => events.add('auth'),
+      shutdownEngine: () async => events.add('engine'),
+      closeDb: () async => events.add('db'),
+    );
+
+    await Future<void>.delayed(Duration.zero);
+    expect(events, [
+      'block',
+      'subscription',
+      'final-progress',
+      'seal-progress',
+      'drain-progress',
+      'drain-requests',
+    ]);
+    progressDrain.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(events, isNot(contains('pause-downloads')));
+    requestDrain.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(events.sublist(events.length - 2), [
+      'seal-admitted-progress',
+      'pause-downloads',
+    ]);
+    expect(events, isNot(contains('stop-core')));
+    pauseAck.complete();
+    await teardown;
+
+    expect(events, [
+      'block',
+      'subscription',
+      'final-progress',
+      'seal-progress',
+      'drain-progress',
+      'drain-requests',
+      'seal-admitted-progress',
+      'pause-downloads',
+      'stop-core',
+      'maya',
+      'auth',
+      'engine',
+      'db',
+    ]);
+  });
+
+  test(
+    'request drain timeout forces Core stop instead of waiting forever',
+    () async {
+      bool? observedForce;
+
+      await ResourceTeardown.run(
+        drainRequests: () async => true,
+        stopServer: ({required bool force}) async {
+          observedForce = force;
+        },
+      );
+
+      expect(observedForce, isTrue);
+    },
+  );
+
+  test(
+    'desktop shutdown seals engine and Maya mutations before drains',
+    () async {
+      final gate = EngineMutationGate();
+      final libraryDelegate = _ShutdownLibraryGateway();
+      final library = GuardedLibraryGateway(
+        delegate: libraryDelegate,
+        gate: gate,
+      );
+      final mayaPort = _ShutdownMayaPort();
+      final maya = MayaService(
+        store: MayaStore.inMemory(),
+        libraryPort: mayaPort,
+        mutationGate: gate,
+      );
+      final proposal = (await maya.sendUserMessage('baixar')).proposals.single;
+      final drainEntered = Completer<void>();
+      final releaseDrain = Completer<void>();
+      var coreBlocked = false;
+      var progressBlocked = false;
+      var engineBlocked = false;
+
+      final teardown = ResourceTeardown.run(
+        beginShutdown: () async {
+          DesktopShutdownAdmission.stopAccepting(
+            engineMutations: gate,
+            maya: maya,
+            beginCoreShutdown: () => coreBlocked = true,
+            stopProgressWrites: () => progressBlocked = true,
+            beginEngineShutdown: () => engineBlocked = true,
+          );
+        },
+        drainProgress: () async {
+          drainEntered.complete();
+          await releaseDrain.future;
+        },
+        closeMaya: maya.close,
+      );
+
+      await drainEntered.future;
+      expect(coreBlocked, isTrue);
+      expect(progressBlocked, isTrue);
+      expect(engineBlocked, isTrue);
+      await expectLater(
+        library.setInLibrary(7, true),
+        throwsA(
+          isA<EngineException>().having(
+            (error) => error.failure.code,
+            'failure code',
+            'engine_mutations_blocked',
+          ),
+        ),
+      );
+      await expectLater(maya.confirmProposal(proposal.id), throwsStateError);
+      expect(libraryDelegate.membershipCalls, isEmpty);
+      expect(mayaPort.downloads, isEmpty);
+      expect(
+        maya.proposalById(proposal.id)!.status,
+        ActionProposalStatus.pending,
+      );
+
+      releaseDrain.complete();
+      await teardown;
+    },
+  );
+
+  test('unconfirmed owned shutdown prevents SQLite close', () async {
+    var dbClosed = false;
+
+    await expectLater(
+      ResourceTeardown.run(
+        shutdownEngine: () async => throw StateError('ownership unconfirmed'),
+        closeDb: () async => dbClosed = true,
+      ),
+      throwsStateError,
+    );
+
+    expect(dbClosed, isFalse);
+  });
+
   test(
     'second open via StorageFirstBootstrap never reaches Auth/Core/Suwayomi',
     () async {
@@ -565,4 +800,39 @@ void main() {
       await first.close();
     },
   );
+}
+
+final class _ShutdownLibraryGateway implements LibraryGateway {
+  final membershipCalls = <(int, bool)>[];
+
+  @override
+  Future<List<LibraryManga>> listLibrary() async => const [];
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {
+    membershipCalls.add((mangaId, inLibrary));
+  }
+}
+
+final class _ShutdownMayaPort implements MayaLibraryPort {
+  final downloads = <int>[];
+
+  @override
+  Future<void> enqueueChapterDownload(int chapterId) async {
+    downloads.add(chapterId);
+  }
+
+  @override
+  Future<List<MayaLibraryItem>> listLibrary() async => const [
+    MayaLibraryItem(
+      id: 7,
+      title: 'Yomu',
+      unreadCount: 1,
+      lastChapterId: 99,
+      lastChapterName: 'Capítulo 99',
+    ),
+  ];
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
 }

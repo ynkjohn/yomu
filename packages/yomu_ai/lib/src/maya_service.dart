@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:yomu_core/yomu_core.dart';
+
 import 'heuristic_engine.dart';
 import 'maya_port.dart';
 import 'maya_store.dart';
@@ -34,13 +36,16 @@ class MayaService {
     HeuristicMayaEngine? engine,
     this.llm,
     this.hooks = const MayaServiceHooks(),
-  }) : engine = engine ?? HeuristicMayaEngine();
+    EngineMutationGate? mutationGate,
+  }) : engine = engine ?? HeuristicMayaEngine(),
+       _mutationGate = mutationGate;
 
   final MayaStore store;
   final MayaLibraryPort libraryPort;
   final HeuristicMayaEngine engine;
   final MayaLlmProvider? llm;
   final MayaServiceHooks hooks;
+  final EngineMutationGate? _mutationGate;
 
   Future<void> _tail = Future<void>.value();
   Future<void>? _closeFuture;
@@ -67,11 +72,19 @@ class MayaService {
   /// Wait for all operations admitted before this call.
   Future<void> drain() => _tail;
 
+  /// Synchronously rejects every later chat or proposal mutation.
+  ///
+  /// Operations admitted before this boundary remain serialized in [_tail]
+  /// and are drained by [close].
+  void stopAccepting() {
+    _accepting = false;
+  }
+
   /// Stop admission synchronously and drain operations already queued.
   ///
   /// The shared [YomuDatabase] remains owned by desktop lifecycle teardown.
   Future<void> close() {
-    _accepting = false;
+    stopAccepting();
     _activeLlmCancellation?.cancel();
     return _closeFuture ??= Future.wait<void>(<Future<void>>[
       _tail,
@@ -197,6 +210,16 @@ class MayaService {
 
   /// Persist confirmation before dispatching any external effect.
   Future<ActionProposal> confirmProposal(String proposalId) {
+    if (!_accepting) {
+      return Future<ActionProposal>.error(
+        StateError('MayaService já foi encerrado.'),
+      );
+    }
+    try {
+      _mutationGate?.ensureAccepting();
+    } catch (error, stackTrace) {
+      return Future<ActionProposal>.error(error, stackTrace);
+    }
     return _enqueue(() async {
       var proposal = store.proposalById(proposalId);
       if (proposal == null) throw StateError('Proposta não encontrada.');

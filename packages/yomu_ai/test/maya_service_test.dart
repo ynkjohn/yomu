@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:yomu_ai/yomu_ai.dart';
+import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_storage/yomu_storage.dart';
 
 class _FakePort implements MayaLibraryPort {
@@ -54,6 +55,33 @@ class _BlockingPort extends _FakePort {
   }
 }
 
+class _GateQueuePort extends _FakePort {
+  Completer<void>? _entered;
+  Completer<void>? _release;
+
+  void blockNextLibraryRead() {
+    _entered = Completer<void>();
+    _release = Completer<void>();
+  }
+
+  Future<void> get entered => _entered!.future;
+
+  void release() => _release!.complete();
+
+  @override
+  Future<List<MayaLibraryItem>> listLibrary() async {
+    final entered = _entered;
+    final release = _release;
+    if (entered != null && release != null) {
+      if (!entered.isCompleted) entered.complete();
+      await release.future;
+      _entered = null;
+      _release = null;
+    }
+    return super.listLibrary();
+  }
+}
+
 void main() {
   test('send + confirm download executes only after durable confirm', () async {
     final store = MayaStore.inMemory();
@@ -72,6 +100,86 @@ void main() {
     expect(done.completedAt, isNotNull);
     expect(port.downloads, <int>[99]);
     expect(port.startDownloaderCalls, 1);
+  });
+
+  test(
+    'stopAccepting rejects confirmation before persistence or dispatch',
+    () async {
+      final store = MayaStore.inMemory();
+      final port = _FakePort();
+      final maya = MayaService(store: store, libraryPort: port);
+      addTearDown(maya.close);
+      final proposal = (await maya.sendUserMessage('baixar')).proposals.single;
+
+      maya.stopAccepting();
+
+      await expectLater(maya.confirmProposal(proposal.id), throwsStateError);
+      expect(
+        maya.proposalById(proposal.id)!.status,
+        ActionProposalStatus.pending,
+      );
+      expect(port.downloads, isEmpty);
+    },
+  );
+
+  test(
+    'shared engine gate rejects confirmation before persistence or dispatch',
+    () async {
+      final store = MayaStore.inMemory();
+      final port = _FakePort();
+      final gate = EngineMutationGate();
+      final maya = MayaService(
+        store: store,
+        libraryPort: port,
+        mutationGate: gate,
+      );
+      addTearDown(maya.close);
+      final proposal = (await maya.sendUserMessage('baixar')).proposals.single;
+
+      gate.stopAccepting();
+
+      await expectLater(
+        maya.confirmProposal(proposal.id),
+        throwsA(
+          isA<EngineException>().having(
+            (error) => error.failure.code,
+            'failure code',
+            'engine_mutations_blocked',
+          ),
+        ),
+      );
+      expect(
+        maya.proposalById(proposal.id)!.status,
+        ActionProposalStatus.pending,
+      );
+      expect(port.downloads, isEmpty);
+    },
+  );
+
+  test('queued Maya mutation admitted before seal remains drainable', () async {
+    final store = MayaStore.inMemory();
+    final port = _GateQueuePort();
+    final gate = EngineMutationGate();
+    final maya = MayaService(
+      store: store,
+      libraryPort: port,
+      mutationGate: gate,
+    );
+    addTearDown(maya.close);
+    final proposal = (await maya.sendUserMessage('baixar')).proposals.single;
+    port.blockNextLibraryRead();
+    final blocker = maya.sendUserMessage('listar');
+    await port.entered;
+
+    final admitted = maya.confirmProposal(proposal.id);
+    gate.stopAccepting();
+    maya.stopAccepting();
+    port.release();
+
+    await blocker;
+    final done = await admitted;
+    expect(done.status, ActionProposalStatus.executed);
+    expect(port.downloads, [99]);
   });
 
   test('50 concurrent confirms dispatch one effect', () async {

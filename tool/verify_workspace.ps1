@@ -18,6 +18,43 @@ if ($flutterBin) {
   $env:Path = "$flutterBin;" + $env:Path
 }
 
+Write-Host '== pinned engine compatibility manifest =='
+$engineManifest = Get-Content `
+  'packages/yomu_suwayomi/vendor/engine_manifest.json' -Raw | ConvertFrom-Json
+if ([int]$engineManifest.schemaVersion -ne 1) {
+  throw "Unsupported engine manifest schema: $($engineManifest.schemaVersion)"
+}
+if ([string]$engineManifest.compatibility.restApiVersion -ne 'v1' -or
+    [string]$engineManifest.compatibility.graphqlPath -ne '/api/graphql') {
+  throw 'Pinned engine protocol compatibility contract is missing or invalid.'
+}
+$requiredCapabilities = @(
+  'library', 'manga-details', 'reader', 'progress', 'catalog', 'extensions',
+  'downloads')
+$requiredQueries = @(
+  'chapter', 'downloadStatus', 'extensionStores', 'extensions', 'manga',
+  'mangas', 'sources')
+$requiredMutations = @(
+  'addExtensionStore', 'clearDownloader', 'dequeueChapterDownloads',
+  'enqueueChapterDownloads', 'fetchChapterPages', 'fetchExtensions',
+  'fetchMangaAndChapters', 'fetchSourceManga', 'startDownloader',
+  'stopDownloader', 'updateChapter', 'updateExtension', 'updateManga')
+foreach ($capability in $requiredCapabilities) {
+  if (@($engineManifest.compatibility.capabilities) -notcontains $capability) {
+    throw "Pinned engine capability missing: $capability"
+  }
+}
+foreach ($field in $requiredQueries) {
+  if (@($engineManifest.compatibility.requiredQueryFields) -notcontains $field) {
+    throw "Pinned engine query field missing: $field"
+  }
+}
+foreach ($field in $requiredMutations) {
+  if (@($engineManifest.compatibility.requiredMutationFields) -notcontains $field) {
+    throw "Pinned engine mutation field missing: $field"
+  }
+}
+
 Write-Host '== dart pub get (workspace) =='
 dart pub get
 
@@ -73,8 +110,6 @@ Pop-Location
 
 if ($VerifyOfflineEngineBundle) {
   Write-Host '== offline engine bundle + corresponding source =='
-  $engineManifest = Get-Content `
-    'packages/yomu_suwayomi/vendor/engine_manifest.json' -Raw | ConvertFrom-Json
   $sourceArchive = Join-Path $root `
     "packages/yomu_suwayomi/vendor/.jre_cache/$($engineManifest.jre.source.archiveFile)"
   & (Join-Path $root 'tool/verify_engine_bundle.ps1') `

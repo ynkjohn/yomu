@@ -47,17 +47,110 @@ class SuwayomiClient {
   }
 
   Future<Map<String, dynamic>?> about() async {
+    final result = await probeAbout();
+    return result.value;
+  }
+
+  Future<SuwayomiAboutProbeResult> probeAbout() async {
     try {
       final res = await _http
           .get(_u('/api/v1/settings/about'))
           .timeout(const Duration(seconds: 5));
-      if (res.statusCode != 200) return null;
+      if (res.statusCode != 200) {
+        return const SuwayomiAboutProbeResult.incompatible();
+      }
       final decoded = jsonDecode(res.body);
-      if (decoded is Map<String, dynamic>) return decoded;
-      return null;
+      if (decoded is! Map<String, dynamic> ||
+          decoded['version'] is! String ||
+          decoded['revision'] is! String) {
+        return const SuwayomiAboutProbeResult.incompatible();
+      }
+      return SuwayomiAboutProbeResult.ok(decoded);
     } catch (_) {
-      return null;
+      return const SuwayomiAboutProbeResult.unavailable();
     }
+  }
+
+  Future<SuwayomiGraphqlSchema?> graphqlSchema({
+    String path = '/api/graphql',
+  }) async {
+    final result = await probeGraphqlSchema(path: path);
+    return result.value;
+  }
+
+  Future<SuwayomiGraphqlSchemaProbeResult> probeGraphqlSchema({
+    String path = '/api/graphql',
+  }) async {
+    try {
+      // GraphQL Java rejects asking for `__Type.fields` more than once in a
+      // single operation. Probe each root independently so the pinned engine's
+      // introspection-good-faith protection remains enabled.
+      final queryFields = await _probeGraphqlRootFields(
+        path: path,
+        operationName: 'YomuQueryCompatibilityProbe',
+        rootName: 'queryType',
+      );
+      final mutationFields = await _probeGraphqlRootFields(
+        path: path,
+        operationName: 'YomuMutationCompatibilityProbe',
+        rootName: 'mutationType',
+      );
+      return SuwayomiGraphqlSchemaProbeResult.ok(
+        SuwayomiGraphqlSchema(
+          queryFields: queryFields,
+          mutationFields: mutationFields,
+        ),
+      );
+    } on _IncompatibleGraphqlSchema {
+      return const SuwayomiGraphqlSchemaProbeResult.incompatible();
+    } catch (_) {
+      return const SuwayomiGraphqlSchemaProbeResult.unavailable();
+    }
+  }
+
+  Future<List<String>> _probeGraphqlRootFields({
+    required String path,
+    required String operationName,
+    required String rootName,
+  }) async {
+    final res = await _http
+        .post(
+          _u(path),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'query':
+                '''
+              query $operationName {
+                __schema {
+                  $rootName { fields { name } }
+                }
+              }
+            ''',
+          }),
+        )
+        .timeout(const Duration(seconds: 5));
+    if (res.statusCode != 200) {
+      throw const _IncompatibleGraphqlSchema();
+    }
+    final decoded = jsonDecode(res.body);
+    if (decoded is! Map || decoded['errors'] != null) {
+      throw const _IncompatibleGraphqlSchema();
+    }
+    final data = decoded['data'];
+    final schema = data is Map ? data['__schema'] : null;
+    final fields = schema is Map ? _schemaFieldNames(schema[rootName]) : null;
+    if (fields == null) throw const _IncompatibleGraphqlSchema();
+    return fields;
+  }
+
+  static List<String>? _schemaFieldNames(Object? type) {
+    if (type is! Map || type['fields'] is! List) return null;
+    final out = <String>[];
+    for (final field in type['fields'] as List) {
+      if (field is! Map || field['name'] is! String) return null;
+      out.add(field['name'] as String);
+    }
+    return out;
   }
 
   Future<Map<String, dynamic>> graphql(
@@ -112,4 +205,51 @@ class SuwayomiClient {
         )
         .timeout(const Duration(seconds: 30));
   }
+}
+
+final class SuwayomiGraphqlSchema {
+  SuwayomiGraphqlSchema({
+    required Iterable<String> queryFields,
+    required Iterable<String> mutationFields,
+  }) : queryFields = List<String>.unmodifiable(queryFields),
+       mutationFields = List<String>.unmodifiable(mutationFields);
+
+  final List<String> queryFields;
+  final List<String> mutationFields;
+}
+
+enum SuwayomiProbeFailure { unavailable, incompatible }
+
+final class SuwayomiAboutProbeResult {
+  const SuwayomiAboutProbeResult.ok(this.value) : failure = null;
+
+  const SuwayomiAboutProbeResult.unavailable()
+    : value = null,
+      failure = SuwayomiProbeFailure.unavailable;
+
+  const SuwayomiAboutProbeResult.incompatible()
+    : value = null,
+      failure = SuwayomiProbeFailure.incompatible;
+
+  final Map<String, dynamic>? value;
+  final SuwayomiProbeFailure? failure;
+}
+
+final class SuwayomiGraphqlSchemaProbeResult {
+  const SuwayomiGraphqlSchemaProbeResult.ok(this.value) : failure = null;
+
+  const SuwayomiGraphqlSchemaProbeResult.unavailable()
+    : value = null,
+      failure = SuwayomiProbeFailure.unavailable;
+
+  const SuwayomiGraphqlSchemaProbeResult.incompatible()
+    : value = null,
+      failure = SuwayomiProbeFailure.incompatible;
+
+  final SuwayomiGraphqlSchema? value;
+  final SuwayomiProbeFailure? failure;
+}
+
+final class _IncompatibleGraphqlSchema implements Exception {
+  const _IncompatibleGraphqlSchema();
 }

@@ -22,6 +22,13 @@ void main() {
       'a1770cb0553e37c1f660a88c23afd7badde11328',
     );
     expect(manifest.suwayomi.sourceSha256, hasLength(64));
+    expect(manifest.compatibility.restApiVersion, 'v1');
+    expect(manifest.compatibility.graphqlPath, '/api/graphql');
+    expect(manifest.compatibility.capabilities, contains('downloads'));
+    expect(
+      manifest.compatibility.requiredMutationFields,
+      contains('updateChapter'),
+    );
 
     final jre = manifest.jre!;
     expect(jre.version, '21.0.11+10');
@@ -105,6 +112,31 @@ void main() {
 
     expect(
       () => VendorManifest.fromJson(json),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('manifest rejects missing or malformed compatibility contract', () {
+    final missing =
+        jsonDecode(
+              File(VendorManifest.resolveRuntimeFile().path).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    missing.remove('compatibility');
+    expect(
+      () => VendorManifest.fromJson(missing),
+      throwsA(isA<FormatException>()),
+    );
+
+    final malformed =
+        jsonDecode(
+              File(VendorManifest.resolveRuntimeFile().path).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    final compatibility = malformed['compatibility'] as Map<String, dynamic>;
+    compatibility['graphqlPath'] = 'http://127.0.0.1:14567/api/graphql';
+    expect(
+      () => VendorManifest.fromJson(malformed),
       throwsA(isA<FormatException>()),
     );
   });

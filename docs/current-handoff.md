@@ -857,3 +857,120 @@ Allowlist nominal de R6:
 `AGENTS.md`, arquivos status-only/EOL, `design_prod/**`, `.playwright-cli/**`,
 `mcps/tasks/tools/**`, `pubspec.lock`, builds e artefatos temporários permanecem
 fora. R7 só pode começar após o commit próprio de R6 e nova revalidação factual.
+
+## Checkpoint R7 — Compatibilidade, readiness única e supervisor
+
+R7 parte do commit R6 `d1213f3653b00410d69991deeafaf2c4a6713576` e
+ativa o motor interno automático sem alterar schema, persistência, portas,
+bundle, JAR, JRE, SDK, dependências ou ownership dos fatos de leitura. Upstream
+e remoto permanecem em `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, sem
+push. O SQLite Yomu continua no schema v5.
+
+Lifecycle implementado:
+
+- `EngineLifecycle` e `EngineDiagnostics` separam readiness sanitizada dos
+  detalhes técnicos de suporte;
+- `ReadingEngineSupervisor` é a única readiness do desktop/Core, compartilha
+  startup concorrente e aplica um deadline global de três minutos sobre start
+  e compatibility;
+- o compatibility probe valida SHA-256 do JAR, version/revision, REST v1 e os
+  campos GraphQL necessários às capacidades R3–R6 contra o manifest pinado;
+- Query e Mutation são introspectadas em operações separadas, compatíveis com
+  a proteção de introspecção good-faith do GraphQL Java do JAR pinado;
+- health ocorre a cada 15 segundos, exige uma segunda prova após um segundo e
+  permite apenas recoveries automáticos com backoff 1s, 5s e 15s;
+- o orçamento reseta após dez minutos saudável e um retry manual pode resetá-lo
+  uma vez;
+- artefato/runtime ausente ou inválido, incompatibilidade, root divergente,
+  porta estrangeira e ownership não comprovada viram `actionRequired`, sem
+  retry automático;
+- generations e o selo imediato de shutdown ignoram resultados tardios de
+  startup/recovery; reattach revalida que o PID owned continua sendo o listener
+  e nunca cria ou adota uma segunda JVM;
+- `HomeShell` permanece o único composition root, sobe UI/Core primeiro e
+  inicia o supervisor em background.
+
+Shutdown coordenado:
+
+1. gateways desktop, Maya, Yomu Core, progresso e supervisor são selados
+   sincronamente antes de qualquer espera pela fila de lifecycle;
+2. readers registrados publicam seus snapshots finais;
+3. progresso e requests Core admitidos drenam concorrentemente por até 10 s;
+   timeout ou erro do drain de requests força somente o stop do Core HTTP;
+4. a lease especial de progresso admitido é selada após os drains;
+5. downloads são pausados e aguardam ack por até 10 s;
+6. Yomu Core, Maya e Auth são fechados;
+7. somente o processo com ownership comprovada é encerrado;
+8. SQLite fecha por último, e não fecha se o shutdown owned não for confirmado.
+
+Validação de R7:
+
+- `yomu_core`: 21/21;
+- `yomu_suwayomi`: 110/110, com a prova live opt-in separada;
+- `yomu_local_server`: 47/47, com wire `/api/v1`, aliases e stop forçado após
+  timeout de request preservados;
+- `yomu_ai`: 69/69;
+- `yomu_storage`: 39/39;
+- desktop completo: 205/205;
+- PWA health, preload e reader races: aprovados;
+- analyzers de todos os packages, desktop e workspace: limpos;
+- `tool\verify_workspace.ps1`: `ALL CHECKS PASSED` em 135,5 s;
+- build Windows Debug aprovado em 16,1 s;
+- prova runtime isolada aprovada em 96,9 s: startup concorrente,
+  compatibility real, reattach no mesmo PID, shutdown, porta fechada e
+  reabertura, sem processo residual;
+- `git diff --check` limpo e hash protegido preservado em
+  `8DCF41D7283CB16A70A9FA2E0F9D1CE05591F7165AB1AB4FB560D9246A387AC9`;
+- o `FAIL` inicial sobre admissão desktop durante os drains foi corrigido com
+  gate compartilhado, admissão Maya antes da persistência e seal síncrono no
+  entrypoint real de shutdown; uma reauditoria limitada retornou `PASS`;
+- a revisão independente final de R7 retornou `PASS`, sem achado obrigatório,
+  bloqueante ou de severidade alta/média; staging/commit ficam liberados pela
+  autorização nominal já concedida.
+
+Allowlist nominal de R7:
+
+- `apps/yomu_desktop/lib/screens/reader_screen.dart`;
+- `apps/yomu_desktop/lib/shell/desktop_lifecycle.dart`;
+- `apps/yomu_desktop/lib/shell/home_shell.dart`;
+- `apps/yomu_desktop/test/desktop_lifecycle_test.dart`;
+- `apps/yomu_desktop/test/widget_test.dart`;
+- `packages/yomu_core/lib/src/reading_engine/engine_diagnostics.dart`;
+- `packages/yomu_core/lib/src/reading_engine/engine_lifecycle.dart`;
+- `packages/yomu_core/lib/src/reading_engine/engine_mutation_gate.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reading_progress_coordinator.dart`;
+- `packages/yomu_core/lib/src/reading_engine/reading_progress_gateway.dart`;
+- `packages/yomu_core/lib/yomu_core.dart`;
+- `packages/yomu_core/test/reading_engine_contracts_test.dart`;
+- `packages/yomu_core/test/engine_mutation_gate_test.dart`;
+- `packages/yomu_core/test/reading_progress_coordinator_test.dart`;
+- `packages/yomu_ai/lib/src/maya_service.dart`;
+- `packages/yomu_ai/test/maya_service_test.dart`;
+- `packages/yomu_local_server/lib/src/yomu_server.dart`;
+- `packages/yomu_local_server/test/yomu_server_health_test.dart`;
+- `packages/yomu_suwayomi/lib/src/adapter/suwayomi_engine_readiness.dart`
+  (remoção);
+- `packages/yomu_suwayomi/lib/src/client/suwayomi_client.dart`;
+- `packages/yomu_suwayomi/lib/src/compatibility/suwayomi_compatibility_probe.dart`;
+- `packages/yomu_suwayomi/lib/src/config/vendor_manifest.dart`;
+- `packages/yomu_suwayomi/lib/src/process/suwayomi_process_failure.dart`;
+- `packages/yomu_suwayomi/lib/src/process/suwayomi_process_manager.dart`;
+- `packages/yomu_suwayomi/lib/src/supervisor/managed_reading_engine_process.dart`;
+- `packages/yomu_suwayomi/lib/src/supervisor/reading_engine_supervisor.dart`;
+- `packages/yomu_suwayomi/lib/yomu_suwayomi.dart`;
+- `packages/yomu_suwayomi/test/live_reading_engine_lifecycle_test.dart`;
+- `packages/yomu_suwayomi/test/process_lifecycle_test.dart`;
+- `packages/yomu_suwayomi/test/reading_engine_adapter_test.dart`;
+- `packages/yomu_suwayomi/test/reading_engine_supervisor_test.dart`;
+- `packages/yomu_suwayomi/test/suwayomi_compatibility_probe_test.dart`;
+- `packages/yomu_suwayomi/test/vendor_manifest_test.dart`;
+- `packages/yomu_suwayomi/vendor/engine_manifest.json`;
+- `tool/verify_workspace.ps1`;
+- `docs/architecture.md`;
+- `docs/current-handoff.md`;
+- `docs/status.md`.
+
+`AGENTS.md`, `pubspec.lock`, arquivos status-only/EOL, `design_prod/**`,
+`.playwright-cli/**`, `mcps/tasks/tools/**`, builds e roots temporários ficam
+fora. R8 só pode começar após o `PASS` final de R7, staging nominal, inspeção
+integral do staged diff e commit próprio de R7.

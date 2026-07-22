@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -11,6 +12,10 @@ import 'package:yomu_core/yomu_core.dart';
 import 'device_auth.dart';
 import 'json_body_errors.dart';
 import 'media_ticket_store.dart';
+
+enum YomuServerDrainResult { drained, timedOut }
+
+const _admittedApiRequestContextKey = 'yomu.api.admitted';
 
 /// Yomu local HTTP server: PWA static + authenticated product API.
 ///
@@ -54,6 +59,9 @@ class YomuServer {
   final MediaTicketStore mediaTickets;
 
   HttpServer? _server;
+  bool _acceptingApiRequests = true;
+  int _activeApiRequests = 0;
+  Completer<void>? _apiIdleCompleter;
 
   int? get boundPort => _server?.port;
   String? get boundAddress => _server?.address.address;
@@ -309,11 +317,20 @@ class YomuServer {
           final page = body['lastPageRead'];
           final lastPageRead = page is int ? page : int.tryParse('$page') ?? 0;
           final isRead = body['isRead'] == true;
-          final ch = await _requireProgress().updateProgress(
-            chapterId: id,
-            lastPageRead: lastPageRead,
-            isRead: isRead,
-          );
+          final gateway = _requireProgress();
+          final ch =
+              gateway is AdmittedReadingProgressGateway &&
+                  req.context[_admittedApiRequestContextKey] == true
+              ? await gateway.updateAdmittedProgress(
+                  chapterId: id,
+                  lastPageRead: lastPageRead,
+                  isRead: isRead,
+                )
+              : await gateway.updateProgress(
+                  chapterId: id,
+                  lastPageRead: lastPageRead,
+                  isRead: isRead,
+                );
           return _json({
             'id': ch.chapterId,
             'lastPageRead': ch.lastPageRead,
@@ -377,8 +394,29 @@ class YomuServer {
 
     // Never log request bodies (may contain pairing codes) — use method/path only.
     var pipeline = const Pipeline().addMiddleware(_safeLogRequests());
+    pipeline = pipeline.addMiddleware(_apiAdmissionMiddleware());
     pipeline = pipeline.addMiddleware(_corsMiddleware());
     return pipeline.addHandler(handler);
+  }
+
+  /// Synchronously seals the authenticated/product API before coordinated
+  /// shutdown. Health remains available so readiness can report `shuttingDown`.
+  void beginShutdown() {
+    _acceptingApiRequests = false;
+  }
+
+  /// Waits only for API requests admitted before [beginShutdown].
+  Future<YomuServerDrainResult> drain({required Duration timeout}) async {
+    if (_activeApiRequests == 0) return YomuServerDrainResult.drained;
+    if (timeout <= Duration.zero) return YomuServerDrainResult.timedOut;
+    final idle = _apiIdleCompleter?.future;
+    if (idle == null) return YomuServerDrainResult.drained;
+    try {
+      await idle.timeout(timeout);
+      return YomuServerDrainResult.drained;
+    } on TimeoutException {
+      return YomuServerDrainResult.timedOut;
+    }
   }
 
   Map<String, Object?> _healthPayload() {
@@ -606,6 +644,40 @@ class YomuServer {
     };
   }
 
+  Middleware _apiAdmissionMiddleware() {
+    return (inner) {
+      return (request) async {
+        final path = request.requestedUri.path;
+        final isApi = path == '/api/v1' || path.startsWith('/api/v1/');
+        final isHealth = path == '/api/v1/health';
+        if (!isApi || isHealth) return inner(request);
+        if (!_acceptingApiRequests) {
+          return _json({
+            'error': 'shutting_down',
+            'message': 'O Yomu está encerrando com segurança.',
+          }, status: 503);
+        }
+
+        _activeApiRequests += 1;
+        _apiIdleCompleter ??= Completer<void>();
+        try {
+          return await inner(
+            request.change(
+              context: const {_admittedApiRequestContextKey: true},
+            ),
+          );
+        } finally {
+          _activeApiRequests -= 1;
+          if (_activeApiRequests == 0) {
+            final idle = _apiIdleCompleter;
+            _apiIdleCompleter = null;
+            if (idle != null && !idle.isCompleted) idle.complete();
+          }
+        }
+      };
+    };
+  }
+
   Middleware _corsMiddleware() {
     return (inner) {
       return (request) async {
@@ -647,8 +719,8 @@ class YomuServer {
     _server = await shelf_io.serve(buildHandler(), host, port);
   }
 
-  Future<void> stop() async {
-    await _server?.close(force: true);
+  Future<void> stop({bool force = false}) async {
+    await _server?.close(force: force);
     _server = null;
   }
 

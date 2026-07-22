@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -170,36 +169,6 @@ void main() {
       ),
     );
   });
-
-  test(
-    'readiness adapter maps lifecycle without leaking vendor details',
-    () async {
-      var current = const SuwayomiStatus(
-        state: SuwayomiProcessState.unhealthy,
-        message: r'java.exe failed at C:\secret\root',
-        pid: 123,
-        baseUrl: 'http://127.0.0.1:14567',
-      );
-      final changes = StreamController<SuwayomiStatus>();
-      addTearDown(changes.close);
-      final adapter = SuwayomiEngineReadinessAdapter(
-        status: () => current,
-        statusChanges: changes.stream,
-      );
-
-      expect(
-        adapter.current.state,
-        EngineReadinessState.temporarilyUnavailable,
-      );
-      expect(adapter.current.failure?.message, isNot(contains('secret')));
-      expect(adapter.current.failure?.message, isNot(contains('java')));
-
-      final next = adapter.changes.first;
-      current = const SuwayomiStatus(state: SuwayomiProcessState.running);
-      changes.add(current);
-      expect((await next).state, EngineReadinessState.ready);
-    },
-  );
 }
 
 final class _ForeignMediaReference implements MediaReference {

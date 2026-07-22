@@ -93,6 +93,29 @@ closed before Auth/SQLite teardown. Automatic engine lifecycle and drains are
 implemented as capabilities only and remain inactive until R7. SQLite stays
 at schema v5 and reading facts remain owned solely by the engine.
 
+R7 activates a single product-level lifecycle. `ReadingEngineSupervisor` is
+the sole readiness source for desktop and Yomu Core, starts the pinned engine
+after UI/Core bootstrap, shares concurrent startup, verifies artifact, version,
+REST protocol and required GraphQL capabilities, and exposes process details
+only through `EngineDiagnostics`. Health runs every 15 seconds, requires a
+second failed proof after one second and permits only the bounded 1s/5s/15s
+recovery sequence; terminal installation, compatibility, root, port or
+ownership failures become `actionRequired` without an automatic loop.
+
+Shutdown synchronously seals the shared desktop mutation gate, Maya admission,
+Core requests, progress and supervisor before waiting for the lifecycle queue.
+Operations admitted before that boundary may finish; later library, details,
+downloads, extensions and Maya mutations are rejected before their adapters or
+durable confirmation. Registered reader snapshots are captured, progress and
+admitted Core requests drain within their bounds, and a request-drain timeout
+forces only the Core HTTP stop so shutdown cannot wait indefinitely. Downloads
+then pause with a bounded acknowledgement, Core stops, and only the
+proven-owned engine is terminated before SQLite closes. A request admitted
+before the boundary retains an explicit progress lease; later requests receive
+a sanitized 503. Startup, recovery and shutdown generation checks prevent late
+async results from publishing readiness or creating a second JVM. Ports remain
+fixed at 127.0.0.1:14567 and 8787, and SQLite remains schema v5.
+
 ## Dual catalog (Source Builder)
 
 - Extension sources: runtime = Suwayomi; appear in Suwayomi UI/API.

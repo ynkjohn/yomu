@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
 import 'package:yomu_core/yomu_core.dart';
 import 'package:yomu_local_server/yomu_local_server.dart';
@@ -339,6 +340,196 @@ void main() {
     expect(blocked.statusCode, 429);
     expect(blocked.headers['retry-after'], isNotNull);
   });
+
+  test(
+    'shutdown drains admitted API request and rejects late request',
+    () async {
+      final auth = DeviceAuthStore.inMemory();
+      addTearDown(auth.close);
+      final token = await _pairToken(auth);
+      final library = _BlockingLibrary();
+      final server = YomuServer(
+        auth: auth,
+        library: library,
+        engineReadiness: const _FixedReadiness.actionRequired(),
+      );
+      final handler = server.buildHandler();
+
+      final admitted = handler(
+        Request(
+          'GET',
+          Uri.parse('http://localhost/api/v1/library'),
+          headers: {'authorization': 'Bearer $token'},
+        ),
+      );
+      await library.entered.future;
+
+      server.beginShutdown();
+      var drainCompleted = false;
+      final drain = server
+          .drain(timeout: const Duration(seconds: 1))
+          .whenComplete(() => drainCompleted = true);
+      await Future<void>.delayed(Duration.zero);
+      expect(drainCompleted, isFalse);
+
+      final late = await handler(
+        Request(
+          'GET',
+          Uri.parse('http://localhost/api/v1/library'),
+          headers: {'authorization': 'Bearer $token'},
+        ),
+      );
+      expect(late.statusCode, 503);
+      expect(jsonDecode(await late.readAsString()), {
+        'error': 'shutting_down',
+        'message': 'O Yomu está encerrando com segurança.',
+      });
+      expect(library.calls, 1);
+
+      final health = await handler(
+        Request('GET', Uri.parse('http://localhost/api/v1/health')),
+      );
+      expect(health.statusCode, 200);
+
+      library.release.complete();
+      expect((await admitted).statusCode, 200);
+      expect(await drain, YomuServerDrainResult.drained);
+    },
+  );
+
+  test('shutdown request drain has a bounded timeout', () async {
+    final auth = DeviceAuthStore.inMemory();
+    addTearDown(auth.close);
+    final token = await _pairToken(auth);
+    final library = _BlockingLibrary();
+    final server = YomuServer(
+      auth: auth,
+      library: library,
+      engineReadiness: const _FixedReadiness.actionRequired(),
+    );
+    final handler = server.buildHandler();
+
+    final admitted = handler(
+      Request(
+        'GET',
+        Uri.parse('http://localhost/api/v1/library'),
+        headers: {'authorization': 'Bearer $token'},
+      ),
+    );
+    await library.entered.future;
+    server.beginShutdown();
+
+    expect(
+      await server.drain(timeout: Duration.zero),
+      YomuServerDrainResult.timedOut,
+    );
+
+    library.release.complete();
+    await admitted;
+    expect(
+      await server.drain(timeout: const Duration(seconds: 1)),
+      YomuServerDrainResult.drained,
+    );
+  });
+
+  test(
+    'forced stop advances after an admitted request exceeds its drain',
+    () async {
+      final auth = DeviceAuthStore.inMemory();
+      addTearDown(auth.close);
+      final token = await _pairToken(auth);
+      final library = _BlockingLibrary();
+      final server = YomuServer(
+        host: '127.0.0.1',
+        port: 0,
+        auth: auth,
+        library: library,
+        engineReadiness: const _FixedReadiness.actionRequired(),
+      );
+      await server.start();
+      final client = http.Client();
+      addTearDown(client.close);
+
+      final admitted = client
+          .get(
+            Uri.parse('http://127.0.0.1:${server.boundPort}/api/v1/library'),
+            headers: {'authorization': 'Bearer $token'},
+          )
+          .then<Object>(
+            (response) => response,
+            onError: (Object error) => error,
+          );
+      await library.entered.future;
+      server.beginShutdown();
+      expect(
+        await server.drain(timeout: Duration.zero),
+        YomuServerDrainResult.timedOut,
+      );
+
+      await server.stop(force: true).timeout(const Duration(seconds: 1));
+      library.release.complete();
+      await admitted;
+    },
+  );
+
+  test(
+    'progress request admitted before shutdown keeps its mutation lease',
+    () async {
+      final auth = DeviceAuthStore.inMemory();
+      addTearDown(auth.close);
+      final token = await _pairToken(auth);
+      final upstream = _RecordingProgress();
+      final progress = ReadingProgressCoordinator(upstream);
+      final server = YomuServer(
+        auth: auth,
+        progress: progress,
+        engineReadiness: const _FixedReadiness.actionRequired(),
+      );
+      final handler = server.buildHandler();
+      final body = StreamController<List<int>>();
+
+      final admitted = handler(
+        Request(
+          'PUT',
+          Uri.parse('http://localhost/api/v1/chapters/11/progress'),
+          headers: {
+            'authorization': 'Bearer $token',
+            'content-type': 'application/json',
+          },
+          body: body.stream,
+        ),
+      );
+      server.beginShutdown();
+      progress.stopAccepting();
+      body.add(utf8.encode('{"lastPageRead":4,"isRead":false}'));
+      await body.close();
+
+      final response = await admitted;
+      expect(response.statusCode, 200);
+      expect(upstream.calls, 1);
+      expect(progress.isAccepting, isFalse);
+
+      final late = await handler(
+        Request(
+          'PUT',
+          Uri.parse('http://localhost/api/v1/chapters/11/progress'),
+          headers: {'authorization': 'Bearer $token'},
+          body: '{"lastPageRead":5,"isRead":false}',
+        ),
+      );
+      expect(late.statusCode, 503);
+    },
+  );
+}
+
+Future<String> _pairToken(DeviceAuthStore auth) async {
+  final pairing = auth.startPairing();
+  final outcome = await auth.claimPairing(
+    code: pairing.code,
+    deviceName: 'Test device',
+    clientKey: '127.0.0.1',
+  );
+  return outcome.bearerToken!;
 }
 
 final class _FixedReadiness implements EngineReadiness {
@@ -360,4 +551,39 @@ final class _TestMediaReference implements MediaReference {
   const _TestMediaReference(this.value);
 
   final String value;
+}
+
+final class _BlockingLibrary implements LibraryGateway {
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> release = Completer<void>();
+  int calls = 0;
+
+  @override
+  Future<List<LibraryManga>> listLibrary() async {
+    calls += 1;
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return const [];
+  }
+
+  @override
+  Future<void> setInLibrary(int mangaId, bool inLibrary) async {}
+}
+
+final class _RecordingProgress implements ReadingProgressGateway {
+  int calls = 0;
+
+  @override
+  Future<ReadingProgressSnapshot> updateProgress({
+    required int chapterId,
+    required int lastPageRead,
+    required bool isRead,
+  }) async {
+    calls += 1;
+    return ReadingProgressSnapshot(
+      chapterId: chapterId,
+      lastPageRead: lastPageRead,
+      isRead: isRead,
+    );
+  }
 }

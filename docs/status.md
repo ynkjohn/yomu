@@ -41,6 +41,7 @@
 | **Motor R4 — Core/PWA sobre contratos Yomu** | ✅ concluída nesta subfase |
 | **Motor R5 — detalhes e descoberta desktop** | ✅ reviewer independente PASS |
 | **Motor R6 — reader, progresso, downloads e Maya** | ✅ reviewer independente PASS |
+| **Motor R7 — readiness única e supervisor** | ✅ reviewer independente PASS |
 
 ## Phases
 
@@ -62,6 +63,7 @@
 | Motor Interno Transparente R4 | ✅ Core/PWA sem dependência direta do fornecedor |
 | Motor Interno Transparente R5 | ✅ detalhes e descoberta migrados; reviewer PASS |
 | Motor Interno Transparente R6 | ✅ mutações migradas e drains preparados; reviewer PASS |
+| Motor Interno Transparente R7 | ✅ gates verdes; reviewer independente PASS |
 | Source Builder | reservado para a última fase |
 | Histórico da Maya | ✅ persistido na P2A |
 | Settings gerais / backup / demais extras | candidatos; ownership não auditado |
@@ -119,6 +121,40 @@
   afetados passaram 58/58 e a nova revisão independente retornou `PASS`.
 - Schema SQLite permanece v5; não houve mudança de ownership, dependência,
   SDK, JAR/JRE, porta ou wire `/api/v1`.
+
+## R7 — Compatibilidade, readiness única e supervisor
+
+- Baseline committed: R6 `d1213f3`; upstream e remoto permanecem em
+  `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, sem push.
+- `ReadingEngineSupervisor` implementa a única readiness do produto, startup
+  single-flight com deadline global de três minutos, health a cada 15 segundos,
+  segunda prova após um segundo e recoveries limitados a 1s, 5s e 15s.
+- Artefato, version/revision, protocolo REST e campos GraphQL requeridos são
+  conferidos contra o manifest pinado. Introspecção de Query e Mutation é
+  separada para preservar a proteção de good-faith do GraphQL Java.
+- Falta/invalidade de artefato ou runtime, incompatibilidade, root divergente,
+  porta estrangeira e ownership inconclusiva resultam em `actionRequired` sem
+  loop automático. Exceções inesperadas são sanitizadas.
+- `HomeShell` continua o único composition root: UI e Core sobem primeiro e o
+  motor inicia em background. Readiness paralela legada foi removida; detalhes
+  técnicos ficam em `EngineDiagnostics` para a UI de diagnóstico da R8.
+- Shutdown sela sincronamente gateways desktop, Maya, Core, progresso e
+  supervisor antes de aguardar a fila de lifecycle. Operações já admitidas
+  drenam; confirmação Maya nova falha antes de persistir, enquanto uma já
+  admitida pode concluir. Timeout do drain de requests força somente o stop do
+  Core HTTP para preservar o limite. Downloads pausam com ack e apenas o
+  processo owned é encerrado antes do SQLite.
+- Prova runtime isolada com o JAR/JRE pinados passou: startup concorrente,
+  compatibility real, reattach no mesmo PID, shutdown com porta fechada e
+  reabertura, sem JVM residual.
+- Gates atuais: core 21/21, Suwayomi 110/110 (live opt-in separado), local
+  server 47/47, AI 69/69, storage 39/39, desktop 205/205 e PWA aprovada;
+  analyzers limpos; `tool\verify_workspace.ps1` com `ALL CHECKS PASSED` em
+  135,5 s; build Windows Debug aprovado em 16,1 s; `git diff --check` limpo.
+- Schema SQLite permanece v5; JAR, JRE, SDK, dependências, portas, wire
+  `/api/v1` e ownership não mudaram. O `FAIL` inicial sobre admissão durante os
+  drains foi corrigido; uma reauditoria limitada desses achados e a revisão
+  independente final retornaram `PASS`, sem achado obrigatório ou bloqueante.
 
 ## P2C — provider personalizado OpenAI-compatible (commit local `eda852b`)
 

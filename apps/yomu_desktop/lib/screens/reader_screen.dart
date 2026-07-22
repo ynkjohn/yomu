@@ -147,6 +147,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   double _zoom = 1;
   late ReadingChapter _chapter;
   late List<ReadingChapter> _orderedChapters;
+  late final ReadingProgressSessionHandle _progressSession;
   _ReaderMode _mode = _ReaderMode.rtl;
   _ReaderFit _fit = _ReaderFit.height;
   _ReaderTheme _theme = _ReaderTheme.black;
@@ -169,6 +170,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
     super.initState();
     _chapter = widget.chapter;
     _orderedChapters = chronologicalChapters(widget.chapters);
+    _progressSession = widget.progress.registerFinalSnapshotProvider(() {
+      final snapshot = _captureSaveSnapshot();
+      if (snapshot == null) return null;
+      return ReadingProgressSnapshot(
+        chapterId: snapshot.chapterId,
+        lastPageRead: snapshot.page,
+        isRead: snapshot.isRead,
+      );
+    });
     _settingsOpen = widget.openSettingsOnStart;
     _load();
   }
@@ -177,6 +187,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void dispose() {
     _saveDebounce?.cancel();
     final finalSnapshot = _captureSaveSnapshot();
+    widget.progress.unregisterFinalSnapshotProvider(_progressSession);
     if (finalSnapshot != null) unawaited(_saveFinal(finalSnapshot));
     _seekGeneration++;
     _seekingScroll = false;
