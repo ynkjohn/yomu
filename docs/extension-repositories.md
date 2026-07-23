@@ -12,14 +12,23 @@ Index entry shape (observed):
 
 - `name`, `pkg`, `apk`, `lang`, `code`, `version`, `nsfw`, `sources[]` (`name`, `lang`, `id`, `baseUrl`)
 
-## Yomu responsibilities
+## Capacidades do motor
 
-- Add/remove repository URLs (validate HTTPS, JSON shape)
-- List extensions (via Suwayomi API once validated)
-- Install / update / uninstall / surface errors
-- Show origin; confirm before installing from **untrusted** repos
-- Never execute APKs itself
+O motor auditado oferece adicionar/remover repositórios, listar extensões e
+instalar, atualizar ou desinstalar extensões. Essas são capacidades do motor,
+não uma promessa de que toda ação já atravesse a interface Yomu.
+
+## Escopo atual e futuro do Yomu
+
+- A UI/contrato atual cobre descoberta e a instalação/sincronização já
+  atravessadas pelo gateway de extensões.
+- Adição/remoção de URL de repositório e desinstalação só poderão virar fluxo de
+  produto depois de contrato e confirmação próprios; o Yomu nunca executa APK.
+- F5 tratará apenas **troca de fonte assistida**: validar um destino e pedir
+  confirmação final, sem prometer transferir progresso, Histórico ou downloads.
+  A obra original permanece até essa validação e confirmação.
 
 ## Functional gate #1
 
-Suwayomi start → add Keiyoushi → list → install → open source → search → details → chapters → pages.
+Yomu gerencia o motor → adicionar Keiyoushi → listar → instalar → abrir fonte
+→ buscar → detalhes → capítulos → páginas.

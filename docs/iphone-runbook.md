@@ -3,7 +3,9 @@
 ## Prerequisites
 
 1. Yomu Desktop running on Windows (same Wi‑Fi as the iPhone)
-2. Suwayomi motor **running** (tab Servidor → Iniciar)
+2. Motor interno disponível; o Yomu o inicia e supervisiona automaticamente.
+   Se houver `actionRequired`, use **Tentar novamente** ou consulte
+   **Diagnóstico** em vez de tentar iniciá-lo manualmente.
 3. At least one title in the desktop library (for a useful test)
 4. Windows Firewall allows inbound **TCP 8787** (private network)
 
@@ -27,7 +29,7 @@
 | Page won't load | Same Wi‑Fi, firewall 8787, LAN toggle on, correct PC IP |
 | Health offline | Desktop app running; Yomu HTTP started |
 | Pairing 401 | New code; clock/TTL; code not reused |
-| Library empty / 502 | Start Suwayomi; add titles on desktop |
+| Library empty / 502 | Confira a disponibilidade do motor interno; adicione títulos no desktop |
 | Images blank | Token still valid; motor healthy |
 
 ## Security

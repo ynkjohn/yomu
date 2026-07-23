@@ -9,7 +9,7 @@ is the current adapter implementation, not a product surface.
 | Concern | Owner |
 |---------|--------|
 | Tachiyomi/Mihon/Keiyoushi extensions | **Suwayomi-Server** (managed process) |
-| Own sources from a pasted URL | **Yomu Source Builder** (complementary, dual catalog) |
+| Own sources from a pasted URL | Not part of Yomu V1; Source Creator is future roadmap, not an active dual catalog |
 | Native UI, Maya, PWA, proxy, auth | **Yomu** |
 
 ## Processes
@@ -139,11 +139,12 @@ in desktop UI/Core. There is no permanent screen/Core allowlist. `/api/v1`,
 including the temporary `suwayomiReady`/`suwayomi` aliases, ports, schema v5,
 JAR/JRE and data ownership remain unchanged.
 
-## Dual catalog (Source Builder)
+## Source Creator outside V1
 
-- Extension sources: runtime = Suwayomi; appear in Suwayomi UI/API.
-- SourceSpec sources: runtime = Yomu; **do not** appear in Suwayomi in the MVP.
-- Spec Bridge Extension = future evolution.
+The current product has no Yomu-owned second catalog. Extension sources run in
+the internal engine and appear through its extension/catalog capabilities.
+Source Creator, SourceSpecs and any bridge are future-roadmap concepts only;
+they are not part of the V1 interface or an approved persistence plan.
 
 ## Dual database
 
@@ -151,8 +152,10 @@ JAR/JRE and data ownership remain unchanged.
 - Yomu SQLite implementado: meta do app, sessões, histórico/propostas da Maya e
   configuração não secreta de provider da Maya, incluindo o perfil de endpoint
   OpenAI-compatible no schema v5.
-- Extras futuros do Yomu, como status pessoal, SourceSpecs e analytics, exigem
-  ownership confirmado e schema bump próprio antes de serem persistidos.
+- Settings will be typed only in future schema v6/F1. Future history
+  presentation state and update watermarks also require their own approved
+  ownership and schema work; they do not duplicate engine facts or catalogs.
+- SourceSpecs and analytics remain future concepts with no approved schema.
 
 Modelo conceitual candidato para status pessoal: Suwayomi = facts; Yomu =
 intention; conflitos seriam visíveis. Ownership e persistência dependem de
@@ -207,5 +210,6 @@ inseguro. A prova live de compatibilidade com cada serviço externo não faz
 parte dos gates certificados desta fase.
 
 A P2C foi concluída e publicada no commit separado `eda852b`, com o único bump
-`4 → 5`; o handoff pós-P2C foi publicado em `673734b`. Source Builder permanece
-reservado para a última fase.
+`4 → 5`; o handoff pós-P2C foi publicado em `673734b`. R0–R8 foram concluídas
+posteriormente no checkpoint `0a5a0c5`. A F0 registra Source Creator fora da V1
+e não cria sua implementação ou persistência.

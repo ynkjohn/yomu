@@ -7,8 +7,8 @@ Private, local-first manga/manhwa/webtoon reader.
 - **Extensions:** Tachiyomi/Mihon ecosystem (e.g. [Keiyoushi](https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json))
 - **Mobile:** iPhone via Safari/PWA → **Yomu Core only** (Suwayomi stays on loopback)
 - **Extras:** Maya local-first com providers opcionais, incluindo perfil
-  OpenAI-compatible personalizado; analytics e Source Builder permanecem
-  fases posteriores
+  OpenAI-compatible personalizado; analytics permanece futuro e o Criador de
+  fontes não faz parte da interface V1
 
 ## Requirements
 
@@ -67,18 +67,20 @@ dart test
 
 With the app running:
 
-- Desktop status bar: Suwayomi state + LAN port
+- Desktop status bar: estado do motor interno + porta LAN
 - `http://127.0.0.1:8787/health`
 - PWA stub: `http://127.0.0.1:8787/`
 
-### Fluxo UI mínima (Fase 2B)
+### Fluxo atual de leitura
 
-1. Aba **Servidor** → Iniciar Suwayomi  
+1. Abra o Yomu e aguarde o motor interno gerenciado ficar disponível. Se ele
+   pedir intervenção, use **Tentar novamente** ou consulte **Diagnóstico**.
 2. Aba **Extensões** → Garantir Keiyoushi → Instalar MangaDex  
 3. Aba **Explorar** → buscar `berserk` → abrir obra com capítulos  
 4. Abrir capítulo → ver páginas no leitor  
 
-Detalhes: `docs/phase-2b-ui-minimum.md`.
+O motor não é iniciado manualmente pela tela Servidor. Ela ainda concentra
+LAN, pareamento e sessões na UI R8 atual.
 
 ### Validar workspace inteiro
 
@@ -106,7 +108,7 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1 `
 | PWA LAN real | ✅ (opt-in + pairing + proxy) |
 | Maya persistente + providers OpenAI/Anthropic/Gemini/Ollama | ✅ (schema v4) |
 | Provider OpenAI-compatible personalizado | ✅ publicado em `eda852b` (schema v5) |
-| Source Builder | reservado para a última fase |
+| Criador de fontes | fora da interface V1; não há fluxo atual |
 
 Yomu HTTP default: `http://127.0.0.1:8787`; LAN só com opt-in. Suwayomi: `http://127.0.0.1:14567` apenas.
 Os adapters/providers da P2B/P2C foram validados com transports
@@ -132,11 +134,10 @@ Binary/source archives remain outside Git and the installer.
 
 ## Estado e arquitetura
 
-A P2C está concluída e publicada no commit
-`eda852bcc17f1b04c5045e32388bf6c78a6945fb`, com schema v5. O handoff pós-P2C
-foi publicado em `673734b742c9b0fac99f4090ba0eb14a4d15f175`.
-Consulte
-`docs/current-handoff.md`, `docs/p2c-maya-custom-provider.md` e
+R0–R8 do Motor Interno Transparente estão concluídas no checkpoint
+`0a5a0c5`; o SQLite Yomu permanece no schema v5. A F0 documenta os contratos
+de produto para fases futuras sem implementar schema, UI ou código.
+Consulte `docs/current-handoff.md`, `docs/f0-functional-contract.md` e
 `docs/architecture.md` antes de continuar.
 
 ## License

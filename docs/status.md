@@ -2,16 +2,20 @@
 
 ## Baseline atual
 
-- Na abertura de R0 em 2026-07-18, `master`, `origin/master` e o remoto estavam
-  sincronizados em `31c6764314ee52d5a9c30efe0b5b291e840f50e9`. Revalide o
-  HEAD efetivo no Git.
+- Em 2026-07-23, `master`, `origin/master` e o remoto foram revalidados em
+  `0a5a0c5db130e0c51f48eb27dcd75d063c0670c6`
+  (`feat(engine): add diagnostics and guard`). O snapshot da abertura de R0
+  abaixo é histórico; revalide sempre o HEAD efetivo no Git.
 - P0, checkpoint pós-P0, P1, P2A, P2B, P2C e seus handoffs estão commitados e
   publicados separadamente.
 - A P2C está publicada em `eda852b`, com schema SQLite Yomu v5; o handoff
   pós-P2C está publicado em `673734b`.
-- A goal ativa é Motor Interno Transparente R0–R8, sem “Novidades desktop”. As
-  subfases são arquiteturais e não criam bump ou migração artificial; o schema
-  permanece v5.
+- Motor Interno Transparente R0–R8 está concluído. As subfases foram
+  arquiteturais e não criaram bump ou migração artificial; o schema permanece
+  v5.
+- F0 está concluída: os contratos de produto foram aprovados e a revisão
+  independente retornou PASS. F0 não criou schema nem alterou código ou UI.
+- F1 é o próximo trabalho planejado, mas ainda não foi iniciado nem autorizado.
 - A prova runtime isolada e a captura visual externa da P2C foram concluídas sem
   tocar o perfil real do usuário.
 - Handoff operacional: `docs/current-handoff.md`.
@@ -43,6 +47,7 @@
 | **Motor R6 — reader, progresso, downloads e Maya** | ✅ reviewer independente PASS |
 | **Motor R7 — readiness única e supervisor** | ✅ reviewer independente PASS |
 | **Motor R8 — diagnóstico, UI simplificada e guard** | ✅ reviews R8 e integrada PASS |
+| **F0 — contratos funcionais pós-R8** | ✅ contratos aprovados; revisão independente PASS; sem schema, UI ou código |
 
 ## Phases
 
@@ -66,9 +71,11 @@
 | Motor Interno Transparente R6 | ✅ mutações migradas e drains preparados; reviewer PASS |
 | Motor Interno Transparente R7 | ✅ gates verdes; reviewer independente PASS |
 | Motor Interno Transparente R8 | ✅ reviews R8 e integrada PASS |
-| Source Builder | reservado para a última fase |
+| F0 — reconciliação factual e contratos | ✅ contratos aprovados; revisão independente PASS |
+| Criador de fontes | fora da interface V1; roadmap futuro sem schema/UI atual |
 | Histórico da Maya | ✅ persistido na P2A |
-| Settings gerais / backup / demais extras | candidatos; ownership não auditado |
+| F1 — Settings gerais | próximo trabalho planejado; schema v6 tipado contratado, ainda não iniciado nem autorizado |
+| Histórico, Novidades e Backup | contratos F0 registrados; sem persistência nova |
 
 ## R5 — consumidores desktop de detalhes e descoberta
 
@@ -421,5 +428,6 @@ powershell -ExecutionPolicy Bypass -File tool/verify_workspace.ps1
 - O painel de fim do leitor tem prova widget, não prova runtime atual; evitou-se alterar progresso/`isRead` real apenas para produzir screenshot.
 - Cada autenticação persiste `last_seen_at_ms` em uma fila serial; comportamento
   correto, com custo de write a observar em uso LAN intenso.
-- Source Builder permanece fora de escopo e na última fase.
+- Source Builder está fora da V1 e permanece apenas como roadmap futuro; não
+  bloqueia o lançamento.
 - P2C e o handoff pós-P2C estão publicados. Consulte `docs/current-handoff.md`.

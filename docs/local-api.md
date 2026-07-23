@@ -15,7 +15,7 @@
 
 | Method | Path | Notes |
 |--------|------|--------|
-| GET | `/health` | Yomu + Suwayomi + bind + auth summary |
+| GET | `/health` | Yomu + readiness do motor interno + bind + resumo de auth |
 | GET | `/api/v1/health` | alias |
 | POST | `/api/v1/pairing/claim` | body `{ code, deviceName }` → `{ token }` |
 | GET | `/` | PWA SPA (if present) |
@@ -43,7 +43,8 @@
 2. Sessions are persisted in Yomu SQLite schema v2. Only the lowercase SHA-256
    token hash is stored; the bearer plaintext is returned only by a successful
    pairing claim.
-3. Phone never receives Suwayomi host/port; all media goes through Yomu proxy.
+3. Phone never receives the internal-engine host/port; all media goes through
+   the Yomu proxy.
 4. LAN bind requires confirmation dialog on desktop.
 
 Legacy `yomu/device_sessions.json` is imported transactionally once and removed

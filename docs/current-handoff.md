@@ -1,8 +1,7 @@
 # Yomu — handoff atual
 
-Snapshot factual atualizado em 2026-07-18 na abertura de R0 do Motor Interno
-Transparente. Código, Git, processos e comportamento atual prevalecem sobre
-este documento.
+Snapshot factual atualizado em 2026-07-23 após a conclusão de R8 e F0. Código,
+Git, processos e comportamento atual prevalecem sobre este documento.
 
 ## Retomada obrigatória
 
@@ -18,23 +17,30 @@ git status --short --untracked-files=all
 
 Não acesse `C:\Users\joaop\Projetos\multiyomi`.
 
-## Goal ativa — Motor Interno Transparente
+## F0 concluída — contratos pós-R8
 
-O usuário autorizou a execução autônoma de R0–R8, sem “Novidades desktop”, com
-revisão independente ao fim de cada subfase, staging nominal, um commit próprio
-por subfase e push normal somente após o `PASS` integrado final. A autorização
-inclui testes, analyzers, verificadores, build e provas runtime isoladas, além de
-processos criados pela própria goal com ownership comprovada.
+O usuário aprovou os contratos funcionais de Histórico, Configurações,
+Novidades, troca de fonte assistida, Backup/restauração e navegação V1. A
+revisão arquitetural independente retornou `PASS`. F0 foi somente documental:
+não criou schema, migração, UI, código ou persistência. O contrato integral
+está em `docs/f0-functional-contract.md`.
 
-As subfases R0–R8 são arquiteturais. O SQLite Yomu deve permanecer no schema
-v5; não haverá bump ou migração artificial. Persistência nova, atualização de
-JAR/JRE/SDK/dependência, processo estrangeiro, ownership inconclusiva, licença
-não resolvida, mudança das portas ou qualquer outra stop condition do prompt e
-do `AGENTS.md` continuam bloqueantes.
+F1 é o próximo trabalho planejado, mas ainda não foi iniciado nem autorizado.
+Staging e commit exigem autorização explícita; push exige autorização separada.
+As proteções de dados, processos, portas, versões e áreas protegidas continuam
+vigentes.
 
-Na abertura de R0, Git local, upstream e remoto estavam sincronizados em
-`31c6764314ee52d5a9c30efe0b5b291e840f50e9`, divergência zero. As portas 8787 e
-14567 estavam livres e não havia Yomu, Java, Dart ou Flutter preexistente.
+## Goal concluída — Motor Interno Transparente
+
+O ciclo R0–R8 foi concluído com review independente integrado e o checkpoint
+R8 publicado em `0a5a0c5db130e0c51f48eb27dcd75d063c0670c6`. As subfases foram
+arquiteturais; o SQLite Yomu permaneceu no schema v5, sem bump ou migração
+artificial.
+
+Na abertura histórica de R0, Git local, upstream e remoto estavam sincronizados
+em `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, divergência zero. As portas
+8787 e 14567 estavam livres e não havia Yomu, Java, Dart ou Flutter
+preexistente.
 
 ## Autorizações históricas da P2C
 
@@ -56,6 +62,9 @@ exige autorização própria. Nunca use `git add .`.
 - Repositório: `C:\Users\joaop\Projetos\yomu`.
 - Branch: `master`.
 - Remoto: `https://github.com/ynkjohn/yomu.git`.
+- Em 2026-07-23, HEAD local, `origin/master` e `ls-remote origin master` foram
+  revalidados em `0a5a0c5db130e0c51f48eb27dcd75d063c0670c6`. A abertura de R0
+  registrada abaixo é contexto histórico.
 - Na abertura de R0 em 2026-07-18, HEAD local, `origin/master` e
   `ls-remote origin master` estavam em
   `31c6764314ee52d5a9c30efe0b5b291e840f50e9`, divergência zero. Revalide o
@@ -70,7 +79,11 @@ exige autorização própria. Nunca use `git add .`.
 - O checkpoint posterior do chrome Windows é
   `31c6764314ee52d5a9c30efe0b5b291e840f50e9`
   (`fix(desktop): integrate Windows window chrome`).
-- P0, checkpoint pós-P0, P1, P2A, P2B, P2C e seus handoffs estão publicados.
+- O checkpoint R8 é
+  `0a5a0c5db130e0c51f48eb27dcd75d063c0670c6`
+  (`feat(engine): add diagnostics and guard`).
+- P0, checkpoint pós-P0, P1, P2A, P2B, P2C, R0–R8 e seus handoffs estão
+  publicados.
 - O schema publicado do SQLite Yomu é v5.
 
 Commits de persistência publicados, em ordem:
